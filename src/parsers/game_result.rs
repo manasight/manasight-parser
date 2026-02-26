@@ -442,6 +442,25 @@ mod tests {
         }
     }
 
+    // -- Header-independent parsing ------------------------------------------
+
+    mod header_independent {
+        use super::*;
+
+        #[test]
+        fn test_try_parse_client_gre_header_with_matching_body_returns_some() {
+            let entry = LogEntry {
+                header: EntryHeader::ClientGre,
+                body: "[Client GRE]LogBusinessEvents {\"WinningType\": \"WinLoss\"}".to_owned(),
+            };
+            // The parser is text-based, matching on body content regardless
+            // of header type. A Client GRE entry whose body contains the
+            // business events marker and WinningType should still parse.
+            let result = try_parse(&entry, test_timestamp());
+            assert!(result.is_some());
+        }
+    }
+
     // -- Params-wrapped format -----------------------------------------------
 
     mod params_wrapped {
@@ -648,20 +667,6 @@ mod tests {
                          {\"WinningType\": broken json!!!}";
             let entry = unity_entry(body);
             assert!(try_parse(&entry, test_timestamp()).is_none());
-        }
-
-        #[test]
-        fn test_try_parse_client_gre_entry_returns_none() {
-            let entry = LogEntry {
-                header: EntryHeader::ClientGre,
-                body: "[Client GRE]LogBusinessEvents {\"WinningType\": \"WinLoss\"}".to_owned(),
-            };
-            // The body text matches but Client GRE entries should still be
-            // parsed (the marker is in the text). This tests that we do
-            // process them if the text matches.
-            let result = try_parse(&entry, test_timestamp());
-            // The parser is text-based so it will match regardless of header.
-            assert!(result.is_some());
         }
 
         #[test]
