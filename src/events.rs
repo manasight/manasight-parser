@@ -37,6 +37,11 @@ mod base64_serde {
 }
 
 /// Serialize `[u8; 32]` as a 64-character lowercase hex string.
+///
+/// Serialize-only: `EventMetadata` has a custom `Deserialize` impl that
+/// ignores `payload_hash` (it is always recomputed from `raw_bytes`), so
+/// no `deserialize` function is needed. If `#[derive(Deserialize)]` is
+/// ever added to `EventMetadata`, add a `deserialize` function here.
 mod hex_serde {
     use serde::Serializer;
     use std::fmt::Write as _;
@@ -78,6 +83,14 @@ macro_rules! define_event {
         }
 
         impl $name {
+            /// Constructs a new event with the given metadata and payload.
+            pub fn new(
+                metadata: EventMetadata,
+                payload: serde_json::Value,
+            ) -> Self {
+                Self { metadata, payload }
+            }
+
             /// Returns the shared event metadata.
             pub fn metadata(&self) -> &EventMetadata {
                 &self.metadata
@@ -439,9 +452,10 @@ mod tests {
     /// given raw bytes.
     ///
     /// UTC datetimes are never ambiguous so `single()` always returns
-    /// `Some`. The `unwrap_or_default()` fallback returns epoch
-    /// (1970-01-01) which would visibly fail any timestamp assertion
-    /// rather than passing silently.
+    /// `Some`. Uses `unwrap_or_default()` instead of `expect()` because
+    /// `clippy::expect_used` is denied project-wide (including tests).
+    /// The epoch fallback (1970-01-01) would visibly fail any timestamp
+    /// assertion rather than passing silently.
     fn make_metadata(raw: &[u8]) -> EventMetadata {
         let timestamp = Utc
             .with_ymd_and_hms(2026, 2, 25, 12, 0, 0)
