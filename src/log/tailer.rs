@@ -310,25 +310,36 @@ impl FileTailer {
         Ok(entries)
     }
 
-    /// Flushes any remaining buffered entry from the line buffer.
+    /// Flushes any remaining buffered entries from the line buffer.
     ///
     /// Call this when the input stream ends (EOF or file rotation) to
-    /// retrieve the last accumulated entry that has not yet been
-    /// flushed by a subsequent header boundary.
-    pub fn flush(&mut self) -> Option<LogEntry> {
-        // Also flush any partial line as a final line.
+    /// retrieve any accumulated entries that have not yet been flushed
+    /// by a subsequent header boundary.
+    ///
+    /// Returns a `Vec` because flushing a partial line that is itself
+    /// a log entry header can produce two entries: the previously
+    /// buffered entry (flushed by the new header) and the new header's
+    /// own entry (flushed by the line buffer drain).
+    pub fn flush(&mut self) -> Vec<LogEntry> {
+        let mut entries = Vec::new();
+
+        // Feed any partial line as a final complete line.
         if !self.partial_line.is_empty() {
             let line = std::mem::take(&mut self.partial_line);
             if let Some(entry) = self.line_buffer.push_line(&line) {
-                // This is unlikely in practice (partial line being a header
-                // that flushes a previous entry), but handle it correctly.
-                // The new entry from the partial line is now in the line
-                // buffer and will be returned by the line_buffer.flush()
-                // call below.
-                return Some(entry);
+                // The partial line was a header that flushed the previous
+                // entry. Collect it, then fall through to drain the new
+                // entry that the header started.
+                entries.push(entry);
             }
         }
-        self.line_buffer.flush()
+
+        // Drain any remaining buffered entry.
+        if let Some(entry) = self.line_buffer.flush() {
+            entries.push(entry);
+        }
+
+        entries
     }
 
     /// Runs the polling loop, sending complete log entries to the
@@ -372,8 +383,8 @@ impl FileTailer {
                 }
                 _ = shutdown.changed() => {
                     ::log::info!("shutdown signal received, stopping tailer");
-                    // Flush any remaining partial entry.
-                    if let Some(entry) = self.flush() {
+                    // Flush any remaining partial entries.
+                    for entry in self.flush() {
                         // Best-effort send — receiver may already be gone.
                         let _ = entry_tx.send(entry).await;
                     }
@@ -675,19 +686,17 @@ mod tests {
             f.flush()?;
             tailer.poll().await?;
 
-            let entry = tailer.flush();
-            assert!(entry.is_some());
-            if let Some(e) = entry {
-                assert!(e.body.contains("Final"));
-            }
+            let entries = tailer.flush();
+            assert_eq!(entries.len(), 1);
+            assert!(entries[0].body.contains("Final"));
             Ok(())
         }
 
         #[tokio::test]
-        async fn test_flush_empty_returns_none() -> TestResult {
+        async fn test_flush_empty_returns_empty_vec() -> TestResult {
             let f = temp_log("")?;
             let mut tailer = FileTailer::open(f.path()).await?;
-            assert!(tailer.flush().is_none());
+            assert!(tailer.flush().is_empty());
             Ok(())
         }
 
@@ -702,12 +711,37 @@ mod tests {
             f.flush()?;
             tailer.poll().await?;
 
-            let entry = tailer.flush();
-            assert!(entry.is_some());
-            if let Some(e) = entry {
-                assert!(e.body.contains("Event"));
-                assert!(e.body.contains("partial continuation"));
-            }
+            let entries = tailer.flush();
+            assert_eq!(entries.len(), 1);
+            assert!(entries[0].body.contains("Event"));
+            assert!(entries[0].body.contains("partial continuation"));
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn test_flush_partial_line_is_header_returns_both_entries() -> TestResult {
+            let mut f = temp_log("")?;
+            let mut tailer = FileTailer::open(f.path()).await?;
+
+            // Write a complete header line followed by a partial line that
+            // is itself a header (no trailing newline).
+            writeln!(f, "[UnityCrossThreadLogger] First")?;
+            write!(f, "[Client GRE] Second")?;
+            f.flush()?;
+            tailer.poll().await?;
+
+            // flush() should return both: the "First" entry flushed by the
+            // "[Client GRE]" header, and the "[Client GRE] Second" entry
+            // drained from the line buffer.
+            let entries = tailer.flush();
+            assert_eq!(
+                entries.len(),
+                2,
+                "expected 2 entries, got {}: {entries:?}",
+                entries.len()
+            );
+            assert!(entries[0].body.contains("First"));
+            assert!(entries[1].body.contains("Second"));
             Ok(())
         }
     }
@@ -838,20 +872,22 @@ mod tests {
 
             let handle = tokio::spawn(async move { tailer.run(entry_tx, shutdown_rx).await });
 
-            // Write entries over time.
+            // Write entries over time. Sleeps are generous (50 ms) to avoid
+            // flakiness on slow CI runners — the tailer polls at 10 ms, so
+            // 50 ms is ~5 poll cycles per write.
             for i in 0..3 {
                 writeln!(f, "[UnityCrossThreadLogger] Event{i}")?;
                 f.flush()?;
-                tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
             }
             // Write a final header to flush the last entry.
             writeln!(f, "[UnityCrossThreadLogger] Final")?;
             f.flush()?;
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
             // Shutdown and collect remaining.
             let _ = shutdown_tx.send(true);
-            let result = tokio::time::timeout(std::time::Duration::from_secs(2), handle).await?;
+            let result = tokio::time::timeout(std::time::Duration::from_secs(5), handle).await?;
             assert!(result.is_ok());
 
             // Collect all received entries.
