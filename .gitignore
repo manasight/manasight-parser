@@ -14,3 +14,6 @@ Thumbs.db
 .vscode/
 *.swp
 *.swo
+
+# Claude Code local config (symlinks to workspace commands)
+.claude/
