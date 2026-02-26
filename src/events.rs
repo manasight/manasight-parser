@@ -107,6 +107,7 @@ macro_rules! define_event {
 /// Dispatches a field accessor across all `GameEvent` variants.
 ///
 /// When a new variant is added to `GameEvent`, add it here too.
+/// `$method` must be a `&self` no-arg method present on all inner types.
 macro_rules! delegate_to_inner {
     ($self:expr, $method:ident) => {
         match $self {
@@ -452,10 +453,10 @@ mod tests {
     /// given raw bytes.
     ///
     /// UTC datetimes are never ambiguous so `single()` always returns
-    /// `Some`. Uses `unwrap_or_default()` instead of `expect()` because
-    /// `clippy::expect_used` is denied project-wide (including tests).
-    /// The epoch fallback (1970-01-01) would visibly fail any timestamp
-    /// assertion rather than passing silently.
+    /// `Some`. Uses `unwrap_or_default()` because `clippy::expect_used`
+    /// is denied in `Cargo.toml [lints.clippy]` (applies crate-wide,
+    /// including test targets). The epoch fallback (1970-01-01) would
+    /// visibly fail any timestamp assertion rather than passing silently.
     fn make_metadata(raw: &[u8]) -> EventMetadata {
         let timestamp = Utc
             .with_ymd_and_hms(2026, 2, 25, 12, 0, 0)
@@ -620,9 +621,10 @@ mod tests {
             make_metadata(b"draft complete"),
             serde_json::json!({"Draft_CompleteDraft": true}),
         );
-        assert!(event.payload()["Draft_CompleteDraft"]
-            .as_bool()
-            .unwrap_or(false));
+        assert_eq!(
+            event.payload()["Draft_CompleteDraft"],
+            serde_json::json!(true)
+        );
     }
 
     #[test]
