@@ -222,8 +222,12 @@ fn extract_json_from_body(body: &str) -> Option<&str> {
 
     let candidate = &body[json_start..];
 
-    let open_byte = candidate.as_bytes().first().copied()?;
-    let close_byte = if open_byte == b'{' { b'}' } else { b']' };
+    let first_byte = candidate.as_bytes().first().copied()?;
+    let (open_char, close_char) = if first_byte == b'{' {
+        ('{', '}')
+    } else {
+        ('[', ']')
+    };
 
     let mut depth: i32 = 0;
     let mut in_string = false;
@@ -242,10 +246,10 @@ fn extract_json_from_body(body: &str) -> Option<&str> {
             '"' => {
                 in_string = !in_string;
             }
-            c if !in_string && c as u8 == open_byte => {
+            c if !in_string && c == open_char => {
                 depth += 1;
             }
-            c if !in_string && c as u8 == close_byte => {
+            c if !in_string && c == close_char => {
                 depth -= 1;
                 if depth == 0 {
                     end_pos = Some(i + 1);
