@@ -81,6 +81,15 @@ pub enum TimestampError {
 /// All timestamps are treated as UTC (MTGA does not include timezone
 /// information in log entry headers).
 ///
+/// # Ambiguity
+///
+/// When day and month are both `<= 12` and the separator is `/` (for example
+/// `02/05/2025 14:30:00`), US format (`M/d/yyyy`) is tried before European
+/// (`dd/MM/yyyy`). The input above would therefore be interpreted as
+/// February 5, not May 2. There is no way to resolve this ambiguity
+/// without out-of-band locale information; consumers targeting European
+/// locales should be aware of this silent tie-break.
+///
 /// # Errors
 ///
 /// Returns [`TimestampError::UnrecognizedFormat`] if no format matches,
@@ -398,7 +407,7 @@ mod tests {
 
         #[test]
         fn test_parse_epoch_millis_out_of_range_returns_error() {
-            // i64::MAX seconds is far beyond DateTime's representable range.
+            // i64::MAX milliseconds is far beyond DateTime's representable range.
             let err = parse_epoch_millis(i64::MAX);
             assert!(matches!(
                 err,
