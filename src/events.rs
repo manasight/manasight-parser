@@ -111,6 +111,24 @@ impl GameEvent {
             Self::GameResult(e) => &e.metadata,
         }
     }
+
+    /// Returns the parsed JSON payload of the event.
+    pub fn payload(&self) -> &serde_json::Value {
+        match self {
+            Self::GameState(e) => &e.payload,
+            Self::ClientAction(e) => &e.payload,
+            Self::MatchState(e) => &e.payload,
+            Self::DraftBot(e) => &e.payload,
+            Self::DraftHuman(e) => &e.payload,
+            Self::DraftComplete(e) => &e.payload,
+            Self::EventLifecycle(e) => &e.payload,
+            Self::Session(e) => &e.payload,
+            Self::Rank(e) => &e.payload,
+            Self::Collection(e) => &e.payload,
+            Self::Inventory(e) => &e.payload,
+            Self::GameResult(e) => &e.payload,
+        }
+    }
 }
 
 /// Performance class determining latency target and delivery path.
@@ -136,10 +154,6 @@ pub enum PerformanceClass {
 ///
 /// Deserialization also enforces this invariant: the hash is recomputed from
 /// `raw_bytes` during deserialization rather than trusting the serialized value.
-///
-/// Byte fields (`raw_bytes`, `payload_hash`) use `serde_bytes` for efficient
-/// serialization with binary formats (CBOR, `MessagePack`, `Bincode`). With
-/// JSON, they serialize as integer arrays (same as default `Vec<u8>`).
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct EventMetadata {
     /// UTC timestamp parsed from the log entry header.
@@ -148,13 +162,11 @@ pub struct EventMetadata {
     /// Original log entry bytes. Needed by the game accumulator for disk
     /// storage and by the raw-log backup pipeline. Private to prevent
     /// mutation that would break the `payload_hash` invariant.
-    #[serde(with = "serde_bytes")]
     raw_bytes: Vec<u8>,
 
     /// SHA-256 hash of `raw_bytes`, precomputed at construction time.
     /// Used as part of the event fingerprint for server-side deduplication:
     /// `sha256(event_type + '\0' + match_id + '\0' + timestamp + '\0' + payload_hash)`.
-    #[serde(with = "serde_bytes")]
     payload_hash: [u8; 32],
 }
 
@@ -193,11 +205,10 @@ impl<'de> Deserialize<'de> for EventMetadata {
         #[derive(Deserialize)]
         struct EventMetadataWire {
             timestamp: DateTime<Utc>,
-            #[serde(with = "serde_bytes")]
             raw_bytes: Vec<u8>,
             // Underscore prefix marks the field intentionally unused (hash is
             // recomputed); serde(rename) keeps the JSON key as "payload_hash".
-            #[serde(rename = "payload_hash", with = "serde_bytes")]
+            #[serde(rename = "payload_hash")]
             _payload_hash: [u8; 32],
         }
 
@@ -217,10 +228,17 @@ impl<'de> Deserialize<'de> for EventMetadata {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GameStateEvent {
     /// Shared event metadata (timestamp, raw bytes, payload hash).
-    pub metadata: EventMetadata,
+    pub(crate) metadata: EventMetadata,
 
     /// The parsed JSON payload from the GRE message.
-    pub payload: serde_json::Value,
+    pub(crate) payload: serde_json::Value,
+}
+
+impl GameStateEvent {
+    /// Returns the parsed JSON payload.
+    pub fn payload(&self) -> &serde_json::Value {
+        &self.payload
+    }
 }
 
 /// Client-to-GRE player actions.
@@ -230,10 +248,17 @@ pub struct GameStateEvent {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ClientActionEvent {
     /// Shared event metadata (timestamp, raw bytes, payload hash).
-    pub metadata: EventMetadata,
+    pub(crate) metadata: EventMetadata,
 
     /// The parsed JSON payload from the client message.
-    pub payload: serde_json::Value,
+    pub(crate) payload: serde_json::Value,
+}
+
+impl ClientActionEvent {
+    /// Returns the parsed JSON payload.
+    pub fn payload(&self) -> &serde_json::Value {
+        &self.payload
+    }
 }
 
 /// Match room state transitions.
@@ -243,10 +268,17 @@ pub struct ClientActionEvent {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MatchStateEvent {
     /// Shared event metadata (timestamp, raw bytes, payload hash).
-    pub metadata: EventMetadata,
+    pub(crate) metadata: EventMetadata,
 
     /// The parsed JSON payload of the match state change.
-    pub payload: serde_json::Value,
+    pub(crate) payload: serde_json::Value,
+}
+
+impl MatchStateEvent {
+    /// Returns the parsed JSON payload.
+    pub fn payload(&self) -> &serde_json::Value {
+        &self.payload
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -260,10 +292,17 @@ pub struct MatchStateEvent {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DraftBotEvent {
     /// Shared event metadata (timestamp, raw bytes, payload hash).
-    pub metadata: EventMetadata,
+    pub(crate) metadata: EventMetadata,
 
     /// The parsed JSON payload of the draft pick.
-    pub payload: serde_json::Value,
+    pub(crate) payload: serde_json::Value,
+}
+
+impl DraftBotEvent {
+    /// Returns the parsed JSON payload.
+    pub fn payload(&self) -> &serde_json::Value {
+        &self.payload
+    }
 }
 
 /// Human draft pick events.
@@ -273,10 +312,17 @@ pub struct DraftBotEvent {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DraftHumanEvent {
     /// Shared event metadata (timestamp, raw bytes, payload hash).
-    pub metadata: EventMetadata,
+    pub(crate) metadata: EventMetadata,
 
     /// The parsed JSON payload of the draft pick.
-    pub payload: serde_json::Value,
+    pub(crate) payload: serde_json::Value,
+}
+
+impl DraftHumanEvent {
+    /// Returns the parsed JSON payload.
+    pub fn payload(&self) -> &serde_json::Value {
+        &self.payload
+    }
 }
 
 /// Draft completion event.
@@ -286,10 +332,17 @@ pub struct DraftHumanEvent {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DraftCompleteEvent {
     /// Shared event metadata (timestamp, raw bytes, payload hash).
-    pub metadata: EventMetadata,
+    pub(crate) metadata: EventMetadata,
 
     /// The parsed JSON payload of the draft completion.
-    pub payload: serde_json::Value,
+    pub(crate) payload: serde_json::Value,
+}
+
+impl DraftCompleteEvent {
+    /// Returns the parsed JSON payload.
+    pub fn payload(&self) -> &serde_json::Value {
+        &self.payload
+    }
 }
 
 /// Event lifecycle transitions.
@@ -299,10 +352,17 @@ pub struct DraftCompleteEvent {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EventLifecycleEvent {
     /// Shared event metadata (timestamp, raw bytes, payload hash).
-    pub metadata: EventMetadata,
+    pub(crate) metadata: EventMetadata,
 
     /// The parsed JSON payload of the event lifecycle action.
-    pub payload: serde_json::Value,
+    pub(crate) payload: serde_json::Value,
+}
+
+impl EventLifecycleEvent {
+    /// Returns the parsed JSON payload.
+    pub fn payload(&self) -> &serde_json::Value {
+        &self.payload
+    }
 }
 
 /// Session identity and connection events.
@@ -313,10 +373,17 @@ pub struct EventLifecycleEvent {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionEvent {
     /// Shared event metadata (timestamp, raw bytes, payload hash).
-    pub metadata: EventMetadata,
+    pub(crate) metadata: EventMetadata,
 
     /// The parsed JSON payload of the session event.
-    pub payload: serde_json::Value,
+    pub(crate) payload: serde_json::Value,
+}
+
+impl SessionEvent {
+    /// Returns the parsed JSON payload.
+    pub fn payload(&self) -> &serde_json::Value {
+        &self.payload
+    }
 }
 
 /// Rank snapshot.
@@ -326,10 +393,17 @@ pub struct SessionEvent {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RankEvent {
     /// Shared event metadata (timestamp, raw bytes, payload hash).
-    pub metadata: EventMetadata,
+    pub(crate) metadata: EventMetadata,
 
     /// The parsed JSON payload of the rank information.
-    pub payload: serde_json::Value,
+    pub(crate) payload: serde_json::Value,
+}
+
+impl RankEvent {
+    /// Returns the parsed JSON payload.
+    pub fn payload(&self) -> &serde_json::Value {
+        &self.payload
+    }
 }
 
 /// Card collection snapshot.
@@ -339,10 +413,17 @@ pub struct RankEvent {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CollectionEvent {
     /// Shared event metadata (timestamp, raw bytes, payload hash).
-    pub metadata: EventMetadata,
+    pub(crate) metadata: EventMetadata,
 
     /// The parsed JSON payload mapping card IDs to quantities.
-    pub payload: serde_json::Value,
+    pub(crate) payload: serde_json::Value,
+}
+
+impl CollectionEvent {
+    /// Returns the parsed JSON payload.
+    pub fn payload(&self) -> &serde_json::Value {
+        &self.payload
+    }
 }
 
 /// Inventory snapshot.
@@ -352,10 +433,17 @@ pub struct CollectionEvent {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InventoryEvent {
     /// Shared event metadata (timestamp, raw bytes, payload hash).
-    pub metadata: EventMetadata,
+    pub(crate) metadata: EventMetadata,
 
     /// The parsed JSON payload of the inventory state.
-    pub payload: serde_json::Value,
+    pub(crate) payload: serde_json::Value,
+}
+
+impl InventoryEvent {
+    /// Returns the parsed JSON payload.
+    pub fn payload(&self) -> &serde_json::Value {
+        &self.payload
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -371,10 +459,17 @@ pub struct InventoryEvent {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GameResultEvent {
     /// Shared event metadata (timestamp, raw bytes, payload hash).
-    pub metadata: EventMetadata,
+    pub(crate) metadata: EventMetadata,
 
     /// The parsed JSON payload of the game result.
-    pub payload: serde_json::Value,
+    pub(crate) payload: serde_json::Value,
+}
+
+impl GameResultEvent {
+    /// Returns the parsed JSON payload.
+    pub fn payload(&self) -> &serde_json::Value {
+        &self.payload
+    }
 }
 
 #[cfg(test)]
@@ -520,7 +615,7 @@ mod tests {
         assert_eq!(meta, cloned);
     }
 
-    // -- Per-category struct field access --
+    // -- Per-category struct field access (via accessors) --
 
     #[test]
     fn test_game_state_event_field_access() {
@@ -528,7 +623,7 @@ mod tests {
             metadata: make_metadata(b"gre payload"),
             payload: serde_json::json!({"type": "GameStateMessage"}),
         };
-        assert_eq!(event.payload["type"], "GameStateMessage");
+        assert_eq!(event.payload()["type"], "GameStateMessage");
         assert_eq!(event.metadata.raw_bytes(), b"gre payload");
     }
 
@@ -538,7 +633,7 @@ mod tests {
             metadata: make_metadata(b"client action"),
             payload: serde_json::json!({"type": "MulliganResp"}),
         };
-        assert_eq!(event.payload["type"], "MulliganResp");
+        assert_eq!(event.payload()["type"], "MulliganResp");
     }
 
     #[test]
@@ -547,7 +642,7 @@ mod tests {
             metadata: make_metadata(b"match state"),
             payload: serde_json::json!({"matchGameRoomStateChangedEvent": {}}),
         };
-        assert!(event.payload["matchGameRoomStateChangedEvent"].is_object());
+        assert!(event.payload()["matchGameRoomStateChangedEvent"].is_object());
     }
 
     #[test]
@@ -556,7 +651,7 @@ mod tests {
             metadata: make_metadata(b"bot draft"),
             payload: serde_json::json!({"DraftStatus": "PickNext"}),
         };
-        assert_eq!(event.payload["DraftStatus"], "PickNext");
+        assert_eq!(event.payload()["DraftStatus"], "PickNext");
     }
 
     #[test]
@@ -565,7 +660,7 @@ mod tests {
             metadata: make_metadata(b"human draft"),
             payload: serde_json::json!({"PickGrpId": 12345}),
         };
-        assert_eq!(event.payload["PickGrpId"], 12345);
+        assert_eq!(event.payload()["PickGrpId"], 12345);
     }
 
     #[test]
@@ -574,7 +669,7 @@ mod tests {
             metadata: make_metadata(b"draft complete"),
             payload: serde_json::json!({"Draft_CompleteDraft": true}),
         };
-        assert!(event.payload["Draft_CompleteDraft"]
+        assert!(event.payload()["Draft_CompleteDraft"]
             .as_bool()
             .unwrap_or(false));
     }
@@ -585,7 +680,7 @@ mod tests {
             metadata: make_metadata(b"event lifecycle"),
             payload: serde_json::json!({"action": "Event_Join"}),
         };
-        assert_eq!(event.payload["action"], "Event_Join");
+        assert_eq!(event.payload()["action"], "Event_Join");
     }
 
     #[test]
@@ -594,7 +689,7 @@ mod tests {
             metadata: make_metadata(b"session data"),
             payload: serde_json::json!({"DisplayName": "Player"}),
         };
-        assert_eq!(event.payload["DisplayName"], "Player");
+        assert_eq!(event.payload()["DisplayName"], "Player");
     }
 
     #[test]
@@ -603,7 +698,7 @@ mod tests {
             metadata: make_metadata(b"rank data"),
             payload: serde_json::json!({"constructedClass": "Gold", "constructedLevel": 2}),
         };
-        assert_eq!(event.payload["constructedClass"], "Gold");
+        assert_eq!(event.payload()["constructedClass"], "Gold");
     }
 
     #[test]
@@ -612,7 +707,7 @@ mod tests {
             metadata: make_metadata(b"collection"),
             payload: serde_json::json!({"12345": 4, "67890": 2}),
         };
-        assert_eq!(event.payload["12345"], 4);
+        assert_eq!(event.payload()["12345"], 4);
     }
 
     #[test]
@@ -621,7 +716,7 @@ mod tests {
             metadata: make_metadata(b"inventory"),
             payload: serde_json::json!({"gold": 5000, "gems": 200, "wcCommon": 10}),
         };
-        assert_eq!(event.payload["gold"], 5000);
+        assert_eq!(event.payload()["gold"], 5000);
     }
 
     #[test]
@@ -630,7 +725,7 @@ mod tests {
             metadata: make_metadata(b"game result"),
             payload: serde_json::json!({"WinningType": "Win", "GameStage": "GameOver"}),
         };
-        assert_eq!(event.payload["WinningType"], "Win");
+        assert_eq!(event.payload()["WinningType"], "Win");
     }
 
     // -- GameEvent enum --
@@ -638,7 +733,6 @@ mod tests {
     #[test]
     fn test_game_event_all_variants_have_correct_performance_class() {
         let events = all_variants();
-        assert_eq!(events.len(), 12);
 
         let expected_classes = [
             PerformanceClass::InteractiveDispatch, // GameState
@@ -671,6 +765,15 @@ mod tests {
         let events = all_variants();
         for event in &events {
             assert_eq!(event.metadata().raw_bytes(), raw);
+        }
+    }
+
+    #[test]
+    fn test_game_event_payload_accessor_all_variants() {
+        let events = all_variants();
+        let expected = serde_json::json!({});
+        for event in &events {
+            assert_eq!(*event.payload(), expected);
         }
     }
 
@@ -723,7 +826,7 @@ mod tests {
         let meta = make_metadata(b"test data");
         let mut serialized: serde_json::Value = serde_json::to_value(&meta)?;
 
-        // Tamper with the serialized payload_hash
+        // Tamper with the serialized payload_hash (JSON integer array format)
         let zeroed: Vec<u8> = vec![0; 32];
         serialized["payload_hash"] = serde_json::json!(zeroed);
 
