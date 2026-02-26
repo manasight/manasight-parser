@@ -45,7 +45,7 @@ pub fn try_parse(entry: &LogEntry, timestamp: chrono::DateTime<chrono::Utc>) -> 
         return Some(GameEvent::Session(SessionEvent::new(metadata, payload)));
     }
 
-    if let Some(payload) = try_parse_authenticate_response(content, body) {
+    if let Some(payload) = try_parse_authenticate_response(body) {
         let metadata = EventMetadata::new(timestamp, body.as_bytes().to_vec());
         return Some(GameEvent::Session(SessionEvent::new(metadata, payload)));
     }
@@ -118,10 +118,9 @@ fn try_parse_account_update(content: &str) -> Option<serde_json::Value> {
 ///
 /// In either case, the function extracts the `screenName` from the JSON
 /// and returns a payload with `type: "session_authenticate"`.
-fn try_parse_authenticate_response(content: &str, full_body: &str) -> Option<serde_json::Value> {
-    if !content.contains(AUTHENTICATE_RESPONSE_MARKER)
-        && !full_body.contains(AUTHENTICATE_RESPONSE_MARKER)
-    {
+fn try_parse_authenticate_response(full_body: &str) -> Option<serde_json::Value> {
+    // Check full_body (which includes all lines) for the marker.
+    if !full_body.contains(AUTHENTICATE_RESPONSE_MARKER) {
         return None;
     }
 
@@ -129,18 +128,25 @@ fn try_parse_authenticate_response(content: &str, full_body: &str) -> Option<ser
     let json_body = extract_json_from_body(full_body);
 
     if let Some(json_str) = json_body {
-        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(json_str) {
-            // Look for screenName at the top level or nested in the response.
-            let screen_name = find_screen_name(&parsed);
-            return Some(serde_json::json!({
-                "type": "session_authenticate",
-                "screen_name": screen_name.unwrap_or_default(),
-                "raw_response": parsed,
-            }));
+        match serde_json::from_str::<serde_json::Value>(json_str) {
+            Ok(parsed) => {
+                // Look for screenName at the top level or nested in the response.
+                let screen_name = find_screen_name(&parsed);
+                return Some(serde_json::json!({
+                    "type": "session_authenticate",
+                    "screen_name": screen_name.unwrap_or_default(),
+                    "raw_response": parsed,
+                }));
+            }
+            Err(e) => {
+                ::log::warn!(
+                    "authenticateResponse: malformed JSON body, falling back to empty screen_name: {e}"
+                );
+            }
         }
     }
 
-    // If no JSON body found, emit a simpler payload.
+    // If no JSON body found or JSON was malformed, emit a simpler payload.
     Some(serde_json::json!({
         "type": "session_authenticate",
         "screen_name": "",
@@ -152,10 +158,10 @@ fn try_match_front_door_close(content: &str) -> bool {
     content.contains(FRONT_DOOR_CLOSE_MARKER)
 }
 
-/// Extracts the first JSON object or array from a multi-line log body.
+/// Extracts the first JSON object from a multi-line log body.
 ///
-/// Looks for lines starting with `{` or `[` and attempts to join them
-/// into a parseable JSON string.
+/// Scans for the first `{` character and finds the matching `}` using
+/// brace-depth counting that respects string literals.
 fn extract_json_from_body(body: &str) -> Option<&str> {
     // Find the start of a JSON object in the body.
     let json_start = body.find('{')?;
