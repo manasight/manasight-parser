@@ -370,7 +370,7 @@ mod tests {
             let expected = Utc
                 .with_ymd_and_hms(2026, 2, 25, 12, 0, 0)
                 .single()
-                .unwrap_or_default();
+                .ok_or("2026-02-25T12:00:00Z is not a valid UTC datetime")?;
             let dt = parse_epoch_millis(expected.timestamp_millis())?;
             assert_eq!(dt, expected);
             Ok(())
@@ -395,6 +395,16 @@ mod tests {
             assert_eq!(dt.second(), 59);
             Ok(())
         }
+
+        #[test]
+        fn test_parse_epoch_millis_out_of_range_returns_error() {
+            // i64::MAX seconds is far beyond DateTime's representable range.
+            let err = parse_epoch_millis(i64::MAX);
+            assert!(matches!(
+                err,
+                Err(TimestampError::OutOfRange { value }) if value == i64::MAX
+            ));
+        }
     }
 
     // -- parse_dotnet_ticks -------------------------------------------------
@@ -418,7 +428,7 @@ mod tests {
             let expected = Utc
                 .with_ymd_and_hms(2026, 2, 25, 12, 0, 0)
                 .single()
-                .unwrap_or_default();
+                .ok_or("2026-02-25T12:00:00Z is not a valid UTC datetime")?;
             let net_ticks = expected.timestamp() * TICKS_PER_SECOND + DOTNET_EPOCH_OFFSET_TICKS;
             let dt = parse_dotnet_ticks(net_ticks)?;
             assert_eq!(dt, expected);
