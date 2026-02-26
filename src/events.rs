@@ -11,6 +11,112 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+// ---------------------------------------------------------------------------
+// Serde helper modules
+// ---------------------------------------------------------------------------
+
+/// Serialize `Vec<u8>` as a base64 string (RFC 4648 standard alphabet).
+mod base64_serde {
+    use base64::prelude::{Engine as _, BASE64_STANDARD};
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(bytes: &[u8], serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&BASE64_STANDARD.encode(bytes))
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        BASE64_STANDARD.decode(&s).map_err(serde::de::Error::custom)
+    }
+}
+
+/// Serialize `[u8; 32]` as a 64-character lowercase hex string.
+mod hex_serde {
+    use serde::Serializer;
+    use std::fmt::Write as _;
+
+    pub fn serialize<S>(bytes: &[u8; 32], serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let hex = bytes.iter().fold(String::with_capacity(64), |mut acc, b| {
+            // write! to String is infallible.
+            let _ = write!(acc, "{b:02x}");
+            acc
+        });
+        serializer.serialize_str(&hex)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Macros
+// ---------------------------------------------------------------------------
+
+/// Generates a category-specific event struct with `metadata` and `payload`
+/// fields plus public accessor methods.
+///
+/// When a new event category is added, create a new invocation of this
+/// macro rather than writing the struct and impl by hand.
+macro_rules! define_event {
+    (
+        $(#[$attr:meta])*
+        $name:ident
+    ) => {
+        $(#[$attr])*
+        #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+        pub struct $name {
+            /// Shared event metadata (timestamp, raw bytes, payload hash).
+            pub(crate) metadata: EventMetadata,
+            /// The parsed JSON payload.
+            pub(crate) payload: serde_json::Value,
+        }
+
+        impl $name {
+            /// Returns the shared event metadata.
+            pub fn metadata(&self) -> &EventMetadata {
+                &self.metadata
+            }
+
+            /// Returns the parsed JSON payload.
+            pub fn payload(&self) -> &serde_json::Value {
+                &self.payload
+            }
+        }
+    };
+}
+
+/// Dispatches a field accessor across all `GameEvent` variants.
+///
+/// When a new variant is added to `GameEvent`, add it here too.
+macro_rules! delegate_to_inner {
+    ($self:expr, $method:ident) => {
+        match $self {
+            Self::GameState(e) => e.$method(),
+            Self::ClientAction(e) => e.$method(),
+            Self::MatchState(e) => e.$method(),
+            Self::DraftBot(e) => e.$method(),
+            Self::DraftHuman(e) => e.$method(),
+            Self::DraftComplete(e) => e.$method(),
+            Self::EventLifecycle(e) => e.$method(),
+            Self::Session(e) => e.$method(),
+            Self::Rank(e) => e.$method(),
+            Self::Collection(e) => e.$method(),
+            Self::Inventory(e) => e.$method(),
+            Self::GameResult(e) => e.$method(),
+        }
+    };
+}
+
+// ---------------------------------------------------------------------------
+// GameEvent enum
+// ---------------------------------------------------------------------------
+
 /// A parsed MTG Arena log event.
 ///
 /// Each variant wraps a category-specific struct containing parsed fields,
@@ -96,40 +202,18 @@ impl GameEvent {
 
     /// Returns the shared metadata common to all events.
     pub fn metadata(&self) -> &EventMetadata {
-        match self {
-            Self::GameState(e) => &e.metadata,
-            Self::ClientAction(e) => &e.metadata,
-            Self::MatchState(e) => &e.metadata,
-            Self::DraftBot(e) => &e.metadata,
-            Self::DraftHuman(e) => &e.metadata,
-            Self::DraftComplete(e) => &e.metadata,
-            Self::EventLifecycle(e) => &e.metadata,
-            Self::Session(e) => &e.metadata,
-            Self::Rank(e) => &e.metadata,
-            Self::Collection(e) => &e.metadata,
-            Self::Inventory(e) => &e.metadata,
-            Self::GameResult(e) => &e.metadata,
-        }
+        delegate_to_inner!(self, metadata)
     }
 
     /// Returns the parsed JSON payload of the event.
     pub fn payload(&self) -> &serde_json::Value {
-        match self {
-            Self::GameState(e) => &e.payload,
-            Self::ClientAction(e) => &e.payload,
-            Self::MatchState(e) => &e.payload,
-            Self::DraftBot(e) => &e.payload,
-            Self::DraftHuman(e) => &e.payload,
-            Self::DraftComplete(e) => &e.payload,
-            Self::EventLifecycle(e) => &e.payload,
-            Self::Session(e) => &e.payload,
-            Self::Rank(e) => &e.payload,
-            Self::Collection(e) => &e.payload,
-            Self::Inventory(e) => &e.payload,
-            Self::GameResult(e) => &e.payload,
-        }
+        delegate_to_inner!(self, payload)
     }
 }
+
+// ---------------------------------------------------------------------------
+// PerformanceClass
+// ---------------------------------------------------------------------------
 
 /// Performance class determining latency target and delivery path.
 ///
@@ -146,27 +230,35 @@ pub enum PerformanceClass {
     PostGameBatch,
 }
 
+// ---------------------------------------------------------------------------
+// EventMetadata
+// ---------------------------------------------------------------------------
+
 /// Fields shared by every event: timestamp, raw bytes, and payload hash.
 ///
 /// Constructed via [`EventMetadata::new`], which computes the `payload_hash`
 /// from `raw_bytes` to enforce the invariant that the hash always matches.
 /// This is critical for server-side deduplication via event fingerprints.
 ///
+/// All fields are private to protect the hash invariant. Use the accessor
+/// methods to read them.
+///
 /// Deserialization also enforces this invariant: the hash is recomputed from
 /// `raw_bytes` during deserialization rather than trusting the serialized value.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct EventMetadata {
     /// UTC timestamp parsed from the log entry header.
-    pub timestamp: DateTime<Utc>,
+    timestamp: DateTime<Utc>,
 
-    /// Original log entry bytes. Needed by the game accumulator for disk
-    /// storage and by the raw-log backup pipeline. Private to prevent
+    /// Original log entry bytes, serialized as base64. Private to prevent
     /// mutation that would break the `payload_hash` invariant.
+    #[serde(with = "base64_serde")]
     raw_bytes: Vec<u8>,
 
-    /// SHA-256 hash of `raw_bytes`, precomputed at construction time.
-    /// Used as part of the event fingerprint for server-side deduplication:
-    /// `sha256(event_type + '\0' + match_id + '\0' + timestamp + '\0' + payload_hash)`.
+    /// SHA-256 hash of `raw_bytes`, serialized as lowercase hex.
+    /// Precomputed at construction time. Used as part of the event
+    /// fingerprint for server-side deduplication.
+    #[serde(with = "hex_serde")]
     payload_hash: [u8; 32],
 }
 
@@ -180,6 +272,11 @@ impl EventMetadata {
             raw_bytes,
             payload_hash,
         }
+    }
+
+    /// Returns the UTC timestamp parsed from the log entry header.
+    pub fn timestamp(&self) -> DateTime<Utc> {
+        self.timestamp
     }
 
     /// Returns the original log entry bytes.
@@ -200,16 +297,18 @@ impl<'de> Deserialize<'de> for EventMetadata {
     where
         D: serde::Deserializer<'de>,
     {
-        /// Wire format for deserializing `EventMetadata`. The `payload_hash`
-        /// field is read but discarded — the real hash is recomputed.
+        /// Wire format for deserializing `EventMetadata`. The
+        /// `payload_hash` field is optional and discarded — the real
+        /// hash is always recomputed from `raw_bytes`.
         #[derive(Deserialize)]
         struct EventMetadataWire {
             timestamp: DateTime<Utc>,
+            #[serde(with = "base64_serde")]
             raw_bytes: Vec<u8>,
-            // Underscore prefix marks the field intentionally unused (hash is
-            // recomputed); serde(rename) keeps the JSON key as "payload_hash".
-            #[serde(rename = "payload_hash")]
-            _payload_hash: [u8; 32],
+            // Accepts any format (hex string, integer array) or absence.
+            // The value is discarded — hash is always recomputed.
+            #[serde(default, rename = "payload_hash")]
+            _payload_hash: serde_json::Value,
         }
 
         let wire = EventMetadataWire::deserialize(deserializer)?;
@@ -221,329 +320,128 @@ impl<'de> Deserialize<'de> for EventMetadata {
 // Class 1: Interactive Dispatch
 // ---------------------------------------------------------------------------
 
-/// GRE-to-client game state messages.
-///
-/// Covers `GameStateMessage`, `ConnectResp`, and `QueuedGameStateMessage`
-/// payloads from `greToClientEvent` entries.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct GameStateEvent {
-    /// Shared event metadata (timestamp, raw bytes, payload hash).
-    pub(crate) metadata: EventMetadata,
-
-    /// The parsed JSON payload from the GRE message.
-    pub(crate) payload: serde_json::Value,
+define_event! {
+    /// GRE-to-client game state messages.
+    ///
+    /// Covers `GameStateMessage`, `ConnectResp`, and `QueuedGameStateMessage`
+    /// payloads from `greToClientEvent` entries.
+    GameStateEvent
 }
 
-impl GameStateEvent {
-    /// Returns the shared event metadata.
-    pub fn metadata(&self) -> &EventMetadata {
-        &self.metadata
-    }
-
-    /// Returns the parsed JSON payload.
-    pub fn payload(&self) -> &serde_json::Value {
-        &self.payload
-    }
+define_event! {
+    /// Client-to-GRE player actions.
+    ///
+    /// Covers `SelectNResp`, `SubmitDeckResp`, `MulliganResp`, and other
+    /// `ClientToGREMessage` payloads.
+    ClientActionEvent
 }
 
-/// Client-to-GRE player actions.
-///
-/// Covers `SelectNResp`, `SubmitDeckResp`, `MulliganResp`, and other
-/// `ClientToGREMessage` payloads.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ClientActionEvent {
-    /// Shared event metadata (timestamp, raw bytes, payload hash).
-    pub(crate) metadata: EventMetadata,
-
-    /// The parsed JSON payload from the client message.
-    pub(crate) payload: serde_json::Value,
-}
-
-impl ClientActionEvent {
-    /// Returns the shared event metadata.
-    pub fn metadata(&self) -> &EventMetadata {
-        &self.metadata
-    }
-
-    /// Returns the parsed JSON payload.
-    pub fn payload(&self) -> &serde_json::Value {
-        &self.payload
-    }
-}
-
-/// Match room state transitions.
-///
-/// Parsed from `matchGameRoomStateChangedEvent` entries. Signals match
-/// start/end and triggers overlay state transitions.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct MatchStateEvent {
-    /// Shared event metadata (timestamp, raw bytes, payload hash).
-    pub(crate) metadata: EventMetadata,
-
-    /// The parsed JSON payload of the match state change.
-    pub(crate) payload: serde_json::Value,
-}
-
-impl MatchStateEvent {
-    /// Returns the shared event metadata.
-    pub fn metadata(&self) -> &EventMetadata {
-        &self.metadata
-    }
-
-    /// Returns the parsed JSON payload.
-    pub fn payload(&self) -> &serde_json::Value {
-        &self.payload
-    }
+define_event! {
+    /// Match room state transitions.
+    ///
+    /// Parsed from `matchGameRoomStateChangedEvent` entries. Signals match
+    /// start/end and triggers overlay state transitions.
+    MatchStateEvent
 }
 
 // ---------------------------------------------------------------------------
 // Class 2: Durable Per-Event
 // ---------------------------------------------------------------------------
 
-/// Bot draft pick events.
-///
-/// Parsed from `DraftStatus: "PickNext"` and `BotDraft_DraftPick` entries.
-/// Each pick is independently valuable and must survive crashes.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct DraftBotEvent {
-    /// Shared event metadata (timestamp, raw bytes, payload hash).
-    pub(crate) metadata: EventMetadata,
-
-    /// The parsed JSON payload of the draft pick.
-    pub(crate) payload: serde_json::Value,
+define_event! {
+    /// Bot draft pick events.
+    ///
+    /// Parsed from `DraftStatus: "PickNext"` and `BotDraft_DraftPick` entries.
+    /// Each pick is independently valuable and must survive crashes.
+    DraftBotEvent
 }
 
-impl DraftBotEvent {
-    /// Returns the shared event metadata.
-    pub fn metadata(&self) -> &EventMetadata {
-        &self.metadata
-    }
-
-    /// Returns the parsed JSON payload.
-    pub fn payload(&self) -> &serde_json::Value {
-        &self.payload
-    }
+define_event! {
+    /// Human draft pick events.
+    ///
+    /// Parsed from `Draft.Notify`, `EventPlayerDraftMakePick`, and
+    /// `LogBusinessEvents` entries containing `PickGrpId`.
+    DraftHumanEvent
 }
 
-/// Human draft pick events.
-///
-/// Parsed from `Draft.Notify`, `EventPlayerDraftMakePick`, and
-/// `LogBusinessEvents` entries containing `PickGrpId`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct DraftHumanEvent {
-    /// Shared event metadata (timestamp, raw bytes, payload hash).
-    pub(crate) metadata: EventMetadata,
-
-    /// The parsed JSON payload of the draft pick.
-    pub(crate) payload: serde_json::Value,
+define_event! {
+    /// Draft completion event.
+    ///
+    /// Parsed from `Draft_CompleteDraft`. Links the draft ID to the event
+    /// and marks the draft as finished.
+    DraftCompleteEvent
 }
 
-impl DraftHumanEvent {
-    /// Returns the shared event metadata.
-    pub fn metadata(&self) -> &EventMetadata {
-        &self.metadata
-    }
-
-    /// Returns the parsed JSON payload.
-    pub fn payload(&self) -> &serde_json::Value {
-        &self.payload
-    }
+define_event! {
+    /// Event lifecycle transitions.
+    ///
+    /// Covers `Event_Join`, `Event_SetDeck`, `Event_GetCourses`, and
+    /// `Event_ClaimPrize`. Each is independently meaningful.
+    EventLifecycleEvent
 }
 
-/// Draft completion event.
-///
-/// Parsed from `Draft_CompleteDraft`. Links the draft ID to the event
-/// and marks the draft as finished.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct DraftCompleteEvent {
-    /// Shared event metadata (timestamp, raw bytes, payload hash).
-    pub(crate) metadata: EventMetadata,
-
-    /// The parsed JSON payload of the draft completion.
-    pub(crate) payload: serde_json::Value,
+define_event! {
+    /// Session identity and connection events.
+    ///
+    /// Covers `Updated account. DisplayName:`, `authenticateResponse`,
+    /// and `FrontDoorConnection.Close`. Needed to tag all subsequent events
+    /// with player identity.
+    SessionEvent
 }
 
-impl DraftCompleteEvent {
-    /// Returns the shared event metadata.
-    pub fn metadata(&self) -> &EventMetadata {
-        &self.metadata
-    }
-
-    /// Returns the parsed JSON payload.
-    pub fn payload(&self) -> &serde_json::Value {
-        &self.payload
-    }
+define_event! {
+    /// Rank snapshot.
+    ///
+    /// Parsed from `Rank_GetCombinedRankInfo`. Infrequent, small,
+    /// independently useful.
+    RankEvent
 }
 
-/// Event lifecycle transitions.
-///
-/// Covers `Event_Join`, `Event_SetDeck`, `Event_GetCourses`, and
-/// `Event_ClaimPrize`. Each is independently meaningful.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct EventLifecycleEvent {
-    /// Shared event metadata (timestamp, raw bytes, payload hash).
-    pub(crate) metadata: EventMetadata,
-
-    /// The parsed JSON payload of the event lifecycle action.
-    pub(crate) payload: serde_json::Value,
+define_event! {
+    /// Card collection snapshot.
+    ///
+    /// Parsed from `PlayerInventory.GetPlayerCardsV3`. Enables future
+    /// deck building features. Best-effort collection.
+    CollectionEvent
 }
 
-impl EventLifecycleEvent {
-    /// Returns the shared event metadata.
-    pub fn metadata(&self) -> &EventMetadata {
-        &self.metadata
-    }
-
-    /// Returns the parsed JSON payload.
-    pub fn payload(&self) -> &serde_json::Value {
-        &self.payload
-    }
-}
-
-/// Session identity and connection events.
-///
-/// Covers `Updated account. DisplayName:`, `authenticateResponse`,
-/// and `FrontDoorConnection.Close`. Needed to tag all subsequent events
-/// with player identity.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct SessionEvent {
-    /// Shared event metadata (timestamp, raw bytes, payload hash).
-    pub(crate) metadata: EventMetadata,
-
-    /// The parsed JSON payload of the session event.
-    pub(crate) payload: serde_json::Value,
-}
-
-impl SessionEvent {
-    /// Returns the shared event metadata.
-    pub fn metadata(&self) -> &EventMetadata {
-        &self.metadata
-    }
-
-    /// Returns the parsed JSON payload.
-    pub fn payload(&self) -> &serde_json::Value {
-        &self.payload
-    }
-}
-
-/// Rank snapshot.
-///
-/// Parsed from `Rank_GetCombinedRankInfo`. Infrequent, small,
-/// independently useful.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct RankEvent {
-    /// Shared event metadata (timestamp, raw bytes, payload hash).
-    pub(crate) metadata: EventMetadata,
-
-    /// The parsed JSON payload of the rank information.
-    pub(crate) payload: serde_json::Value,
-}
-
-impl RankEvent {
-    /// Returns the shared event metadata.
-    pub fn metadata(&self) -> &EventMetadata {
-        &self.metadata
-    }
-
-    /// Returns the parsed JSON payload.
-    pub fn payload(&self) -> &serde_json::Value {
-        &self.payload
-    }
-}
-
-/// Card collection snapshot.
-///
-/// Parsed from `PlayerInventory.GetPlayerCardsV3`. Enables future
-/// deck building features. Best-effort collection.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct CollectionEvent {
-    /// Shared event metadata (timestamp, raw bytes, payload hash).
-    pub(crate) metadata: EventMetadata,
-
-    /// The parsed JSON payload mapping card IDs to quantities.
-    pub(crate) payload: serde_json::Value,
-}
-
-impl CollectionEvent {
-    /// Returns the shared event metadata.
-    pub fn metadata(&self) -> &EventMetadata {
-        &self.metadata
-    }
-
-    /// Returns the parsed JSON payload.
-    pub fn payload(&self) -> &serde_json::Value {
-        &self.payload
-    }
-}
-
-/// Inventory snapshot.
-///
-/// Parsed from `DTO_InventoryInfo`. Contains currency, wildcards,
-/// boosters, and vault progress.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct InventoryEvent {
-    /// Shared event metadata (timestamp, raw bytes, payload hash).
-    pub(crate) metadata: EventMetadata,
-
-    /// The parsed JSON payload of the inventory state.
-    pub(crate) payload: serde_json::Value,
-}
-
-impl InventoryEvent {
-    /// Returns the shared event metadata.
-    pub fn metadata(&self) -> &EventMetadata {
-        &self.metadata
-    }
-
-    /// Returns the parsed JSON payload.
-    pub fn payload(&self) -> &serde_json::Value {
-        &self.payload
-    }
+define_event! {
+    /// Inventory snapshot.
+    ///
+    /// Parsed from `DTO_InventoryInfo`. Contains currency, wildcards,
+    /// boosters, and vault progress.
+    InventoryEvent
 }
 
 // ---------------------------------------------------------------------------
 // Class 3: Post-Game Batch
 // ---------------------------------------------------------------------------
 
-/// Game result event — triggers post-game batch assembly.
-///
-/// Parsed from `LogBusinessEvents` with `WinningType` and
-/// `GameStage_GameOver`. When this event fires, the desktop app
-/// serializes the disk-backed game buffer into a single compressed
-/// payload and uploads it.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct GameResultEvent {
-    /// Shared event metadata (timestamp, raw bytes, payload hash).
-    pub(crate) metadata: EventMetadata,
-
-    /// The parsed JSON payload of the game result.
-    pub(crate) payload: serde_json::Value,
-}
-
-impl GameResultEvent {
-    /// Returns the shared event metadata.
-    pub fn metadata(&self) -> &EventMetadata {
-        &self.metadata
-    }
-
-    /// Returns the parsed JSON payload.
-    pub fn payload(&self) -> &serde_json::Value {
-        &self.payload
-    }
+define_event! {
+    /// Game result event — triggers post-game batch assembly.
+    ///
+    /// Parsed from `LogBusinessEvents` with `WinningType` and
+    /// `GameStage_GameOver`. When this event fires, the desktop app
+    /// serializes the disk-backed game buffer into a single compressed
+    /// payload and uploads it.
+    GameResultEvent
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::prelude::{Engine as _, BASE64_STANDARD};
     use chrono::{Datelike, TimeZone};
 
     type TestResult = Result<(), Box<dyn std::error::Error>>;
 
-    /// Helper: build an `EventMetadata` with a fixed timestamp and the given raw bytes.
+    /// Helper: build an `EventMetadata` with a fixed timestamp and the
+    /// given raw bytes.
     ///
-    /// UTC datetimes are never ambiguous so `single()` always returns `Some`.
-    /// The `unwrap_or_default()` fallback returns epoch (1970-01-01) which would
-    /// visibly fail any timestamp assertion rather than passing silently.
+    /// UTC datetimes are never ambiguous so `single()` always returns
+    /// `Some`. The `unwrap_or_default()` fallback returns epoch
+    /// (1970-01-01) which would visibly fail any timestamp assertion
+    /// rather than passing silently.
     fn make_metadata(raw: &[u8]) -> EventMetadata {
         let timestamp = Utc
             .with_ymd_and_hms(2026, 2, 25, 12, 0, 0)
@@ -628,8 +526,8 @@ mod tests {
     #[test]
     fn test_event_metadata_new_stores_timestamp() {
         let meta = make_metadata(b"data");
-        assert_eq!(meta.timestamp.year(), 2026);
-        assert_eq!(meta.timestamp.month(), 2);
+        assert_eq!(meta.timestamp().year(), 2026);
+        assert_eq!(meta.timestamp().month(), 2);
     }
 
     #[test]
@@ -675,6 +573,15 @@ mod tests {
         assert_eq!(meta, cloned);
     }
 
+    #[test]
+    fn test_event_metadata_timestamp_getter() {
+        let meta = make_metadata(b"data");
+        let ts = meta.timestamp();
+        assert_eq!(ts.year(), 2026);
+        assert_eq!(ts.month(), 2);
+        assert_eq!(ts.day(), 25);
+    }
+
     // -- Per-category struct field access (via accessors) --
 
     #[test]
@@ -700,7 +607,9 @@ mod tests {
     fn test_match_state_event_field_access() {
         let event = MatchStateEvent {
             metadata: make_metadata(b"match state"),
-            payload: serde_json::json!({"matchGameRoomStateChangedEvent": {}}),
+            payload: serde_json::json!(
+                {"matchGameRoomStateChangedEvent": {}}
+            ),
         };
         assert!(event.payload()["matchGameRoomStateChangedEvent"].is_object());
     }
@@ -756,7 +665,9 @@ mod tests {
     fn test_rank_event_field_access() {
         let event = RankEvent {
             metadata: make_metadata(b"rank data"),
-            payload: serde_json::json!({"constructedClass": "Gold", "constructedLevel": 2}),
+            payload: serde_json::json!(
+                {"constructedClass": "Gold", "constructedLevel": 2}
+            ),
         };
         assert_eq!(event.payload()["constructedClass"], "Gold");
     }
@@ -774,7 +685,9 @@ mod tests {
     fn test_inventory_event_field_access() {
         let event = InventoryEvent {
             metadata: make_metadata(b"inventory"),
-            payload: serde_json::json!({"gold": 5000, "gems": 200, "wcCommon": 10}),
+            payload: serde_json::json!(
+                {"gold": 5000, "gems": 200, "wcCommon": 10}
+            ),
         };
         assert_eq!(event.payload()["gold"], 5000);
     }
@@ -783,7 +696,9 @@ mod tests {
     fn test_game_result_event_field_access() {
         let event = GameResultEvent {
             metadata: make_metadata(b"game result"),
-            payload: serde_json::json!({"WinningType": "Win", "GameStage": "GameOver"}),
+            payload: serde_json::json!(
+                {"WinningType": "Win", "GameStage": "GameOver"}
+            ),
         };
         assert_eq!(event.payload()["WinningType"], "Win");
     }
@@ -886,13 +801,13 @@ mod tests {
         let meta = make_metadata(b"test data");
         let mut serialized: serde_json::Value = serde_json::to_value(&meta)?;
 
-        // Tamper with the serialized payload_hash (JSON integer array format)
-        let zeroed: Vec<u8> = vec![0; 32];
-        serialized["payload_hash"] = serde_json::json!(zeroed);
+        // Tamper with the serialized payload_hash (now a hex string)
+        serialized["payload_hash"] = serde_json::json!("00".repeat(32));
 
         let deserialized: EventMetadata = serde_json::from_value(serialized)?;
 
-        // Hash should be recomputed from raw_bytes, not the tampered value
+        // Hash should be recomputed from raw_bytes, not the tampered
+        // value
         assert_eq!(*deserialized.payload_hash(), *meta.payload_hash());
         assert_eq!(deserialized.raw_bytes(), meta.raw_bytes());
         Ok(())
@@ -909,6 +824,69 @@ mod tests {
             let deserialized: PerformanceClass = serde_json::from_str(&serialized)?;
             assert_eq!(deserialized, class);
         }
+        Ok(())
+    }
+
+    // -- Wire format --
+
+    #[test]
+    fn test_event_metadata_serializes_raw_bytes_as_base64() -> TestResult {
+        let meta = make_metadata(b"hello world");
+        let serialized: serde_json::Value = serde_json::to_value(&meta)?;
+        assert_eq!(serialized["raw_bytes"], "aGVsbG8gd29ybGQ=");
+        Ok(())
+    }
+
+    #[test]
+    fn test_event_metadata_serializes_payload_hash_as_hex() -> TestResult {
+        let meta = make_metadata(b"hello world");
+        let serialized: serde_json::Value = serde_json::to_value(&meta)?;
+        let hash_str = serialized["payload_hash"]
+            .as_str()
+            .ok_or("payload_hash should be a string")?;
+        // Verify it is a 64-char lowercase hex string
+        assert_eq!(hash_str.len(), 64);
+        assert!(hash_str.chars().all(|c| c.is_ascii_hexdigit()));
+        // Verify it matches the expected SHA-256
+        let expected: [u8; 32] = Sha256::digest(b"hello world").into();
+        let expected_hex: String = expected
+            .iter()
+            .fold(String::with_capacity(64), |mut acc, b| {
+                use std::fmt::Write as _;
+                let _ = write!(acc, "{b:02x}");
+                acc
+            });
+        assert_eq!(hash_str, expected_hex);
+        Ok(())
+    }
+
+    #[test]
+    fn test_event_metadata_deserialize_missing_payload_hash() -> TestResult {
+        // Forward-compatibility: payload_hash absent from wire format
+        let json = serde_json::json!({
+            "timestamp": "2026-02-25T12:00:00Z",
+            "raw_bytes": BASE64_STANDARD.encode(b"test data"),
+        });
+        let meta: EventMetadata = serde_json::from_value(json)?;
+        let expected: [u8; 32] = Sha256::digest(b"test data").into();
+        assert_eq!(*meta.payload_hash(), expected);
+        assert_eq!(meta.raw_bytes(), b"test data");
+        Ok(())
+    }
+
+    #[test]
+    fn test_event_metadata_deserialize_integer_array_payload_hash() -> TestResult {
+        // Backward-compatibility: payload_hash in old integer array
+        // format
+        let json = serde_json::json!({
+            "timestamp": "2026-02-25T12:00:00Z",
+            "raw_bytes": BASE64_STANDARD.encode(b"data"),
+            "payload_hash": vec![0; 32],
+        });
+        let meta: EventMetadata = serde_json::from_value(json)?;
+        // Hash is recomputed, not taken from wire
+        let expected: [u8; 32] = Sha256::digest(b"data").into();
+        assert_eq!(*meta.payload_hash(), expected);
         Ok(())
     }
 }
