@@ -10,7 +10,7 @@
 //! | Field | Purpose |
 //! |-------|---------|
 //! | `connectResp.deckMessage.deckCards` | Player's decklist (card GRP IDs) |
-//! | `connectResp.sideboardCards` | Sideboard cards (card GRP IDs) |
+//! | `connectResp.deckMessage.sideboardCards` | Sideboard cards (card GRP IDs) |
 //! | `systemSeatIds` | All seat IDs in the game |
 //! | `connectResp.settings` | Game configuration / settings |
 //!
@@ -769,7 +769,7 @@ mod tests {
         }
 
         #[test]
-        fn test_try_parse_client_gre_header_returns_none() {
+        fn test_try_parse_client_gre_header_is_accepted() {
             let body = format!(
                 "[Client GRE]greToClientEvent\n{}",
                 serde_json::json!({
@@ -993,7 +993,7 @@ mod tests {
         use crate::events::PerformanceClass;
 
         #[test]
-        fn test_connect_resp_is_interactive_dispatch() {
+        fn test_try_parse_connect_resp_performance_class_interactive_dispatch() {
             let body = connect_resp_body();
             let entry = unity_entry(&body);
             let result = try_parse(&entry, test_timestamp());
