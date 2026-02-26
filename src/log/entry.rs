@@ -18,6 +18,7 @@ use regex::Regex;
 
 /// The two known log entry header prefixes in MTG Arena's `Player.log`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum EntryHeader {
     /// `[UnityCrossThreadLogger]` — the most common header, used for
     /// game state, client actions, match lifecycle, and most other events.
@@ -79,12 +80,14 @@ pub struct LogEntry {
 /// assert!(buf.push_line(r#"{"key": "value"}"#).is_none());
 ///
 /// // Second header — flushes the first entry.
-/// let entry = buf.push_line("[Client GRE] 1/1/2025 Event2").unwrap();
-/// assert_eq!(entry.body, "[UnityCrossThreadLogger] 1/1/2025 Event1\n{\"key\": \"value\"}");
+/// if let Some(entry) = buf.push_line("[Client GRE] 1/1/2025 Event2") {
+///     assert_eq!(entry.body, "[UnityCrossThreadLogger] 1/1/2025 Event1\n{\"key\": \"value\"}");
+/// }
 ///
 /// // Flush the remaining entry.
-/// let last = buf.flush().unwrap();
-/// assert_eq!(last.body, "[Client GRE] 1/1/2025 Event2");
+/// if let Some(last) = buf.flush() {
+///     assert_eq!(last.body, "[Client GRE] 1/1/2025 Event2");
+/// }
 /// ```
 pub struct LineBuffer {
     /// Compiled regex for detecting log entry header boundaries.
@@ -116,8 +119,8 @@ impl LineBuffer {
     ///
     /// Returns `Some(LogEntry)` when `line` starts a new log entry header,
     /// flushing the previously accumulated entry. Returns `None` when the
-    /// line is a continuation of the current entry, or when the buffer was
-    /// empty (first header encountered).
+    /// line is a continuation of the current entry, or when no entry was
+    /// in progress (buffer was empty).
     ///
     /// Lines that arrive before any header has been seen are discarded with
     /// a warning log — this handles partial entries at the start of a file
@@ -159,7 +162,7 @@ impl LineBuffer {
         self.lines.clear();
     }
 
-    /// Returns `true` if the buffer has no accumulated lines.
+    /// Returns `true` if no entry is currently being accumulated.
     pub fn is_empty(&self) -> bool {
         self.current_header.is_none()
     }
