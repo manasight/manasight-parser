@@ -142,8 +142,9 @@ pub struct EventMetadata {
     pub timestamp: DateTime<Utc>,
 
     /// Original log entry bytes. Needed by the game accumulator for disk
-    /// storage and by the raw-log backup pipeline.
-    pub raw_bytes: Vec<u8>,
+    /// storage and by the raw-log backup pipeline. Private to prevent
+    /// mutation that would break the `payload_hash` invariant.
+    raw_bytes: Vec<u8>,
 
     /// SHA-256 hash of `raw_bytes`, precomputed at construction time.
     /// Used as part of the event fingerprint for server-side deduplication:
@@ -161,6 +162,11 @@ impl EventMetadata {
             raw_bytes,
             payload_hash,
         }
+    }
+
+    /// Returns the original log entry bytes.
+    pub fn raw_bytes(&self) -> &[u8] {
+        &self.raw_bytes
     }
 
     /// Returns the SHA-256 hash of `raw_bytes`.
@@ -182,8 +188,8 @@ impl<'de> Deserialize<'de> for EventMetadata {
         struct EventMetadataWire {
             timestamp: DateTime<Utc>,
             raw_bytes: Vec<u8>,
-            #[allow(dead_code)]
-            payload_hash: [u8; 32],
+            #[serde(rename = "payload_hash")]
+            _payload_hash: [u8; 32],
         }
 
         let wire = EventMetadataWire::deserialize(deserializer)?;
@@ -442,7 +448,7 @@ mod tests {
     fn test_event_metadata_new_stores_raw_bytes() {
         let raw = b"[UnityCrossThreadLogger]some log line";
         let meta = make_metadata(raw);
-        assert_eq!(meta.raw_bytes, raw);
+        assert_eq!(meta.raw_bytes(), raw);
     }
 
     #[test]
@@ -491,17 +497,16 @@ mod tests {
     #[test]
     fn test_empty_raw_bytes_valid() {
         let meta = make_metadata(b"");
-        assert!(meta.raw_bytes.is_empty());
+        assert!(meta.raw_bytes().is_empty());
         let expected: [u8; 32] = Sha256::digest(b"").into();
         assert_eq!(*meta.payload_hash(), expected);
     }
 
     #[test]
-    fn test_event_metadata_clone_independence() {
+    fn test_event_metadata_clone_is_equal() {
         let meta = make_metadata(b"original");
-        let mut cloned = meta.clone();
-        cloned.raw_bytes.push(b'!');
-        assert_ne!(meta.raw_bytes.len(), cloned.raw_bytes.len());
+        let cloned = meta.clone();
+        assert_eq!(meta, cloned);
     }
 
     // -- Per-category struct field access --
@@ -513,7 +518,7 @@ mod tests {
             payload: serde_json::json!({"type": "GameStateMessage"}),
         };
         assert_eq!(event.payload["type"], "GameStateMessage");
-        assert_eq!(event.metadata.raw_bytes, b"gre payload");
+        assert_eq!(event.metadata.raw_bytes(), b"gre payload");
     }
 
     #[test]
@@ -649,7 +654,7 @@ mod tests {
         let raw = b"test";
         let events = all_variants();
         for event in &events {
-            assert_eq!(event.metadata().raw_bytes, raw);
+            assert_eq!(event.metadata().raw_bytes(), raw);
         }
     }
 
@@ -710,7 +715,7 @@ mod tests {
 
         // Hash should be recomputed from raw_bytes, not the tampered value
         assert_eq!(*deserialized.payload_hash(), *meta.payload_hash());
-        assert_eq!(deserialized.raw_bytes, meta.raw_bytes);
+        assert_eq!(deserialized.raw_bytes(), meta.raw_bytes());
         Ok(())
     }
 
