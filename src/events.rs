@@ -235,6 +235,11 @@ pub struct GameStateEvent {
 }
 
 impl GameStateEvent {
+    /// Returns the shared event metadata.
+    pub fn metadata(&self) -> &EventMetadata {
+        &self.metadata
+    }
+
     /// Returns the parsed JSON payload.
     pub fn payload(&self) -> &serde_json::Value {
         &self.payload
@@ -255,6 +260,11 @@ pub struct ClientActionEvent {
 }
 
 impl ClientActionEvent {
+    /// Returns the shared event metadata.
+    pub fn metadata(&self) -> &EventMetadata {
+        &self.metadata
+    }
+
     /// Returns the parsed JSON payload.
     pub fn payload(&self) -> &serde_json::Value {
         &self.payload
@@ -275,6 +285,11 @@ pub struct MatchStateEvent {
 }
 
 impl MatchStateEvent {
+    /// Returns the shared event metadata.
+    pub fn metadata(&self) -> &EventMetadata {
+        &self.metadata
+    }
+
     /// Returns the parsed JSON payload.
     pub fn payload(&self) -> &serde_json::Value {
         &self.payload
@@ -299,6 +314,11 @@ pub struct DraftBotEvent {
 }
 
 impl DraftBotEvent {
+    /// Returns the shared event metadata.
+    pub fn metadata(&self) -> &EventMetadata {
+        &self.metadata
+    }
+
     /// Returns the parsed JSON payload.
     pub fn payload(&self) -> &serde_json::Value {
         &self.payload
@@ -319,6 +339,11 @@ pub struct DraftHumanEvent {
 }
 
 impl DraftHumanEvent {
+    /// Returns the shared event metadata.
+    pub fn metadata(&self) -> &EventMetadata {
+        &self.metadata
+    }
+
     /// Returns the parsed JSON payload.
     pub fn payload(&self) -> &serde_json::Value {
         &self.payload
@@ -339,6 +364,11 @@ pub struct DraftCompleteEvent {
 }
 
 impl DraftCompleteEvent {
+    /// Returns the shared event metadata.
+    pub fn metadata(&self) -> &EventMetadata {
+        &self.metadata
+    }
+
     /// Returns the parsed JSON payload.
     pub fn payload(&self) -> &serde_json::Value {
         &self.payload
@@ -359,6 +389,11 @@ pub struct EventLifecycleEvent {
 }
 
 impl EventLifecycleEvent {
+    /// Returns the shared event metadata.
+    pub fn metadata(&self) -> &EventMetadata {
+        &self.metadata
+    }
+
     /// Returns the parsed JSON payload.
     pub fn payload(&self) -> &serde_json::Value {
         &self.payload
@@ -380,6 +415,11 @@ pub struct SessionEvent {
 }
 
 impl SessionEvent {
+    /// Returns the shared event metadata.
+    pub fn metadata(&self) -> &EventMetadata {
+        &self.metadata
+    }
+
     /// Returns the parsed JSON payload.
     pub fn payload(&self) -> &serde_json::Value {
         &self.payload
@@ -400,6 +440,11 @@ pub struct RankEvent {
 }
 
 impl RankEvent {
+    /// Returns the shared event metadata.
+    pub fn metadata(&self) -> &EventMetadata {
+        &self.metadata
+    }
+
     /// Returns the parsed JSON payload.
     pub fn payload(&self) -> &serde_json::Value {
         &self.payload
@@ -420,6 +465,11 @@ pub struct CollectionEvent {
 }
 
 impl CollectionEvent {
+    /// Returns the shared event metadata.
+    pub fn metadata(&self) -> &EventMetadata {
+        &self.metadata
+    }
+
     /// Returns the parsed JSON payload.
     pub fn payload(&self) -> &serde_json::Value {
         &self.payload
@@ -440,6 +490,11 @@ pub struct InventoryEvent {
 }
 
 impl InventoryEvent {
+    /// Returns the shared event metadata.
+    pub fn metadata(&self) -> &EventMetadata {
+        &self.metadata
+    }
+
     /// Returns the parsed JSON payload.
     pub fn payload(&self) -> &serde_json::Value {
         &self.payload
@@ -466,6 +521,11 @@ pub struct GameResultEvent {
 }
 
 impl GameResultEvent {
+    /// Returns the shared event metadata.
+    pub fn metadata(&self) -> &EventMetadata {
+        &self.metadata
+    }
+
     /// Returns the parsed JSON payload.
     pub fn payload(&self) -> &serde_json::Value {
         &self.payload
@@ -624,7 +684,7 @@ mod tests {
             payload: serde_json::json!({"type": "GameStateMessage"}),
         };
         assert_eq!(event.payload()["type"], "GameStateMessage");
-        assert_eq!(event.metadata.raw_bytes(), b"gre payload");
+        assert_eq!(event.metadata().raw_bytes(), b"gre payload");
     }
 
     #[test]
