@@ -137,8 +137,9 @@ pub enum PerformanceClass {
 /// Deserialization also enforces this invariant: the hash is recomputed from
 /// `raw_bytes` during deserialization rather than trusting the serialized value.
 ///
-/// Byte fields (`raw_bytes`, `payload_hash`) serialize as compact byte strings
-/// (e.g., base64 in human-readable formats) rather than integer arrays.
+/// Byte fields (`raw_bytes`, `payload_hash`) use `serde_bytes` for efficient
+/// serialization with binary formats (CBOR, `MessagePack`, `Bincode`). With
+/// JSON, they serialize as integer arrays (same as default `Vec<u8>`).
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct EventMetadata {
     /// UTC timestamp parsed from the log entry header.
@@ -194,6 +195,8 @@ impl<'de> Deserialize<'de> for EventMetadata {
             timestamp: DateTime<Utc>,
             #[serde(with = "serde_bytes")]
             raw_bytes: Vec<u8>,
+            // Underscore prefix marks the field intentionally unused (hash is
+            // recomputed); serde(rename) keeps the JSON key as "payload_hash".
             #[serde(rename = "payload_hash", with = "serde_bytes")]
             _payload_hash: [u8; 32],
         }
@@ -652,6 +655,11 @@ mod tests {
             PerformanceClass::PostGameBatch,       // GameResult
         ];
 
+        assert_eq!(
+            events.len(),
+            expected_classes.len(),
+            "all_variants() and expected_classes must have the same length"
+        );
         for (event, expected) in events.iter().zip(expected_classes.iter()) {
             assert_eq!(&event.performance_class(), expected);
         }
