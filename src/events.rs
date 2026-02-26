@@ -235,6 +235,7 @@ impl GameEvent {
 ///
 /// [spec]: https://github.com/manasight/manasight-docs/blob/main/docs/requirements/feature-specs/log-file-parser.md#performance-classes
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum PerformanceClass {
     /// Class 1: local-only, ≤ 100 ms latency. Also accumulated for Class 3.
     InteractiveDispatch,
@@ -517,7 +518,7 @@ mod tests {
     #[test]
     fn test_event_metadata_new_enforces_hash_invariant() {
         let raw = b"important data";
-        let meta = EventMetadata::new(Utc::now(), raw.to_vec());
+        let meta = make_metadata(raw);
         let expected: [u8; 32] = Sha256::digest(raw).into();
         assert_eq!(
             *meta.raw_bytes_hash(),
@@ -758,16 +759,12 @@ mod tests {
     // -- Serialization round-trip --
 
     #[test]
-    fn test_game_event_serde_round_trip() -> TestResult {
-        let event = GameEvent::Session(SessionEvent::new(
-            make_metadata(b"session data"),
-            serde_json::json!({"DisplayName": "Player"}),
-        ));
-
-        let serialized = serde_json::to_string(&event)?;
-        let deserialized: GameEvent = serde_json::from_str(&serialized)?;
-
-        assert_eq!(deserialized, event);
+    fn test_game_event_serde_round_trip_all_variants() -> TestResult {
+        for event in all_variants() {
+            let serialized = serde_json::to_string(&event)?;
+            let deserialized: GameEvent = serde_json::from_str(&serialized)?;
+            assert_eq!(deserialized, event);
+        }
         Ok(())
     }
 
