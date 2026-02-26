@@ -39,7 +39,7 @@ mod base64_serde {
 /// Serialize `[u8; 32]` as a 64-character lowercase hex string.
 ///
 /// Serialize-only: `EventMetadata` has a custom `Deserialize` impl that
-/// ignores `payload_hash` (it is always recomputed from `raw_bytes`), so
+/// ignores `raw_bytes_hash` (it is always recomputed from `raw_bytes`), so
 /// no `deserialize` function is needed. If `#[derive(Deserialize)]` is
 /// ever added to `EventMetadata`, add a `deserialize` function here.
 mod hex_serde {
@@ -76,10 +76,10 @@ macro_rules! define_event {
         $(#[$attr])*
         #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
         pub struct $name {
-            /// Shared event metadata (timestamp, raw bytes, payload hash).
-            pub(crate) metadata: EventMetadata,
+            /// Shared event metadata (timestamp, raw bytes, hash).
+            metadata: EventMetadata,
             /// The parsed JSON payload.
-            pub(crate) payload: serde_json::Value,
+            payload: serde_json::Value,
         }
 
         impl $name {
@@ -247,9 +247,9 @@ pub enum PerformanceClass {
 // EventMetadata
 // ---------------------------------------------------------------------------
 
-/// Fields shared by every event: timestamp, raw bytes, and payload hash.
+/// Fields shared by every event: timestamp, raw bytes, and raw-bytes hash.
 ///
-/// Constructed via [`EventMetadata::new`], which computes the `payload_hash`
+/// Constructed via [`EventMetadata::new`], which computes the `raw_bytes_hash`
 /// from `raw_bytes` to enforce the invariant that the hash always matches.
 /// This is critical for server-side deduplication via event fingerprints.
 ///
@@ -264,7 +264,7 @@ pub struct EventMetadata {
     timestamp: DateTime<Utc>,
 
     /// Original log entry bytes, serialized as base64. Private to prevent
-    /// mutation that would break the `payload_hash` invariant.
+    /// mutation that would break the `raw_bytes_hash` invariant.
     #[serde(with = "base64_serde")]
     raw_bytes: Vec<u8>,
 
@@ -272,18 +272,18 @@ pub struct EventMetadata {
     /// Precomputed at construction time. Used as part of the event
     /// fingerprint for server-side deduplication.
     #[serde(with = "hex_serde")]
-    payload_hash: [u8; 32],
+    raw_bytes_hash: [u8; 32],
 }
 
 impl EventMetadata {
-    /// Creates a new `EventMetadata`, computing `payload_hash` as the
+    /// Creates a new `EventMetadata`, computing `raw_bytes_hash` as the
     /// SHA-256 digest of `raw_bytes`.
     pub fn new(timestamp: DateTime<Utc>, raw_bytes: Vec<u8>) -> Self {
-        let payload_hash: [u8; 32] = Sha256::digest(&raw_bytes).into();
+        let raw_bytes_hash: [u8; 32] = Sha256::digest(&raw_bytes).into();
         Self {
             timestamp,
             raw_bytes,
-            payload_hash,
+            raw_bytes_hash,
         }
     }
 
@@ -298,12 +298,12 @@ impl EventMetadata {
     }
 
     /// Returns the SHA-256 hash of `raw_bytes`.
-    pub fn payload_hash(&self) -> &[u8; 32] {
-        &self.payload_hash
+    pub fn raw_bytes_hash(&self) -> &[u8; 32] {
+        &self.raw_bytes_hash
     }
 }
 
-/// Custom `Deserialize` that recomputes `payload_hash` from `raw_bytes`,
+/// Custom `Deserialize` that recomputes `raw_bytes_hash` from `raw_bytes`,
 /// ensuring the hash invariant survives serialization round-trips.
 impl<'de> Deserialize<'de> for EventMetadata {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
@@ -311,7 +311,7 @@ impl<'de> Deserialize<'de> for EventMetadata {
         D: serde::Deserializer<'de>,
     {
         /// Wire format for deserializing `EventMetadata`. The
-        /// `payload_hash` field is optional and discarded — the real
+        /// `raw_bytes_hash` field is optional and discarded — the real
         /// hash is always recomputed from `raw_bytes`.
         #[derive(Deserialize)]
         struct EventMetadataWire {
@@ -320,8 +320,8 @@ impl<'de> Deserialize<'de> for EventMetadata {
             raw_bytes: Vec<u8>,
             // Accepts any format (hex string, integer array) or absence.
             // The value is discarded — hash is always recomputed.
-            #[serde(default, rename = "payload_hash")]
-            _payload_hash: serde_json::Value,
+            #[serde(default, rename = "raw_bytes_hash")]
+            _raw_bytes_hash: serde_json::Value,
         }
 
         let wire = EventMetadataWire::deserialize(deserializer)?;
@@ -469,54 +469,18 @@ mod tests {
         let meta = make_metadata(b"test");
         let payload = serde_json::json!({});
         vec![
-            GameEvent::GameState(GameStateEvent {
-                metadata: meta.clone(),
-                payload: payload.clone(),
-            }),
-            GameEvent::ClientAction(ClientActionEvent {
-                metadata: meta.clone(),
-                payload: payload.clone(),
-            }),
-            GameEvent::MatchState(MatchStateEvent {
-                metadata: meta.clone(),
-                payload: payload.clone(),
-            }),
-            GameEvent::DraftBot(DraftBotEvent {
-                metadata: meta.clone(),
-                payload: payload.clone(),
-            }),
-            GameEvent::DraftHuman(DraftHumanEvent {
-                metadata: meta.clone(),
-                payload: payload.clone(),
-            }),
-            GameEvent::DraftComplete(DraftCompleteEvent {
-                metadata: meta.clone(),
-                payload: payload.clone(),
-            }),
-            GameEvent::EventLifecycle(EventLifecycleEvent {
-                metadata: meta.clone(),
-                payload: payload.clone(),
-            }),
-            GameEvent::Session(SessionEvent {
-                metadata: meta.clone(),
-                payload: payload.clone(),
-            }),
-            GameEvent::Rank(RankEvent {
-                metadata: meta.clone(),
-                payload: payload.clone(),
-            }),
-            GameEvent::Collection(CollectionEvent {
-                metadata: meta.clone(),
-                payload: payload.clone(),
-            }),
-            GameEvent::Inventory(InventoryEvent {
-                metadata: meta.clone(),
-                payload: payload.clone(),
-            }),
-            GameEvent::GameResult(GameResultEvent {
-                metadata: meta.clone(),
-                payload: payload.clone(),
-            }),
+            GameEvent::GameState(GameStateEvent::new(meta.clone(), payload.clone())),
+            GameEvent::ClientAction(ClientActionEvent::new(meta.clone(), payload.clone())),
+            GameEvent::MatchState(MatchStateEvent::new(meta.clone(), payload.clone())),
+            GameEvent::DraftBot(DraftBotEvent::new(meta.clone(), payload.clone())),
+            GameEvent::DraftHuman(DraftHumanEvent::new(meta.clone(), payload.clone())),
+            GameEvent::DraftComplete(DraftCompleteEvent::new(meta.clone(), payload.clone())),
+            GameEvent::EventLifecycle(EventLifecycleEvent::new(meta.clone(), payload.clone())),
+            GameEvent::Session(SessionEvent::new(meta.clone(), payload.clone())),
+            GameEvent::Rank(RankEvent::new(meta.clone(), payload.clone())),
+            GameEvent::Collection(CollectionEvent::new(meta.clone(), payload.clone())),
+            GameEvent::Inventory(InventoryEvent::new(meta.clone(), payload.clone())),
+            GameEvent::GameResult(GameResultEvent::new(meta.clone(), payload.clone())),
         ]
     }
 
@@ -530,11 +494,11 @@ mod tests {
     }
 
     #[test]
-    fn test_event_metadata_new_computes_payload_hash() {
+    fn test_event_metadata_new_computes_raw_bytes_hash() {
         let raw = b"test payload";
         let meta = make_metadata(raw);
         let expected: [u8; 32] = Sha256::digest(raw).into();
-        assert_eq!(*meta.payload_hash(), expected);
+        assert_eq!(*meta.raw_bytes_hash(), expected);
     }
 
     #[test]
@@ -550,9 +514,9 @@ mod tests {
         let meta = EventMetadata::new(Utc::now(), raw.to_vec());
         let expected: [u8; 32] = Sha256::digest(raw).into();
         assert_eq!(
-            *meta.payload_hash(),
+            *meta.raw_bytes_hash(),
             expected,
-            "payload_hash must always be SHA-256 of raw_bytes"
+            "raw_bytes_hash must always be SHA-256 of raw_bytes"
         );
     }
 
@@ -562,14 +526,14 @@ mod tests {
     fn test_different_raw_bytes_produce_different_hashes() {
         let meta1 = make_metadata(b"payload one");
         let meta2 = make_metadata(b"payload two");
-        assert_ne!(meta1.payload_hash(), meta2.payload_hash());
+        assert_ne!(meta1.raw_bytes_hash(), meta2.raw_bytes_hash());
     }
 
     #[test]
     fn test_identical_raw_bytes_produce_same_hash() {
         let meta1 = make_metadata(b"same payload");
         let meta2 = make_metadata(b"same payload");
-        assert_eq!(meta1.payload_hash(), meta2.payload_hash());
+        assert_eq!(meta1.raw_bytes_hash(), meta2.raw_bytes_hash());
     }
 
     #[test]
@@ -577,7 +541,7 @@ mod tests {
         let meta = make_metadata(b"");
         assert!(meta.raw_bytes().is_empty());
         let expected: [u8; 32] = Sha256::digest(b"").into();
-        assert_eq!(*meta.payload_hash(), expected);
+        assert_eq!(*meta.raw_bytes_hash(), expected);
     }
 
     #[test]
@@ -600,58 +564,58 @@ mod tests {
 
     #[test]
     fn test_game_state_event_field_access() {
-        let event = GameStateEvent {
-            metadata: make_metadata(b"gre payload"),
-            payload: serde_json::json!({"type": "GameStateMessage"}),
-        };
+        let event = GameStateEvent::new(
+            make_metadata(b"gre payload"),
+            serde_json::json!({"type": "GameStateMessage"}),
+        );
         assert_eq!(event.payload()["type"], "GameStateMessage");
         assert_eq!(event.metadata().raw_bytes(), b"gre payload");
     }
 
     #[test]
     fn test_client_action_event_field_access() {
-        let event = ClientActionEvent {
-            metadata: make_metadata(b"client action"),
-            payload: serde_json::json!({"type": "MulliganResp"}),
-        };
+        let event = ClientActionEvent::new(
+            make_metadata(b"client action"),
+            serde_json::json!({"type": "MulliganResp"}),
+        );
         assert_eq!(event.payload()["type"], "MulliganResp");
     }
 
     #[test]
     fn test_match_state_event_field_access() {
-        let event = MatchStateEvent {
-            metadata: make_metadata(b"match state"),
-            payload: serde_json::json!(
+        let event = MatchStateEvent::new(
+            make_metadata(b"match state"),
+            serde_json::json!(
                 {"matchGameRoomStateChangedEvent": {}}
             ),
-        };
+        );
         assert!(event.payload()["matchGameRoomStateChangedEvent"].is_object());
     }
 
     #[test]
     fn test_draft_bot_event_field_access() {
-        let event = DraftBotEvent {
-            metadata: make_metadata(b"bot draft"),
-            payload: serde_json::json!({"DraftStatus": "PickNext"}),
-        };
+        let event = DraftBotEvent::new(
+            make_metadata(b"bot draft"),
+            serde_json::json!({"DraftStatus": "PickNext"}),
+        );
         assert_eq!(event.payload()["DraftStatus"], "PickNext");
     }
 
     #[test]
     fn test_draft_human_event_field_access() {
-        let event = DraftHumanEvent {
-            metadata: make_metadata(b"human draft"),
-            payload: serde_json::json!({"PickGrpId": 12345}),
-        };
+        let event = DraftHumanEvent::new(
+            make_metadata(b"human draft"),
+            serde_json::json!({"PickGrpId": 12345}),
+        );
         assert_eq!(event.payload()["PickGrpId"], 12345);
     }
 
     #[test]
     fn test_draft_complete_event_field_access() {
-        let event = DraftCompleteEvent {
-            metadata: make_metadata(b"draft complete"),
-            payload: serde_json::json!({"Draft_CompleteDraft": true}),
-        };
+        let event = DraftCompleteEvent::new(
+            make_metadata(b"draft complete"),
+            serde_json::json!({"Draft_CompleteDraft": true}),
+        );
         assert!(event.payload()["Draft_CompleteDraft"]
             .as_bool()
             .unwrap_or(false));
@@ -659,61 +623,61 @@ mod tests {
 
     #[test]
     fn test_event_lifecycle_event_field_access() {
-        let event = EventLifecycleEvent {
-            metadata: make_metadata(b"event lifecycle"),
-            payload: serde_json::json!({"action": "Event_Join"}),
-        };
+        let event = EventLifecycleEvent::new(
+            make_metadata(b"event lifecycle"),
+            serde_json::json!({"action": "Event_Join"}),
+        );
         assert_eq!(event.payload()["action"], "Event_Join");
     }
 
     #[test]
     fn test_session_event_field_access() {
-        let event = SessionEvent {
-            metadata: make_metadata(b"session data"),
-            payload: serde_json::json!({"DisplayName": "Player"}),
-        };
+        let event = SessionEvent::new(
+            make_metadata(b"session data"),
+            serde_json::json!({"DisplayName": "Player"}),
+        );
         assert_eq!(event.payload()["DisplayName"], "Player");
     }
 
     #[test]
     fn test_rank_event_field_access() {
-        let event = RankEvent {
-            metadata: make_metadata(b"rank data"),
-            payload: serde_json::json!(
+        let event = RankEvent::new(
+            make_metadata(b"rank data"),
+            serde_json::json!(
                 {"constructedClass": "Gold", "constructedLevel": 2}
             ),
-        };
+        );
         assert_eq!(event.payload()["constructedClass"], "Gold");
     }
 
     #[test]
     fn test_collection_event_field_access() {
-        let event = CollectionEvent {
-            metadata: make_metadata(b"collection"),
-            payload: serde_json::json!({"12345": 4, "67890": 2}),
-        };
+        let event = CollectionEvent::new(
+            make_metadata(b"collection"),
+            serde_json::json!({"12345": 4, "67890": 2}),
+        );
         assert_eq!(event.payload()["12345"], 4);
     }
 
     #[test]
     fn test_inventory_event_field_access() {
-        let event = InventoryEvent {
-            metadata: make_metadata(b"inventory"),
-            payload: serde_json::json!(
+        let event = InventoryEvent::new(
+            make_metadata(b"inventory"),
+            serde_json::json!(
                 {"gold": 5000, "gems": 200, "wcCommon": 10}
             ),
-        };
+        );
         assert_eq!(event.payload()["gold"], 5000);
     }
 
     #[test]
     fn test_game_result_event_field_access() {
-        let event = GameResultEvent {
-            metadata: make_metadata(b"game result"),
-            payload: serde_json::json!(
+        let event = GameResultEvent::new(
+            make_metadata(b"game result"),
+            serde_json::json!(
                 {"WinningType": "Win", "GameStage": "GameOver"}
             ),
-        };
+        );
         assert_eq!(event.payload()["WinningType"], "Win");
     }
 
@@ -788,10 +752,10 @@ mod tests {
 
     #[test]
     fn test_game_event_serde_round_trip() -> TestResult {
-        let event = GameEvent::Session(SessionEvent {
-            metadata: make_metadata(b"session data"),
-            payload: serde_json::json!({"DisplayName": "Player"}),
-        });
+        let event = GameEvent::Session(SessionEvent::new(
+            make_metadata(b"session data"),
+            serde_json::json!({"DisplayName": "Player"}),
+        ));
 
         let serialized = serde_json::to_string(&event)?;
         let deserialized: GameEvent = serde_json::from_str(&serialized)?;
@@ -815,14 +779,14 @@ mod tests {
         let meta = make_metadata(b"test data");
         let mut serialized: serde_json::Value = serde_json::to_value(&meta)?;
 
-        // Tamper with the serialized payload_hash (now a hex string)
-        serialized["payload_hash"] = serde_json::json!("00".repeat(32));
+        // Tamper with the serialized raw_bytes_hash (now a hex string)
+        serialized["raw_bytes_hash"] = serde_json::json!("00".repeat(32));
 
         let deserialized: EventMetadata = serde_json::from_value(serialized)?;
 
         // Hash should be recomputed from raw_bytes, not the tampered
         // value
-        assert_eq!(*deserialized.payload_hash(), *meta.payload_hash());
+        assert_eq!(*deserialized.raw_bytes_hash(), *meta.raw_bytes_hash());
         assert_eq!(deserialized.raw_bytes(), meta.raw_bytes());
         Ok(())
     }
@@ -852,55 +816,47 @@ mod tests {
     }
 
     #[test]
-    fn test_event_metadata_serializes_payload_hash_as_hex() -> TestResult {
+    fn test_event_metadata_serializes_raw_bytes_hash_as_hex() -> TestResult {
         let meta = make_metadata(b"hello world");
         let serialized: serde_json::Value = serde_json::to_value(&meta)?;
-        let hash_str = serialized["payload_hash"]
+        let hash_str = serialized["raw_bytes_hash"]
             .as_str()
-            .ok_or("payload_hash should be a string")?;
-        // Verify it is a 64-char lowercase hex string
-        assert_eq!(hash_str.len(), 64);
-        assert!(hash_str.chars().all(|c| c.is_ascii_hexdigit()));
-        // Verify it matches the expected SHA-256
-        let expected: [u8; 32] = Sha256::digest(b"hello world").into();
-        let expected_hex: String = expected
-            .iter()
-            .fold(String::with_capacity(64), |mut acc, b| {
-                use std::fmt::Write as _;
-                let _ = write!(acc, "{b:02x}");
-                acc
-            });
-        assert_eq!(hash_str, expected_hex);
+            .ok_or("raw_bytes_hash should be a string")?;
+        // Known SHA-256 of "hello world"
+        assert_eq!(
+            hash_str,
+            "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
+        );
         Ok(())
     }
 
     #[test]
-    fn test_event_metadata_deserialize_missing_payload_hash() -> TestResult {
-        // Forward-compatibility: payload_hash absent from wire format
+    fn test_event_metadata_deserialize_missing_raw_bytes_hash() -> TestResult {
+        // Forward-compatibility: raw_bytes_hash absent from wire format
         let json = serde_json::json!({
             "timestamp": "2026-02-25T12:00:00Z",
             "raw_bytes": BASE64_STANDARD.encode(b"test data"),
         });
         let meta: EventMetadata = serde_json::from_value(json)?;
         let expected: [u8; 32] = Sha256::digest(b"test data").into();
-        assert_eq!(*meta.payload_hash(), expected);
+        assert_eq!(*meta.raw_bytes_hash(), expected);
         assert_eq!(meta.raw_bytes(), b"test data");
         Ok(())
     }
 
     #[test]
-    fn test_event_metadata_deserialize_integer_array_payload_hash() -> TestResult {
-        // Backward-compatibility: payload_hash in old integer array
+    fn test_event_metadata_deserialize_integer_array_raw_bytes_hash() -> TestResult {
+        // Backward-compatibility: raw_bytes_hash in old integer array
         // format
         let json = serde_json::json!({
             "timestamp": "2026-02-25T12:00:00Z",
             "raw_bytes": BASE64_STANDARD.encode(b"data"),
-            "payload_hash": vec![0; 32],
+            "raw_bytes_hash": vec![0; 32],
         });
         let meta: EventMetadata = serde_json::from_value(json)?;
         // Hash is recomputed, not taken from wire
         let expected: [u8; 32] = Sha256::digest(b"data").into();
-        assert_eq!(*meta.payload_hash(), expected);
+        assert_eq!(*meta.raw_bytes_hash(), expected);
         Ok(())
     }
 }
