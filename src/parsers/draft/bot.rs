@@ -144,9 +144,7 @@ fn try_parse_draft_pick(body: &str) -> Option<serde_json::Value> {
     };
 
     // The pick info may be at top level or nested under a `PickInfo` key.
-    let pick_info = parsed.get("PickInfo").or(Some(&parsed));
-
-    let pick_info = pick_info.unwrap_or(&parsed);
+    let pick_info = parsed.get("PickInfo").unwrap_or(&parsed);
 
     let card_id = pick_info
         .get("CardId")
