@@ -136,6 +136,9 @@ pub enum PerformanceClass {
 ///
 /// Deserialization also enforces this invariant: the hash is recomputed from
 /// `raw_bytes` during deserialization rather than trusting the serialized value.
+///
+/// Byte fields (`raw_bytes`, `payload_hash`) serialize as compact byte strings
+/// (e.g., base64 in human-readable formats) rather than integer arrays.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct EventMetadata {
     /// UTC timestamp parsed from the log entry header.
@@ -144,11 +147,13 @@ pub struct EventMetadata {
     /// Original log entry bytes. Needed by the game accumulator for disk
     /// storage and by the raw-log backup pipeline. Private to prevent
     /// mutation that would break the `payload_hash` invariant.
+    #[serde(with = "serde_bytes")]
     raw_bytes: Vec<u8>,
 
     /// SHA-256 hash of `raw_bytes`, precomputed at construction time.
     /// Used as part of the event fingerprint for server-side deduplication:
     /// `sha256(event_type + '\0' + match_id + '\0' + timestamp + '\0' + payload_hash)`.
+    #[serde(with = "serde_bytes")]
     payload_hash: [u8; 32],
 }
 
@@ -187,8 +192,9 @@ impl<'de> Deserialize<'de> for EventMetadata {
         #[derive(Deserialize)]
         struct EventMetadataWire {
             timestamp: DateTime<Utc>,
+            #[serde(with = "serde_bytes")]
             raw_bytes: Vec<u8>,
-            #[serde(rename = "payload_hash")]
+            #[serde(rename = "payload_hash", with = "serde_bytes")]
             _payload_hash: [u8; 32],
         }
 
@@ -376,13 +382,15 @@ mod tests {
     type TestResult = Result<(), Box<dyn std::error::Error>>;
 
     /// Helper: build an `EventMetadata` with a fixed timestamp and the given raw bytes.
+    ///
+    /// UTC datetimes are never ambiguous so `single()` always returns `Some`.
+    /// The `unwrap_or_default()` fallback returns epoch (1970-01-01) which would
+    /// visibly fail any timestamp assertion rather than passing silently.
     fn make_metadata(raw: &[u8]) -> EventMetadata {
-        // UTC datetimes are never ambiguous, so single() always returns Some.
         let timestamp = Utc
             .with_ymd_and_hms(2026, 2, 25, 12, 0, 0)
             .single()
-            .ok_or("invalid timestamp")
-            .unwrap_or_else(|_| Utc::now());
+            .unwrap_or_default();
         EventMetadata::new(timestamp, raw.to_vec())
     }
 
