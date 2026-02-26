@@ -321,7 +321,7 @@ impl<'de> Deserialize<'de> for EventMetadata {
             // Accepts any format (hex string, integer array) or absence.
             // The value is discarded — hash is always recomputed.
             #[serde(default, rename = "raw_bytes_hash")]
-            _raw_bytes_hash: serde_json::Value,
+            _raw_bytes_hash: serde::de::IgnoredAny,
         }
 
         let wire = EventMetadataWire::deserialize(deserializer)?;
@@ -465,6 +465,10 @@ mod tests {
     }
 
     /// Helper: build all 12 `GameEvent` variants for exhaustive testing.
+    ///
+    /// Must stay in sync with `GameEvent` variants. Compile-time
+    /// exhaustiveness is enforced by `performance_class()` and
+    /// `delegate_to_inner!`; this array is the test-only counterpart.
     fn all_variants() -> Vec<GameEvent> {
         let meta = make_metadata(b"test");
         let payload = serde_json::json!({});
