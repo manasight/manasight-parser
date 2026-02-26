@@ -19,7 +19,7 @@ use sha2::{Digest, Sha256};
 ///
 /// Marked `#[non_exhaustive]` so that new event categories can be added
 /// in future releases without a breaking change for downstream consumers.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum GameEvent {
     /// GRE-to-client messages: `GameStateMessage`, `ConnectResp`,
@@ -133,7 +133,10 @@ pub enum PerformanceClass {
 /// Constructed via [`EventMetadata::new`], which computes the `payload_hash`
 /// from `raw_bytes` to enforce the invariant that the hash always matches.
 /// This is critical for server-side deduplication via event fingerprints.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// Deserialization also enforces this invariant: the hash is recomputed from
+/// `raw_bytes` during deserialization rather than trusting the serialized value.
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct EventMetadata {
     /// UTC timestamp parsed from the log entry header.
     pub timestamp: DateTime<Utc>,
@@ -166,6 +169,28 @@ impl EventMetadata {
     }
 }
 
+/// Custom `Deserialize` that recomputes `payload_hash` from `raw_bytes`,
+/// ensuring the hash invariant survives serialization round-trips.
+impl<'de> Deserialize<'de> for EventMetadata {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        /// Wire format for deserializing `EventMetadata`. The `payload_hash`
+        /// field is read but discarded — the real hash is recomputed.
+        #[derive(Deserialize)]
+        struct EventMetadataWire {
+            timestamp: DateTime<Utc>,
+            raw_bytes: Vec<u8>,
+            #[allow(dead_code)]
+            payload_hash: [u8; 32],
+        }
+
+        let wire = EventMetadataWire::deserialize(deserializer)?;
+        Ok(EventMetadata::new(wire.timestamp, wire.raw_bytes))
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Class 1: Interactive Dispatch
 // ---------------------------------------------------------------------------
@@ -174,7 +199,7 @@ impl EventMetadata {
 ///
 /// Covers `GameStateMessage`, `ConnectResp`, and `QueuedGameStateMessage`
 /// payloads from `greToClientEvent` entries.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GameStateEvent {
     /// Shared event metadata (timestamp, raw bytes, payload hash).
     pub metadata: EventMetadata,
@@ -187,7 +212,7 @@ pub struct GameStateEvent {
 ///
 /// Covers `SelectNResp`, `SubmitDeckResp`, `MulliganResp`, and other
 /// `ClientToGREMessage` payloads.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ClientActionEvent {
     /// Shared event metadata (timestamp, raw bytes, payload hash).
     pub metadata: EventMetadata,
@@ -200,7 +225,7 @@ pub struct ClientActionEvent {
 ///
 /// Parsed from `matchGameRoomStateChangedEvent` entries. Signals match
 /// start/end and triggers overlay state transitions.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MatchStateEvent {
     /// Shared event metadata (timestamp, raw bytes, payload hash).
     pub metadata: EventMetadata,
@@ -217,7 +242,7 @@ pub struct MatchStateEvent {
 ///
 /// Parsed from `DraftStatus: "PickNext"` and `BotDraft_DraftPick` entries.
 /// Each pick is independently valuable and must survive crashes.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DraftBotEvent {
     /// Shared event metadata (timestamp, raw bytes, payload hash).
     pub metadata: EventMetadata,
@@ -230,7 +255,7 @@ pub struct DraftBotEvent {
 ///
 /// Parsed from `Draft.Notify`, `EventPlayerDraftMakePick`, and
 /// `LogBusinessEvents` entries containing `PickGrpId`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DraftHumanEvent {
     /// Shared event metadata (timestamp, raw bytes, payload hash).
     pub metadata: EventMetadata,
@@ -243,7 +268,7 @@ pub struct DraftHumanEvent {
 ///
 /// Parsed from `Draft_CompleteDraft`. Links the draft ID to the event
 /// and marks the draft as finished.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DraftCompleteEvent {
     /// Shared event metadata (timestamp, raw bytes, payload hash).
     pub metadata: EventMetadata,
@@ -256,7 +281,7 @@ pub struct DraftCompleteEvent {
 ///
 /// Covers `Event_Join`, `Event_SetDeck`, `Event_GetCourses`, and
 /// `Event_ClaimPrize`. Each is independently meaningful.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EventLifecycleEvent {
     /// Shared event metadata (timestamp, raw bytes, payload hash).
     pub metadata: EventMetadata,
@@ -270,7 +295,7 @@ pub struct EventLifecycleEvent {
 /// Covers `Updated account. DisplayName:`, `authenticateResponse`,
 /// and `FrontDoorConnection.Close`. Needed to tag all subsequent events
 /// with player identity.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionEvent {
     /// Shared event metadata (timestamp, raw bytes, payload hash).
     pub metadata: EventMetadata,
@@ -283,7 +308,7 @@ pub struct SessionEvent {
 ///
 /// Parsed from `Rank_GetCombinedRankInfo`. Infrequent, small,
 /// independently useful.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RankEvent {
     /// Shared event metadata (timestamp, raw bytes, payload hash).
     pub metadata: EventMetadata,
@@ -296,7 +321,7 @@ pub struct RankEvent {
 ///
 /// Parsed from `PlayerInventory.GetPlayerCardsV3`. Enables future
 /// deck building features. Best-effort collection.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CollectionEvent {
     /// Shared event metadata (timestamp, raw bytes, payload hash).
     pub metadata: EventMetadata,
@@ -309,7 +334,7 @@ pub struct CollectionEvent {
 ///
 /// Parsed from `DTO_InventoryInfo`. Contains currency, wildcards,
 /// boosters, and vault progress.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InventoryEvent {
     /// Shared event metadata (timestamp, raw bytes, payload hash).
     pub metadata: EventMetadata,
@@ -328,7 +353,7 @@ pub struct InventoryEvent {
 /// `GameStage_GameOver`. When this event fires, the desktop app
 /// serializes the disk-backed game buffer into a single compressed
 /// payload and uploads it.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GameResultEvent {
     /// Shared event metadata (timestamp, raw bytes, payload hash).
     pub metadata: EventMetadata,
@@ -342,12 +367,16 @@ mod tests {
     use super::*;
     use chrono::{Datelike, TimeZone};
 
-    /// Helper: build an `EventMetadata` with the given raw bytes.
+    type TestResult = Result<(), Box<dyn std::error::Error>>;
+
+    /// Helper: build an `EventMetadata` with a fixed timestamp and the given raw bytes.
     fn make_metadata(raw: &[u8]) -> EventMetadata {
+        // UTC datetimes are never ambiguous, so single() always returns Some.
         let timestamp = Utc
             .with_ymd_and_hms(2026, 2, 25, 12, 0, 0)
             .single()
-            .unwrap_or_else(Utc::now);
+            .ok_or("invalid timestamp")
+            .unwrap_or_else(|_| Utc::now());
         EventMetadata::new(timestamp, raw.to_vec())
     }
 
@@ -645,57 +674,57 @@ mod tests {
     // -- Serialization round-trip --
 
     #[test]
-    fn test_game_event_serde_round_trip() {
+    fn test_game_event_serde_round_trip() -> TestResult {
         let event = GameEvent::Session(SessionEvent {
             metadata: make_metadata(b"session data"),
             payload: serde_json::json!({"DisplayName": "Player"}),
         });
 
-        let serialized = serde_json::to_string(&event).unwrap_or_default();
-        assert!(!serialized.is_empty());
+        let serialized = serde_json::to_string(&event)?;
+        let deserialized: GameEvent = serde_json::from_str(&serialized)?;
 
-        let deserialized: GameEvent = serde_json::from_str(&serialized).unwrap_or_else(|_| {
-            GameEvent::Session(SessionEvent {
-                metadata: make_metadata(b""),
-                payload: serde_json::json!(null),
-            })
-        });
-
-        assert_eq!(
-            deserialized.metadata().raw_bytes,
-            event.metadata().raw_bytes
-        );
-        assert_eq!(
-            deserialized.metadata().payload_hash(),
-            event.metadata().payload_hash()
-        );
+        assert_eq!(deserialized, event);
+        Ok(())
     }
 
     #[test]
-    fn test_event_metadata_serde_round_trip() {
+    fn test_event_metadata_serde_round_trip() -> TestResult {
         let meta = make_metadata(b"round trip test");
-        let serialized = serde_json::to_string(&meta).unwrap_or_default();
-        assert!(!serialized.is_empty());
+        let serialized = serde_json::to_string(&meta)?;
+        let deserialized: EventMetadata = serde_json::from_str(&serialized)?;
 
-        let deserialized: EventMetadata =
-            serde_json::from_str(&serialized).unwrap_or_else(|_| make_metadata(b""));
-
-        assert_eq!(deserialized.raw_bytes, meta.raw_bytes);
-        assert_eq!(deserialized.payload_hash(), meta.payload_hash());
-        assert_eq!(deserialized.timestamp, meta.timestamp);
+        assert_eq!(deserialized, meta);
+        Ok(())
     }
 
     #[test]
-    fn test_performance_class_serde_round_trip() {
+    fn test_event_metadata_deserialize_recomputes_hash() -> TestResult {
+        let meta = make_metadata(b"test data");
+        let mut serialized: serde_json::Value = serde_json::to_value(&meta)?;
+
+        // Tamper with the serialized payload_hash
+        let zeroed: Vec<u8> = vec![0; 32];
+        serialized["payload_hash"] = serde_json::json!(zeroed);
+
+        let deserialized: EventMetadata = serde_json::from_value(serialized)?;
+
+        // Hash should be recomputed from raw_bytes, not the tampered value
+        assert_eq!(*deserialized.payload_hash(), *meta.payload_hash());
+        assert_eq!(deserialized.raw_bytes, meta.raw_bytes);
+        Ok(())
+    }
+
+    #[test]
+    fn test_performance_class_serde_round_trip() -> TestResult {
         for class in [
             PerformanceClass::InteractiveDispatch,
             PerformanceClass::DurablePerEvent,
             PerformanceClass::PostGameBatch,
         ] {
-            let serialized = serde_json::to_string(&class).unwrap_or_default();
-            let deserialized: PerformanceClass =
-                serde_json::from_str(&serialized).unwrap_or(PerformanceClass::InteractiveDispatch);
+            let serialized = serde_json::to_string(&class)?;
+            let deserialized: PerformanceClass = serde_json::from_str(&serialized)?;
             assert_eq!(deserialized, class);
         }
+        Ok(())
     }
 }
