@@ -6,3 +6,678 @@
 //! [Event-to-Class Mapping][spec].
 //!
 //! [spec]: https://github.com/manasight/manasight-docs/blob/main/docs/requirements/feature-specs/log-file-parser.md#event-to-class-mapping
+
+use chrono::{DateTime, Utc};
+
+/// A parsed MTG Arena log event.
+///
+/// Each variant wraps a category-specific struct containing parsed fields,
+/// the original raw log bytes, and a precomputed payload hash. Consumers
+/// subscribe to the event bus and pattern-match on this enum.
+#[derive(Debug, Clone)]
+pub enum GameEvent {
+    /// GRE-to-client messages: `GameStateMessage`, `ConnectResp`,
+    /// `QueuedGameStateMessage`. Class 1 — interactive dispatch.
+    GameState(GameStateEvent),
+
+    /// Client-to-GRE messages: `SelectNResp`, `SubmitDeckResp`,
+    /// `MulliganResp`. Class 1 — interactive dispatch.
+    ClientAction(ClientActionEvent),
+
+    /// Match room state changes (`matchGameRoomStateChangedEvent`).
+    /// Class 1 — interactive dispatch.
+    MatchState(MatchStateEvent),
+
+    /// Bot draft picks (`DraftStatus: "PickNext"`, `BotDraft_DraftPick`).
+    /// Class 2 — durable per-event.
+    DraftBot(DraftBotEvent),
+
+    /// Human draft picks (`Draft.Notify`, `EventPlayerDraftMakePick`).
+    /// Class 2 — durable per-event.
+    DraftHuman(DraftHumanEvent),
+
+    /// Draft completion (`Draft_CompleteDraft`).
+    /// Class 2 — durable per-event.
+    DraftComplete(DraftCompleteEvent),
+
+    /// Event lifecycle: join, set deck, get courses, claim prize.
+    /// Class 2 — durable per-event.
+    EventLifecycle(EventLifecycleEvent),
+
+    /// Session: login, account identity, logout.
+    /// Class 2 — durable per-event.
+    Session(SessionEvent),
+
+    /// Rank snapshot (`Rank_GetCombinedRankInfo`).
+    /// Class 2 — durable per-event.
+    Rank(RankEvent),
+
+    /// Card collection snapshot (`PlayerInventory.GetPlayerCardsV3`).
+    /// Class 2 — durable per-event.
+    Collection(CollectionEvent),
+
+    /// Inventory snapshot (`DTO_InventoryInfo`): currency, wildcards, etc.
+    /// Class 2 — durable per-event.
+    Inventory(InventoryEvent),
+
+    /// Game result (`LogBusinessEvents` with `WinningType`).
+    /// Class 3 — triggers post-game batch assembly.
+    GameResult(GameResultEvent),
+}
+
+impl GameEvent {
+    /// Returns the performance class for this event.
+    ///
+    /// - Class 1: interactive dispatch (local, ≤ 100 ms)
+    /// - Class 2: durable per-event upload
+    /// - Class 3: post-game batch upload trigger
+    pub fn performance_class(&self) -> PerformanceClass {
+        match self {
+            Self::GameState(_) | Self::ClientAction(_) | Self::MatchState(_) => {
+                PerformanceClass::InteractiveDispatch
+            }
+            Self::DraftBot(_)
+            | Self::DraftHuman(_)
+            | Self::DraftComplete(_)
+            | Self::EventLifecycle(_)
+            | Self::Session(_)
+            | Self::Rank(_)
+            | Self::Collection(_)
+            | Self::Inventory(_) => PerformanceClass::DurablePerEvent,
+            Self::GameResult(_) => PerformanceClass::PostGameBatch,
+        }
+    }
+
+    /// Returns the shared metadata common to all events.
+    pub fn metadata(&self) -> &EventMetadata {
+        match self {
+            Self::GameState(e) => &e.metadata,
+            Self::ClientAction(e) => &e.metadata,
+            Self::MatchState(e) => &e.metadata,
+            Self::DraftBot(e) => &e.metadata,
+            Self::DraftHuman(e) => &e.metadata,
+            Self::DraftComplete(e) => &e.metadata,
+            Self::EventLifecycle(e) => &e.metadata,
+            Self::Session(e) => &e.metadata,
+            Self::Rank(e) => &e.metadata,
+            Self::Collection(e) => &e.metadata,
+            Self::Inventory(e) => &e.metadata,
+            Self::GameResult(e) => &e.metadata,
+        }
+    }
+}
+
+/// Performance class determining latency target and delivery path.
+///
+/// See the [feature spec performance classes][spec] for details.
+///
+/// [spec]: https://github.com/manasight/manasight-docs/blob/main/docs/requirements/feature-specs/log-file-parser.md#performance-classes
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PerformanceClass {
+    /// Class 1: local-only, ≤ 100 ms latency. Also accumulated for Class 3.
+    InteractiveDispatch,
+    /// Class 2: persisted to disk queue, uploaded individually, ≤ 1 s.
+    DurablePerEvent,
+    /// Class 3: triggers assembly and upload of the complete game batch.
+    PostGameBatch,
+}
+
+/// Fields shared by every event: timestamp, raw bytes, and payload hash.
+///
+/// Extracted into a shared struct so that event bus consumers can access
+/// common fields without matching on the specific event variant.
+#[derive(Debug, Clone)]
+pub struct EventMetadata {
+    /// UTC timestamp parsed from the log entry header.
+    pub timestamp: DateTime<Utc>,
+
+    /// Original log entry bytes. Needed by the game accumulator for disk
+    /// storage and by the raw-log backup pipeline.
+    pub raw_bytes: Vec<u8>,
+
+    /// SHA-256 hash of `raw_bytes`, precomputed at the entry-buffer stage.
+    /// Used as part of the event fingerprint for server-side deduplication:
+    /// `sha256(event_type + '\0' + match_id + '\0' + timestamp + '\0' + payload_hash)`.
+    pub payload_hash: [u8; 32],
+}
+
+// ---------------------------------------------------------------------------
+// Class 1: Interactive Dispatch
+// ---------------------------------------------------------------------------
+
+/// GRE-to-client game state messages.
+///
+/// Covers `GameStateMessage`, `ConnectResp`, and `QueuedGameStateMessage`
+/// payloads from `greToClientEvent` entries.
+#[derive(Debug, Clone)]
+pub struct GameStateEvent {
+    /// Shared event metadata (timestamp, raw bytes, payload hash).
+    pub metadata: EventMetadata,
+
+    /// The parsed JSON payload from the GRE message.
+    pub payload: serde_json::Value,
+}
+
+/// Client-to-GRE player actions.
+///
+/// Covers `SelectNResp`, `SubmitDeckResp`, `MulliganResp`, and other
+/// `ClientToGREMessage` payloads.
+#[derive(Debug, Clone)]
+pub struct ClientActionEvent {
+    /// Shared event metadata (timestamp, raw bytes, payload hash).
+    pub metadata: EventMetadata,
+
+    /// The parsed JSON payload from the client message.
+    pub payload: serde_json::Value,
+}
+
+/// Match room state transitions.
+///
+/// Parsed from `matchGameRoomStateChangedEvent` entries. Signals match
+/// start/end and triggers overlay state transitions.
+#[derive(Debug, Clone)]
+pub struct MatchStateEvent {
+    /// Shared event metadata (timestamp, raw bytes, payload hash).
+    pub metadata: EventMetadata,
+
+    /// The parsed JSON payload of the match state change.
+    pub payload: serde_json::Value,
+}
+
+// ---------------------------------------------------------------------------
+// Class 2: Durable Per-Event
+// ---------------------------------------------------------------------------
+
+/// Bot draft pick events.
+///
+/// Parsed from `DraftStatus: "PickNext"` and `BotDraft_DraftPick` entries.
+/// Each pick is independently valuable and must survive crashes.
+#[derive(Debug, Clone)]
+pub struct DraftBotEvent {
+    /// Shared event metadata (timestamp, raw bytes, payload hash).
+    pub metadata: EventMetadata,
+
+    /// The parsed JSON payload of the draft pick.
+    pub payload: serde_json::Value,
+}
+
+/// Human draft pick events.
+///
+/// Parsed from `Draft.Notify`, `EventPlayerDraftMakePick`, and
+/// `LogBusinessEvents` entries containing `PickGrpId`.
+#[derive(Debug, Clone)]
+pub struct DraftHumanEvent {
+    /// Shared event metadata (timestamp, raw bytes, payload hash).
+    pub metadata: EventMetadata,
+
+    /// The parsed JSON payload of the draft pick.
+    pub payload: serde_json::Value,
+}
+
+/// Draft completion event.
+///
+/// Parsed from `Draft_CompleteDraft`. Links the draft ID to the event
+/// and marks the draft as finished.
+#[derive(Debug, Clone)]
+pub struct DraftCompleteEvent {
+    /// Shared event metadata (timestamp, raw bytes, payload hash).
+    pub metadata: EventMetadata,
+
+    /// The parsed JSON payload of the draft completion.
+    pub payload: serde_json::Value,
+}
+
+/// Event lifecycle transitions.
+///
+/// Covers `Event_Join`, `Event_SetDeck`, `Event_GetCourses`, and
+/// `Event_ClaimPrize`. Each is independently meaningful.
+#[derive(Debug, Clone)]
+pub struct EventLifecycleEvent {
+    /// Shared event metadata (timestamp, raw bytes, payload hash).
+    pub metadata: EventMetadata,
+
+    /// The parsed JSON payload of the event lifecycle action.
+    pub payload: serde_json::Value,
+}
+
+/// Session identity and connection events.
+///
+/// Covers `Updated account. DisplayName:`, `authenticateResponse`,
+/// and `FrontDoorConnection.Close`. Needed to tag all subsequent events
+/// with player identity.
+#[derive(Debug, Clone)]
+pub struct SessionEvent {
+    /// Shared event metadata (timestamp, raw bytes, payload hash).
+    pub metadata: EventMetadata,
+
+    /// The parsed JSON payload of the session event.
+    pub payload: serde_json::Value,
+}
+
+/// Rank snapshot.
+///
+/// Parsed from `Rank_GetCombinedRankInfo`. Infrequent, small,
+/// independently useful.
+#[derive(Debug, Clone)]
+pub struct RankEvent {
+    /// Shared event metadata (timestamp, raw bytes, payload hash).
+    pub metadata: EventMetadata,
+
+    /// The parsed JSON payload of the rank information.
+    pub payload: serde_json::Value,
+}
+
+/// Card collection snapshot.
+///
+/// Parsed from `PlayerInventory.GetPlayerCardsV3`. Enables future
+/// deck building features. Best-effort collection.
+#[derive(Debug, Clone)]
+pub struct CollectionEvent {
+    /// Shared event metadata (timestamp, raw bytes, payload hash).
+    pub metadata: EventMetadata,
+
+    /// The parsed JSON payload mapping card IDs to quantities.
+    pub payload: serde_json::Value,
+}
+
+/// Inventory snapshot.
+///
+/// Parsed from `DTO_InventoryInfo`. Contains currency, wildcards,
+/// boosters, and vault progress.
+#[derive(Debug, Clone)]
+pub struct InventoryEvent {
+    /// Shared event metadata (timestamp, raw bytes, payload hash).
+    pub metadata: EventMetadata,
+
+    /// The parsed JSON payload of the inventory state.
+    pub payload: serde_json::Value,
+}
+
+// ---------------------------------------------------------------------------
+// Class 3: Post-Game Batch
+// ---------------------------------------------------------------------------
+
+/// Game result event — triggers post-game batch assembly.
+///
+/// Parsed from `LogBusinessEvents` with `WinningType` and
+/// `GameStage_GameOver`. When this event fires, the desktop app
+/// serializes the disk-backed game buffer into a single compressed
+/// payload and uploads it.
+#[derive(Debug, Clone)]
+pub struct GameResultEvent {
+    /// Shared event metadata (timestamp, raw bytes, payload hash).
+    pub metadata: EventMetadata,
+
+    /// The parsed JSON payload of the game result.
+    pub payload: serde_json::Value,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{Datelike, TimeZone};
+    use sha2::{Digest, Sha256};
+
+    /// Helper: build an `EventMetadata` with the given raw bytes.
+    fn make_metadata(raw: &[u8]) -> EventMetadata {
+        let mut hasher = Sha256::new();
+        hasher.update(raw);
+        let hash: [u8; 32] = hasher.finalize().into();
+
+        EventMetadata {
+            timestamp: Utc
+                .with_ymd_and_hms(2026, 2, 25, 12, 0, 0)
+                .single()
+                .unwrap_or_else(Utc::now),
+            raw_bytes: raw.to_vec(),
+            payload_hash: hash,
+        }
+    }
+
+    #[test]
+    fn test_event_metadata_construction_stores_raw_bytes() {
+        let raw = b"[UnityCrossThreadLogger]some log line";
+        let meta = make_metadata(raw);
+        assert_eq!(meta.raw_bytes, raw);
+    }
+
+    #[test]
+    fn test_event_metadata_construction_computes_payload_hash() {
+        let raw = b"test payload";
+        let meta = make_metadata(raw);
+
+        let mut hasher = Sha256::new();
+        hasher.update(raw);
+        let expected: [u8; 32] = hasher.finalize().into();
+
+        assert_eq!(meta.payload_hash, expected);
+    }
+
+    #[test]
+    fn test_event_metadata_construction_stores_timestamp() {
+        let meta = make_metadata(b"data");
+        assert_eq!(meta.timestamp.year(), 2026);
+        assert_eq!(meta.timestamp.month(), 2);
+    }
+
+    #[test]
+    fn test_game_state_event_field_access() {
+        let event = GameStateEvent {
+            metadata: make_metadata(b"gre payload"),
+            payload: serde_json::json!({"type": "GameStateMessage"}),
+        };
+        assert_eq!(event.payload["type"], "GameStateMessage");
+        assert_eq!(event.metadata.raw_bytes, b"gre payload");
+    }
+
+    #[test]
+    fn test_client_action_event_field_access() {
+        let event = ClientActionEvent {
+            metadata: make_metadata(b"client action"),
+            payload: serde_json::json!({"type": "MulliganResp"}),
+        };
+        assert_eq!(event.payload["type"], "MulliganResp");
+    }
+
+    #[test]
+    fn test_match_state_event_field_access() {
+        let event = MatchStateEvent {
+            metadata: make_metadata(b"match state"),
+            payload: serde_json::json!({"matchGameRoomStateChangedEvent": {}}),
+        };
+        assert!(event.payload["matchGameRoomStateChangedEvent"].is_object());
+    }
+
+    #[test]
+    fn test_draft_bot_event_field_access() {
+        let event = DraftBotEvent {
+            metadata: make_metadata(b"bot draft"),
+            payload: serde_json::json!({"DraftStatus": "PickNext"}),
+        };
+        assert_eq!(event.payload["DraftStatus"], "PickNext");
+    }
+
+    #[test]
+    fn test_draft_human_event_field_access() {
+        let event = DraftHumanEvent {
+            metadata: make_metadata(b"human draft"),
+            payload: serde_json::json!({"PickGrpId": 12345}),
+        };
+        assert_eq!(event.payload["PickGrpId"], 12345);
+    }
+
+    #[test]
+    fn test_draft_complete_event_field_access() {
+        let event = DraftCompleteEvent {
+            metadata: make_metadata(b"draft complete"),
+            payload: serde_json::json!({"Draft_CompleteDraft": true}),
+        };
+        assert!(event.payload["Draft_CompleteDraft"]
+            .as_bool()
+            .unwrap_or(false));
+    }
+
+    #[test]
+    fn test_event_lifecycle_event_field_access() {
+        let event = EventLifecycleEvent {
+            metadata: make_metadata(b"event lifecycle"),
+            payload: serde_json::json!({"action": "Event_Join"}),
+        };
+        assert_eq!(event.payload["action"], "Event_Join");
+    }
+
+    #[test]
+    fn test_session_event_field_access() {
+        let event = SessionEvent {
+            metadata: make_metadata(b"session data"),
+            payload: serde_json::json!({"DisplayName": "Player"}),
+        };
+        assert_eq!(event.payload["DisplayName"], "Player");
+    }
+
+    #[test]
+    fn test_rank_event_field_access() {
+        let event = RankEvent {
+            metadata: make_metadata(b"rank data"),
+            payload: serde_json::json!({"constructedClass": "Gold", "constructedLevel": 2}),
+        };
+        assert_eq!(event.payload["constructedClass"], "Gold");
+    }
+
+    #[test]
+    fn test_collection_event_field_access() {
+        let event = CollectionEvent {
+            metadata: make_metadata(b"collection"),
+            payload: serde_json::json!({"12345": 4, "67890": 2}),
+        };
+        assert_eq!(event.payload["12345"], 4);
+    }
+
+    #[test]
+    fn test_inventory_event_field_access() {
+        let event = InventoryEvent {
+            metadata: make_metadata(b"inventory"),
+            payload: serde_json::json!({"gold": 5000, "gems": 200, "wcCommon": 10}),
+        };
+        assert_eq!(event.payload["gold"], 5000);
+    }
+
+    #[test]
+    fn test_game_result_event_field_access() {
+        let event = GameResultEvent {
+            metadata: make_metadata(b"game result"),
+            payload: serde_json::json!({"WinningType": "Win", "GameStage": "GameOver"}),
+        };
+        assert_eq!(event.payload["WinningType"], "Win");
+    }
+
+    #[test]
+    fn test_game_event_enum_wraps_all_categories() {
+        let meta = make_metadata(b"test");
+        let payload = serde_json::json!({});
+
+        // Verify all 12 variants construct successfully
+        let events: Vec<GameEvent> = vec![
+            GameEvent::GameState(GameStateEvent {
+                metadata: meta.clone(),
+                payload: payload.clone(),
+            }),
+            GameEvent::ClientAction(ClientActionEvent {
+                metadata: meta.clone(),
+                payload: payload.clone(),
+            }),
+            GameEvent::MatchState(MatchStateEvent {
+                metadata: meta.clone(),
+                payload: payload.clone(),
+            }),
+            GameEvent::DraftBot(DraftBotEvent {
+                metadata: meta.clone(),
+                payload: payload.clone(),
+            }),
+            GameEvent::DraftHuman(DraftHumanEvent {
+                metadata: meta.clone(),
+                payload: payload.clone(),
+            }),
+            GameEvent::DraftComplete(DraftCompleteEvent {
+                metadata: meta.clone(),
+                payload: payload.clone(),
+            }),
+            GameEvent::EventLifecycle(EventLifecycleEvent {
+                metadata: meta.clone(),
+                payload: payload.clone(),
+            }),
+            GameEvent::Session(SessionEvent {
+                metadata: meta.clone(),
+                payload: payload.clone(),
+            }),
+            GameEvent::Rank(RankEvent {
+                metadata: meta.clone(),
+                payload: payload.clone(),
+            }),
+            GameEvent::Collection(CollectionEvent {
+                metadata: meta.clone(),
+                payload: payload.clone(),
+            }),
+            GameEvent::Inventory(InventoryEvent {
+                metadata: meta.clone(),
+                payload: payload.clone(),
+            }),
+            GameEvent::GameResult(GameResultEvent {
+                metadata: meta.clone(),
+                payload: payload.clone(),
+            }),
+        ];
+        assert_eq!(events.len(), 12);
+    }
+
+    #[test]
+    fn test_performance_class_class1_interactive_dispatch() {
+        let meta = make_metadata(b"test");
+        let payload = serde_json::json!({});
+
+        let gre = GameEvent::GameState(GameStateEvent {
+            metadata: meta.clone(),
+            payload: payload.clone(),
+        });
+        let action = GameEvent::ClientAction(ClientActionEvent {
+            metadata: meta.clone(),
+            payload: payload.clone(),
+        });
+        let state = GameEvent::MatchState(MatchStateEvent {
+            metadata: meta.clone(),
+            payload: payload.clone(),
+        });
+
+        assert_eq!(
+            gre.performance_class(),
+            PerformanceClass::InteractiveDispatch
+        );
+        assert_eq!(
+            action.performance_class(),
+            PerformanceClass::InteractiveDispatch
+        );
+        assert_eq!(
+            state.performance_class(),
+            PerformanceClass::InteractiveDispatch
+        );
+    }
+
+    #[test]
+    fn test_performance_class_class2_durable_per_event() {
+        let meta = make_metadata(b"test");
+        let payload = serde_json::json!({});
+
+        let class2_events: Vec<GameEvent> = vec![
+            GameEvent::DraftBot(DraftBotEvent {
+                metadata: meta.clone(),
+                payload: payload.clone(),
+            }),
+            GameEvent::DraftHuman(DraftHumanEvent {
+                metadata: meta.clone(),
+                payload: payload.clone(),
+            }),
+            GameEvent::DraftComplete(DraftCompleteEvent {
+                metadata: meta.clone(),
+                payload: payload.clone(),
+            }),
+            GameEvent::EventLifecycle(EventLifecycleEvent {
+                metadata: meta.clone(),
+                payload: payload.clone(),
+            }),
+            GameEvent::Session(SessionEvent {
+                metadata: meta.clone(),
+                payload: payload.clone(),
+            }),
+            GameEvent::Rank(RankEvent {
+                metadata: meta.clone(),
+                payload: payload.clone(),
+            }),
+            GameEvent::Collection(CollectionEvent {
+                metadata: meta.clone(),
+                payload: payload.clone(),
+            }),
+            GameEvent::Inventory(InventoryEvent {
+                metadata: meta.clone(),
+                payload: payload.clone(),
+            }),
+        ];
+
+        for event in &class2_events {
+            assert_eq!(event.performance_class(), PerformanceClass::DurablePerEvent);
+        }
+    }
+
+    #[test]
+    fn test_performance_class_class3_post_game_batch() {
+        let meta = make_metadata(b"test");
+        let payload = serde_json::json!({});
+
+        let result = GameEvent::GameResult(GameResultEvent {
+            metadata: meta,
+            payload,
+        });
+        assert_eq!(result.performance_class(), PerformanceClass::PostGameBatch);
+    }
+
+    #[test]
+    fn test_game_event_metadata_accessor() {
+        let raw = b"specific raw data";
+        let meta = make_metadata(raw);
+        let event = GameEvent::Session(SessionEvent {
+            metadata: meta,
+            payload: serde_json::json!({}),
+        });
+
+        assert_eq!(event.metadata().raw_bytes, raw);
+    }
+
+    #[test]
+    fn test_event_metadata_clone_independence() {
+        let meta = make_metadata(b"original");
+        let mut cloned = meta.clone();
+        cloned.raw_bytes.push(b'!');
+
+        assert_ne!(meta.raw_bytes.len(), cloned.raw_bytes.len());
+    }
+
+    #[test]
+    fn test_performance_class_equality() {
+        assert_eq!(
+            PerformanceClass::InteractiveDispatch,
+            PerformanceClass::InteractiveDispatch
+        );
+        assert_ne!(
+            PerformanceClass::InteractiveDispatch,
+            PerformanceClass::DurablePerEvent
+        );
+        assert_ne!(
+            PerformanceClass::DurablePerEvent,
+            PerformanceClass::PostGameBatch
+        );
+    }
+
+    #[test]
+    fn test_different_raw_bytes_produce_different_hashes() {
+        let meta1 = make_metadata(b"payload one");
+        let meta2 = make_metadata(b"payload two");
+        assert_ne!(meta1.payload_hash, meta2.payload_hash);
+    }
+
+    #[test]
+    fn test_identical_raw_bytes_produce_same_hash() {
+        let meta1 = make_metadata(b"same payload");
+        let meta2 = make_metadata(b"same payload");
+        assert_eq!(meta1.payload_hash, meta2.payload_hash);
+    }
+
+    #[test]
+    fn test_empty_raw_bytes_valid() {
+        let meta = make_metadata(b"");
+        assert!(meta.raw_bytes.is_empty());
+        // SHA-256 of empty input is a known constant
+        let mut hasher = Sha256::new();
+        hasher.update(b"");
+        let expected: [u8; 32] = hasher.finalize().into();
+        assert_eq!(meta.payload_hash, expected);
+    }
+}
