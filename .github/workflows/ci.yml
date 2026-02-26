@@ -56,14 +56,42 @@ jobs:
             REPO: ${{ github.repository }}
             PR NUMBER: ${{ github.event.pull_request.number }}
 
-            Please review this pull request and provide feedback on:
-            - Code quality and best practices
-            - Potential bugs or issues
-            - Performance considerations
-            - Security concerns
-            - Test coverage
+            Review this pull request. Read the full diff with `gh pr diff`, then read
+            the repository's CLAUDE.md files for project conventions.
 
-            Use the repository's CLAUDE.md for guidance on style and conventions. Be concise in your feedback.
+            ## Severity Tiers — classify every finding
 
-            Use `gh pr comment` with your Bash tool to leave your review as a comment on the PR.
+            - **Critical**: Logic bugs, security vulnerabilities, data corruption,
+              unsound unsafe code, invariant violations → must fix before merge.
+            - **Should-Fix**: Missing error handling on public API boundaries,
+              untested new code paths, incorrect doc comments that would mislead
+              consumers → should fix before merge.
+            - **Minor**: Naming suggestions, small style preferences, test
+              improvements that don't affect correctness → note inline but do NOT
+              block merge.
+            - **Note**: Design alternatives, future considerations, performance
+              ideas → informational only, do NOT block merge.
+
+            ## Rules
+
+            - Do NOT flag issues that `cargo clippy`, `cargo fmt`, or the Rust
+              compiler already catch — those are enforced in CI.
+            - Do NOT flag style preferences unless they violate a specific rule in
+              the repo's CLAUDE.md.
+            - Do NOT repeat suggestions from previous review cycles that were
+              already addressed or explicitly declined.
+            - Be concise. A clean review should be a few lines, not an essay.
+            - Every finding must include its severity tier in bold at the start.
+
+            ## Verdict
+
+            End your review with exactly one of:
+            - **APPROVE** — no Critical or Should-Fix issues found.
+            - **REQUEST CHANGES** — one or more Critical or Should-Fix issues
+              exist (list them).
+
+            If only Minor and Note items exist, the verdict MUST be **APPROVE**.
+
+            Use `gh pr comment` with your Bash tool to leave your review as a
+            comment on the PR.
           claude_args: '--allowed-tools "Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Read,Grep,Glob"'
