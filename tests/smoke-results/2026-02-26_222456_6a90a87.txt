@@ -1,0 +1,153 @@
+# Smoke Test Results
+# Date: 2026-02-26 22:24:56
+# Branch: main
+# Commit: 6a90a87ec29e9fb24fb723b6c7053fa5e2eaa0b4
+# Commit message: Fix manasight/manasight-docs#167: stub parser markers match real log format (#23)
+# Log directory: /home/timc/manasight-data/player-log-trial/raw/
+# Log files: 5
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.02s
+     Running unittests src/lib.rs (target/debug/deps/manasight_parser-6602f515de399bdb)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 662 filtered out; finished in 0.00s
+
+     Running tests/smoke_real_logs.rs (target/debug/deps/smoke_real_logs-1c9be5988ec863a7)
+
+running 1 test
+
+=== Smoke Test Report ===
+
+File: session_2026-02-22_a.log (4913 entries)
+  session:                6 claimed,   0 panics
+  match_state:           10 claimed,   0 panics
+  gre:                  693 claimed,   0 panics
+  client_actions:       394 claimed,   0 panics
+  draft_bot:              0 claimed,   0 panics
+  draft_human:            0 claimed,   0 panics
+  draft_complete:         0 claimed,   0 panics
+  inventory:              7 claimed,   0 panics
+  collection:             0 claimed,   0 panics
+  rank:                   7 claimed,   0 panics
+  event_lifecycle:        6 claimed,   0 panics
+  Event type breakdown:
+      ClientAction:     394
+      EventLifecycle:      6
+      GameResult:         5
+      GameState:        688
+      Inventory:          7
+      MatchState:        10
+      Rank:               7
+      Session:            6
+  unclaimed:           3790
+  double_claims:          0
+  ts_failures:          163
+
+File: session_2026-02-22_b.log (3995 entries)
+  session:                5 claimed,   0 panics
+  match_state:            8 claimed,   0 panics
+  gre:                  532 claimed,   0 panics
+  client_actions:       252 claimed,   0 panics
+  draft_bot:              0 claimed,   0 panics
+  draft_human:          116 claimed,   0 panics
+  draft_complete:         2 claimed,   0 panics
+  inventory:              5 claimed,   0 panics
+  collection:             0 claimed,   0 panics
+  rank:                   5 claimed,   0 panics
+  event_lifecycle:        6 claimed,   0 panics
+  Event type breakdown:
+      ClientAction:     252
+      DraftComplete:      2
+      DraftHuman:       116
+      EventLifecycle:      6
+      GameResult:         2
+      GameState:        530
+      Inventory:          5
+      MatchState:         8
+      Rank:               5
+      Session:            5
+  unclaimed:           3064
+  double_claims:          0
+  ts_failures:          213
+
+File: session_2026-02-23.log (948 entries)
+  session:                3 claimed,   0 panics
+  match_state:            4 claimed,   0 panics
+  gre:                  149 claimed,   0 panics
+  client_actions:       101 claimed,   0 panics
+  draft_bot:              0 claimed,   0 panics
+  draft_human:            0 claimed,   0 panics
+  draft_complete:         0 claimed,   0 panics
+  inventory:              3 claimed,   0 panics
+  collection:             0 claimed,   0 panics
+  rank:                   3 claimed,   0 panics
+  event_lifecycle:        4 claimed,   0 panics
+  Event type breakdown:
+      ClientAction:     101
+      EventLifecycle:      4
+      GameResult:         1
+      GameState:        148
+      Inventory:          3
+      MatchState:         4
+      Rank:               3
+      Session:            3
+  unclaimed:            681
+  double_claims:          0
+  ts_failures:           89
+
+File: session_2026-02-23_game01.log (425 entries)
+  session:                1 claimed,   0 panics
+  match_state:            2 claimed,   0 panics
+  gre:                   63 claimed,   0 panics
+  client_actions:        52 claimed,   0 panics
+  draft_bot:              0 claimed,   0 panics
+  draft_human:            0 claimed,   0 panics
+  draft_complete:         0 claimed,   0 panics
+  inventory:              1 claimed,   0 panics
+  collection:             0 claimed,   0 panics
+  rank:                   1 claimed,   0 panics
+  event_lifecycle:        2 claimed,   0 panics
+  Event type breakdown:
+      ClientAction:      52
+      EventLifecycle:      2
+      GameResult:         1
+      GameState:         62
+      Inventory:          1
+      MatchState:         2
+      Rank:               1
+      Session:            1
+  unclaimed:            303
+  double_claims:          0
+  ts_failures:           36
+
+File: session_2026-02-23_game02.log (946 entries)
+  session:                2 claimed,   0 panics
+  match_state:            4 claimed,   0 panics
+  gre:                  149 claimed,   0 panics
+  client_actions:       101 claimed,   0 panics
+  draft_bot:              0 claimed,   0 panics
+  draft_human:            0 claimed,   0 panics
+  draft_complete:         0 claimed,   0 panics
+  inventory:              3 claimed,   0 panics
+  collection:             0 claimed,   0 panics
+  rank:                   3 claimed,   0 panics
+  event_lifecycle:        4 claimed,   0 panics
+  Event type breakdown:
+      ClientAction:     101
+      EventLifecycle:      4
+      GameResult:         1
+      GameState:        148
+      Inventory:          3
+      MatchState:         4
+      Rank:               3
+      Session:            2
+  unclaimed:            680
+  double_claims:          0
+  ts_failures:           87
+
+=== PASS ===
+test smoke_test_real_logs ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 19.13s
+
