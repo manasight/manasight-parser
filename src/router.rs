@@ -523,6 +523,41 @@ mod tests {
         }
 
         #[test]
+        fn test_route_draft_bot_pack_presentation() {
+            let router = Router::new();
+            let payload = serde_json::json!({
+                "DraftStatus": "PickNext",
+                "PackNumber": 0,
+                "PickNumber": 0,
+                "DraftPack": ["12345", "67890", "11111"],
+                "EventName": "QuickDraft_MKM_20260201"
+            });
+            let body = format!("[UnityCrossThreadLogger]2/25/2026 12:00:00 PM\n{payload}",);
+            let entry = unity_entry(&body);
+
+            let result = router.route(&entry);
+            assert!(result.is_some());
+            assert!(matches!(result, Some(GameEvent::DraftBot(_))));
+        }
+
+        #[test]
+        fn test_route_draft_human_notify() {
+            let router = Router::new();
+            let payload = serde_json::json!({
+                "draftId": "abc-123-def",
+                "SelfPack": 0,
+                "SelfPick": 0,
+                "PackCards": "12345,67890,11111"
+            });
+            let body = format!("[UnityCrossThreadLogger]Draft.Notify\n{payload}",);
+            let entry = unity_entry(&body);
+
+            let result = router.route(&entry);
+            assert!(result.is_some());
+            assert!(matches!(result, Some(GameEvent::DraftHuman(_))));
+        }
+
+        #[test]
         fn test_route_collection_event() {
             let router = Router::new();
             let payload = serde_json::json!({
