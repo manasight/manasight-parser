@@ -1,0 +1,75 @@
+name: Smoke Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      logs_url:
+        description: "URL to download test log archive (tar.gz). Overrides MANASIGHT_TEST_LOGS_URL secret."
+        required: false
+        type: string
+
+  schedule:
+    # Weekly on Sundays at 06:00 UTC (runs only if logs are configured).
+    - cron: "0 6 * * 0"
+
+jobs:
+  smoke-test:
+    name: Real-log smoke test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      - name: Resolve log source
+        id: resolve-url
+        env:
+          INPUT_LOGS_URL: ${{ inputs.logs_url }}
+          SECRET_LOGS_URL: ${{ secrets.MANASIGHT_TEST_LOGS_URL }}
+        run: |
+          # Determine which URL to use (input takes precedence over secret).
+          # Compute a stable cache key from the URL so that a new URL gets a
+          # fresh cache rather than reusing a hit from a previous URL.
+          URL="${INPUT_LOGS_URL:-$SECRET_LOGS_URL}"
+          if [ -z "$URL" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "No log source configured — skipping smoke test"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            URL_HASH="$(echo -n "$URL" | sha256sum | cut -c1-16)"
+            echo "cache_key=smoke-test-logs-v1-${URL_HASH}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Cache test logs
+        if: steps.resolve-url.outputs.skip == 'false'
+        id: cache-logs
+        uses: actions/cache@v4
+        with:
+          path: /tmp/test-logs
+          key: ${{ steps.resolve-url.outputs.cache_key }}
+
+      - name: Download test logs
+        if: steps.resolve-url.outputs.skip == 'false' && steps.cache-logs.outputs.cache-hit != 'true'
+        env:
+          LOGS_URL: ${{ inputs.logs_url || secrets.MANASIGHT_TEST_LOGS_URL }}
+        run: |
+          mkdir -p /tmp/test-logs
+          curl -fsSL "$LOGS_URL" | tar -xz -C /tmp/test-logs
+          echo "Downloaded logs:"
+          ls -lh /tmp/test-logs/
+
+      - name: Run smoke test
+        if: steps.resolve-url.outputs.skip == 'false'
+        env:
+          MANASIGHT_TEST_LOGS: /tmp/test-logs
+        run: cargo test --all-features smoke_test_real_logs -- --nocapture 2>&1 | tee /tmp/smoke-test-report.txt
+
+      - name: Upload report
+        if: always() && steps.resolve-url.outputs.skip == 'false'
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-test-report
+          path: /tmp/smoke-test-report.txt
+          retention-days: 30
