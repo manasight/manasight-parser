@@ -39,17 +39,9 @@ pub fn try_parse(entry: &LogEntry, timestamp: chrono::DateTime<chrono::Utc>) -> 
         .iter()
         .find(|m| api_common::is_api_request(body, m))?;
 
-    let json_str = api_common::extract_json_from_body(body)?;
+    let parsed = api_common::parse_json_from_body(body, method)?;
 
-    let parsed: serde_json::Value = match serde_json::from_str(json_str) {
-        Ok(v) => v,
-        Err(e) => {
-            ::log::warn!("{method}: malformed JSON payload: {e}");
-            return None;
-        }
-    };
-
-    let event_name = event_name_from_request(&parsed);
+    let event_name = api_common::event_name_from_request(&parsed);
 
     let payload = serde_json::json!({
         "type": "event_lifecycle",
@@ -64,35 +56,6 @@ pub fn try_parse(entry: &LogEntry, timestamp: chrono::DateTime<chrono::Utc>) -> 
     )))
 }
 
-/// Extracts `EventName` from a nested `request` field containing string-escaped JSON.
-///
-/// The request format stores the event name inside a string-encoded JSON object:
-/// `{"id": "...", "request": "{\"EventName\": \"PremierDraft_MKM_20260201\"}"}`
-fn event_name_from_request(parsed: &serde_json::Value) -> String {
-    // Try direct EventName field first.
-    if let Some(name) = parsed
-        .get("EventName")
-        .or_else(|| parsed.get("InternalEventName"))
-        .and_then(serde_json::Value::as_str)
-    {
-        return name.to_owned();
-    }
-
-    // Try nested string-escaped request field.
-    let Some(request_str) = parsed.get("request").and_then(serde_json::Value::as_str) else {
-        return String::new();
-    };
-    let Ok(request_json) = serde_json::from_str::<serde_json::Value>(request_str) else {
-        return String::new();
-    };
-    request_json
-        .get("EventName")
-        .or_else(|| request_json.get("InternalEventName"))
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("")
-        .to_owned()
-}
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -101,33 +64,9 @@ fn event_name_from_request(parsed: &serde_json::Value) -> String {
 mod tests {
     use super::*;
     use crate::events::PerformanceClass;
-    use crate::log::entry::EntryHeader;
-    use chrono::{TimeZone, Utc};
-
-    /// Helper: build a UTC timestamp for tests.
-    fn test_timestamp() -> chrono::DateTime<Utc> {
-        Utc.with_ymd_and_hms(2026, 2, 25, 12, 0, 0)
-            .single()
-            .unwrap_or_default()
-    }
-
-    /// Helper: build a `LogEntry` with `UnityCrossThreadLogger` header.
-    fn unity_entry(body: &str) -> LogEntry {
-        LogEntry {
-            header: EntryHeader::UnityCrossThreadLogger,
-            body: body.to_owned(),
-        }
-    }
-
-    /// Helper: extract the JSON payload from a `GameEvent::EventLifecycle` variant.
-    fn lifecycle_payload(event: &GameEvent) -> &serde_json::Value {
-        static EMPTY: std::sync::LazyLock<serde_json::Value> =
-            std::sync::LazyLock::new(|| serde_json::json!(null));
-        match event {
-            GameEvent::EventLifecycle(e) => e.payload(),
-            _ => &EMPTY,
-        }
-    }
+    use crate::parsers::test_helpers::{
+        lifecycle_payload, test_timestamp, unity_entry, EntryHeader,
+    };
 
     // -- EventJoin requests ---------------------------------------------------
 
@@ -355,48 +294,6 @@ mod tests {
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             assert_eq!(event.performance_class(), PerformanceClass::DurablePerEvent);
-        }
-    }
-
-    // -- Internal helpers -----------------------------------------------------
-
-    mod helpers {
-        use super::*;
-
-        #[test]
-        fn test_event_name_from_request_nested() {
-            let parsed = serde_json::json!({
-                "id": "test",
-                "request": "{\"EventName\":\"PremierDraft_ECL_20260120\"}"
-            });
-            assert_eq!(
-                event_name_from_request(&parsed),
-                "PremierDraft_ECL_20260120",
-            );
-        }
-
-        #[test]
-        fn test_event_name_from_request_direct() {
-            let parsed = serde_json::json!({"EventName": "DirectEvent"});
-            assert_eq!(event_name_from_request(&parsed), "DirectEvent");
-        }
-
-        #[test]
-        fn test_event_name_from_request_no_field() {
-            let parsed = serde_json::json!({"id": "test"});
-            assert_eq!(event_name_from_request(&parsed), "");
-        }
-
-        #[test]
-        fn test_event_name_from_request_invalid_nested_json() {
-            let parsed = serde_json::json!({"request": "not json"});
-            assert_eq!(event_name_from_request(&parsed), "");
-        }
-
-        #[test]
-        fn test_event_name_from_request_internal_event_name() {
-            let parsed = serde_json::json!({"InternalEventName": "InternalTest"});
-            assert_eq!(event_name_from_request(&parsed), "InternalTest");
         }
     }
 }

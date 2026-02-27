@@ -14,6 +14,7 @@
 
 use crate::events::{DraftCompleteEvent, EventMetadata, GameEvent};
 use crate::log::entry::LogEntry;
+use crate::parsers::api_common;
 
 /// Marker for draft completion events.
 ///
@@ -37,15 +38,7 @@ pub fn try_parse(entry: &LogEntry, timestamp: chrono::DateTime<chrono::Utc>) -> 
         return None;
     }
 
-    let json_str = extract_json_from_body(body)?;
-
-    let parsed: serde_json::Value = match serde_json::from_str(json_str) {
-        Ok(v) => v,
-        Err(e) => {
-            ::log::warn!("DraftCompleteDraft: malformed JSON payload: {e}");
-            return None;
-        }
-    };
+    let parsed = api_common::parse_json_from_body(body, "DraftCompleteDraft")?;
 
     let draft_id_from_body = extract_draft_id_from_body(body);
     let payload = build_payload(&parsed, draft_id_from_body.as_deref());
@@ -76,17 +69,7 @@ fn build_payload(
         .or(draft_id_from_body)
         .unwrap_or("");
 
-    let direct_event_name = parsed
-        .get("EventName")
-        .or_else(|| parsed.get("InternalEventName"))
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("");
-
-    let event_name = if direct_event_name.is_empty() {
-        event_name_from_request(parsed)
-    } else {
-        direct_event_name.to_owned()
-    };
+    let event_name = api_common::event_name_from_request(parsed);
 
     serde_json::json!({
         "type": "draft_complete",
@@ -108,87 +91,6 @@ fn extract_draft_id_from_body(body: &str) -> Option<String> {
     Some(remaining.get(..end)?.to_owned())
 }
 
-/// Extracts `EventName` from a nested `request` field containing string-escaped JSON.
-///
-/// The request format stores the event name inside a string-encoded JSON object:
-/// `{"id": "...", "request": "{\"EventName\": \"PremierDraft_ECL_20260120\"}"}`
-fn event_name_from_request(parsed: &serde_json::Value) -> String {
-    let Some(request_str) = parsed.get("request").and_then(serde_json::Value::as_str) else {
-        return String::new();
-    };
-    let Ok(request_json) = serde_json::from_str::<serde_json::Value>(request_str) else {
-        return String::new();
-    };
-    request_json
-        .get("EventName")
-        .or_else(|| request_json.get("InternalEventName"))
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("")
-        .to_owned()
-}
-
-/// Extracts the first JSON object or array from a multi-line log body.
-///
-/// The log header line may contain brackets (e.g., `[UnityCrossThreadLogger]`)
-/// that must not be confused with JSON array delimiters. This function
-/// determines a safe search start offset by skipping any `[...]` header
-/// prefix, then finds the first `{` or `[` from that offset.
-fn extract_json_from_body(body: &str) -> Option<&str> {
-    // If the body starts with a `[...]` header prefix, skip past it
-    // so we don't match the header bracket as a JSON array start.
-    let search_start = if body.starts_with('[') {
-        body.find(']').map_or(0, |pos| pos + 1)
-    } else {
-        0
-    };
-
-    let search_region = &body[search_start..];
-    let json_start = search_region.find(['{', '['])?;
-    let json_start = search_start + json_start;
-
-    let candidate = &body[json_start..];
-
-    let first_byte = candidate.as_bytes().first().copied()?;
-    let (open_char, close_char) = if first_byte == b'{' {
-        ('{', '}')
-    } else {
-        ('[', ']')
-    };
-
-    let mut depth: i32 = 0;
-    let mut in_string = false;
-    let mut escape_next = false;
-    let mut end_pos = None;
-
-    for (i, ch) in candidate.char_indices() {
-        if escape_next {
-            escape_next = false;
-            continue;
-        }
-        match ch {
-            '\\' if in_string => {
-                escape_next = true;
-            }
-            '"' => {
-                in_string = !in_string;
-            }
-            c if !in_string && c == open_char => {
-                depth += 1;
-            }
-            c if !in_string && c == close_char => {
-                depth -= 1;
-                if depth == 0 {
-                    end_pos = Some(i + 1);
-                    break;
-                }
-            }
-            _ => {}
-        }
-    }
-
-    end_pos.map(|end| &candidate[..end])
-}
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -197,40 +99,9 @@ fn extract_json_from_body(body: &str) -> Option<&str> {
 mod tests {
     use super::*;
     use crate::events::PerformanceClass;
-    use crate::log::entry::EntryHeader;
-    use chrono::{TimeZone, Utc};
-
-    /// Helper: build a UTC timestamp for tests.
-    ///
-    /// Uses `unwrap_or_default()` because `clippy::expect_used` is denied
-    /// crate-wide. The epoch fallback would visibly fail timestamp assertions.
-    fn test_timestamp() -> chrono::DateTime<Utc> {
-        Utc.with_ymd_and_hms(2026, 2, 25, 12, 0, 0)
-            .single()
-            .unwrap_or_default()
-    }
-
-    /// Helper: build a `LogEntry` with `UnityCrossThreadLogger` header.
-    fn unity_entry(body: &str) -> LogEntry {
-        LogEntry {
-            header: EntryHeader::UnityCrossThreadLogger,
-            body: body.to_owned(),
-        }
-    }
-
-    /// Helper: extract the JSON payload from a `GameEvent::DraftComplete` variant.
-    ///
-    /// Returns a static null value if the variant is not `DraftComplete`,
-    /// which will cause assertion failures that clearly indicate the wrong
-    /// variant was produced.
-    fn draft_complete_payload(event: &GameEvent) -> &serde_json::Value {
-        static EMPTY: std::sync::LazyLock<serde_json::Value> =
-            std::sync::LazyLock::new(|| serde_json::json!(null));
-        match event {
-            GameEvent::DraftComplete(e) => e.payload(),
-            _ => &EMPTY,
-        }
-    }
+    use crate::parsers::test_helpers::{
+        draft_complete_payload, test_timestamp, unity_entry, EntryHeader,
+    };
 
     // -- Request format (==>) ------------------------------------------------
 
@@ -654,25 +525,6 @@ mod tests {
         use super::*;
 
         #[test]
-        fn test_extract_json_from_body_object() {
-            let body = "header line\n{\"key\": \"value\"}";
-            let json = extract_json_from_body(body);
-            assert_eq!(json, Some("{\"key\": \"value\"}"));
-        }
-
-        #[test]
-        fn test_extract_json_from_body_no_json() {
-            assert!(extract_json_from_body("no json here").is_none());
-        }
-
-        #[test]
-        fn test_extract_json_from_body_with_header_bracket() {
-            let body = "[UnityCrossThreadLogger]some text\n{\"data\": 1}";
-            let json = extract_json_from_body(body);
-            assert_eq!(json, Some("{\"data\": 1}"));
-        }
-
-        #[test]
         fn test_build_payload_request_format() {
             let parsed = serde_json::json!({
                 "id": "req-123",
@@ -734,29 +586,6 @@ mod tests {
         #[test]
         fn test_extract_draft_id_from_body_no_marker() {
             assert!(extract_draft_id_from_body("no marker here").is_none());
-        }
-
-        #[test]
-        fn test_event_name_from_request_valid() {
-            let parsed = serde_json::json!({
-                "request": "{\"EventName\":\"PremierDraft_ECL_20260120\"}"
-            });
-            assert_eq!(
-                event_name_from_request(&parsed),
-                "PremierDraft_ECL_20260120",
-            );
-        }
-
-        #[test]
-        fn test_event_name_from_request_no_field() {
-            let parsed = serde_json::json!({"id": "test"});
-            assert_eq!(event_name_from_request(&parsed), "");
-        }
-
-        #[test]
-        fn test_event_name_from_request_invalid_json() {
-            let parsed = serde_json::json!({"request": "not json"});
-            assert_eq!(event_name_from_request(&parsed), "");
         }
     }
 }
