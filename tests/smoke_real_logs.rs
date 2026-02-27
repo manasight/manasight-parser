@@ -1,8 +1,8 @@
 //! Real-log smoke test harness with per-parser attribution.
 //!
 //! Feeds saved Player.log files through every implemented parser and produces
-//! a per-parser report: claim counts, panics, double claims, and unclaimed
-//! entries.
+//! a per-parser report: claim counts, panics, double claims, unclaimed
+//! entries, and a per-event-type breakdown.
 //!
 //! # Gating
 //!
@@ -14,6 +14,7 @@
 //! MANASIGHT_TEST_LOGS=/path/to/logs cargo test smoke -- --nocapture
 //! ```
 
+use std::collections::HashMap;
 use std::fmt::Write as FmtWrite;
 use std::path::{Path, PathBuf};
 
@@ -56,6 +57,8 @@ struct FileReport {
     read_error: bool,
     total_entries: usize,
     parser_stats: Vec<(&'static str, ParserStats)>,
+    /// Counts of claimed events broken down by `GameEvent` variant name.
+    event_type_counts: HashMap<&'static str, usize>,
     unclaimed: usize,
     double_claims: usize,
     timestamp_failures: usize,
@@ -85,10 +88,6 @@ fn all_parsers() -> Vec<NamedParser> {
             func: parsers::client_actions::try_parse,
         },
         NamedParser {
-            name: "game_result",
-            func: parsers::game_result::try_parse,
-        },
-        NamedParser {
             name: "draft_bot",
             func: parsers::draft::bot::try_parse,
         },
@@ -101,6 +100,31 @@ fn all_parsers() -> Vec<NamedParser> {
             func: parsers::draft::complete::try_parse,
         },
     ]
+}
+
+// ---------------------------------------------------------------------------
+// Event type name
+// ---------------------------------------------------------------------------
+
+/// Returns the variant name of a `GameEvent` as a `'static str`.
+fn event_type_name(event: &GameEvent) -> &'static str {
+    match event {
+        GameEvent::GameState(_) => "GameState",
+        GameEvent::ClientAction(_) => "ClientAction",
+        GameEvent::MatchState(_) => "MatchState",
+        GameEvent::DraftBot(_) => "DraftBot",
+        GameEvent::DraftHuman(_) => "DraftHuman",
+        GameEvent::DraftComplete(_) => "DraftComplete",
+        GameEvent::EventLifecycle(_) => "EventLifecycle",
+        GameEvent::Session(_) => "Session",
+        GameEvent::Rank(_) => "Rank",
+        GameEvent::Collection(_) => "Collection",
+        GameEvent::Inventory(_) => "Inventory",
+        GameEvent::GameResult(_) => "GameResult",
+        // `GameEvent` is `#[non_exhaustive]`; this branch keeps the compiler
+        // happy if new variants are added before this match is updated.
+        _ => "Unknown",
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -165,6 +189,7 @@ fn process_file(path: &Path, parsers: &[NamedParser]) -> FileReport {
                 .iter()
                 .map(|p| (p.name, ParserStats::default()))
                 .collect(),
+            event_type_counts: HashMap::new(),
             unclaimed: 0,
             double_claims: 0,
             timestamp_failures: 0,
@@ -188,6 +213,7 @@ fn process_file(path: &Path, parsers: &[NamedParser]) -> FileReport {
         .iter()
         .map(|p| (p.name, ParserStats::default()))
         .collect();
+    let mut event_type_counts: HashMap<&'static str, usize> = HashMap::new();
     let mut unclaimed: usize = 0;
     let mut double_claims: usize = 0;
     let mut timestamp_failures: usize = 0;
@@ -210,9 +236,12 @@ fn process_file(path: &Path, parsers: &[NamedParser]) -> FileReport {
             }));
 
             match result {
-                Ok(Some(_)) => {
+                Ok(Some(event)) => {
                     stats[idx].1.claimed += 1;
                     claimant_count += 1;
+                    *event_type_counts
+                        .entry(event_type_name(&event))
+                        .or_insert(0) += 1;
                 }
                 Ok(None) => {}
                 Err(_) => {
@@ -233,6 +262,7 @@ fn process_file(path: &Path, parsers: &[NamedParser]) -> FileReport {
         read_error: false,
         total_entries,
         parser_stats: stats,
+        event_type_counts,
         unclaimed,
         double_claims,
         timestamp_failures,
@@ -277,6 +307,18 @@ fn format_report(reports: &[FileReport]) -> String {
                 panics = stats.panics,
             );
             total_panics += stats.panics;
+        }
+
+        let _ = writeln!(out, "  Event type breakdown:");
+        let mut sorted_types: Vec<(&&'static str, &usize)> =
+            report.event_type_counts.iter().collect();
+        sorted_types.sort_by_key(|(name, _)| **name);
+        for (type_name, count) in &sorted_types {
+            let label = format!("    {type_name}:");
+            let _ = writeln!(out, "  {label:<18} {count:>6}");
+        }
+        if sorted_types.is_empty() {
+            let _ = writeln!(out, "    (none)");
         }
 
         let _ = writeln!(out, "  {:<18} {:>6}", "unclaimed:", report.unclaimed);
