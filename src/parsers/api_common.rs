@@ -11,19 +11,30 @@
 //! entry — the `LogEntry.body` will contain the timestamp header line followed
 //! by the `==>` or `<==` line and then the JSON payload.
 
-/// Returns `true` if `body` contains a `<== method_name` response marker.
-pub fn is_api_response(body: &str, method_name: &str) -> bool {
-    let mut marker = String::with_capacity(4 + method_name.len());
+/// Returns `true` if `body` contains a `<== method_name(` response marker.
+///
+/// Includes the `(` that immediately follows the method name in real log lines
+/// (e.g., `<== StartHook(uuid)`), preventing false matches against methods
+/// whose names share a common prefix (e.g., `StartHook` vs `StartHookV2`).
+pub(crate) fn is_api_response(body: &str, method_name: &str) -> bool {
+    let mut marker = String::with_capacity(5 + method_name.len());
     marker.push_str("<== ");
     marker.push_str(method_name);
+    marker.push('(');
     body.contains(&marker)
 }
 
-/// Returns `true` if `body` contains a `==> method_name` request marker.
-pub fn is_api_request(body: &str, method_name: &str) -> bool {
-    let mut marker = String::with_capacity(4 + method_name.len());
+/// Returns `true` if `body` contains a `==> method_name ` request marker.
+///
+/// Includes the space that immediately follows the method name in real log
+/// lines (e.g., `==> EventJoin {"id":...}`), preventing false matches against
+/// methods whose names share a common prefix (e.g., `EventJoin` vs
+/// `EventJoinV2`).
+pub(crate) fn is_api_request(body: &str, method_name: &str) -> bool {
+    let mut marker = String::with_capacity(5 + method_name.len());
     marker.push_str("==> ");
     marker.push_str(method_name);
+    marker.push(' ');
     body.contains(&marker)
 }
 
@@ -35,7 +46,7 @@ pub fn is_api_request(body: &str, method_name: &str) -> bool {
 ///
 /// Uses brace/bracket-depth counting that respects string literals to find
 /// the complete JSON boundary.
-pub fn extract_json_from_body(body: &str) -> Option<&str> {
+pub(crate) fn extract_json_from_body(body: &str) -> Option<&str> {
     // If the body starts with a `[...]` header prefix, skip past it
     // so we don't match the header bracket as a JSON array start.
     let search_start = if body.starts_with('[') {
@@ -128,6 +139,13 @@ mod tests {
         fn test_is_api_response_no_match_empty() {
             assert!(!is_api_response("", "StartHook"));
         }
+
+        #[test]
+        fn test_is_api_response_no_match_prefix_method() {
+            // "StartHook" must not match a hypothetical "StartHookV2" response.
+            let body = "<== StartHookV2(uuid)\n{}";
+            assert!(!is_api_response(body, "StartHook"));
+        }
     }
 
     // -- is_api_request --------------------------------------------------------
@@ -156,6 +174,13 @@ mod tests {
         #[test]
         fn test_is_api_request_no_match_empty() {
             assert!(!is_api_request("", "EventJoin"));
+        }
+
+        #[test]
+        fn test_is_api_request_no_match_prefix_method() {
+            // "EventJoin" must not match a hypothetical "EventJoinV2" request.
+            let body = "==> EventJoinV2 {\"data\": 1}";
+            assert!(!is_api_request(body, "EventJoin"));
         }
     }
 
