@@ -17,6 +17,7 @@
 
 use crate::events::{DraftHumanEvent, EventMetadata, GameEvent};
 use crate::log::entry::LogEntry;
+use crate::parsers::api_common;
 
 /// Marker for human draft state notification events.
 ///
@@ -95,15 +96,7 @@ fn try_parse_draft_notify(body: &str) -> Option<serde_json::Value> {
         return None;
     }
 
-    let json_str = extract_json_from_body(body)?;
-
-    let parsed: serde_json::Value = match serde_json::from_str(json_str) {
-        Ok(v) => v,
-        Err(e) => {
-            ::log::warn!("Draft.Notify: malformed JSON payload: {e}");
-            return None;
-        }
-    };
+    let parsed = api_common::parse_json_from_body(body, "Draft.Notify")?;
 
     // Verify this is a Draft.Notify by checking for characteristic fields.
     // PackCards is the hallmark of a Draft.Notify payload.
@@ -151,15 +144,7 @@ fn try_parse_make_pick(body: &str) -> Option<serde_json::Value> {
         return None;
     }
 
-    let json_str = extract_json_from_body(body)?;
-
-    let parsed: serde_json::Value = match serde_json::from_str(json_str) {
-        Ok(v) => v,
-        Err(e) => {
-            ::log::warn!("EventPlayerDraftMakePick: malformed JSON payload: {e}");
-            return None;
-        }
-    };
+    let parsed = api_common::parse_json_from_body(body, "EventPlayerDraftMakePick")?;
 
     // The pick info may be at top level or nested under a `PickInfo` key.
     let pick_info = parsed.get("PickInfo").unwrap_or(&parsed);
@@ -224,15 +209,7 @@ fn try_parse_pick_business_event(body: &str) -> Option<serde_json::Value> {
         return None;
     }
 
-    let json_str = extract_json_from_body(body)?;
-
-    let parsed: serde_json::Value = match serde_json::from_str(json_str) {
-        Ok(v) => v,
-        Err(e) => {
-            ::log::warn!("LogBusinessEvents (draft pick): malformed JSON payload: {e}");
-            return None;
-        }
-    };
+    let parsed = api_common::parse_json_from_body(body, "LogBusinessEvents (draft pick)")?;
 
     // Find the source object containing PickGrpId.
     let source = find_pick_source(&parsed)?;
@@ -362,68 +339,6 @@ fn parse_comma_separated_ids(s: &str) -> Vec<i64> {
         .collect()
 }
 
-/// Extracts the first JSON object or array from a multi-line log body.
-///
-/// The log header line may contain brackets (e.g., `[UnityCrossThreadLogger]`)
-/// that must not be confused with JSON array delimiters. This function
-/// determines a safe search start offset by skipping any `[...]` header
-/// prefix, then finds the first `{` or `[` from that offset.
-fn extract_json_from_body(body: &str) -> Option<&str> {
-    // If the body starts with a `[...]` header prefix, skip past it
-    // so we don't match the header bracket as a JSON array start.
-    let search_start = if body.starts_with('[') {
-        body.find(']').map_or(0, |pos| pos + 1)
-    } else {
-        0
-    };
-
-    let search_region = &body[search_start..];
-    let json_start = search_region.find(['{', '['])?;
-    let json_start = search_start + json_start;
-
-    let candidate = &body[json_start..];
-
-    let first_byte = candidate.as_bytes().first().copied()?;
-    let (open_char, close_char) = if first_byte == b'{' {
-        ('{', '}')
-    } else {
-        ('[', ']')
-    };
-
-    let mut depth: i32 = 0;
-    let mut in_string = false;
-    let mut escape_next = false;
-    let mut end_pos = None;
-
-    for (i, ch) in candidate.char_indices() {
-        if escape_next {
-            escape_next = false;
-            continue;
-        }
-        match ch {
-            '\\' if in_string => {
-                escape_next = true;
-            }
-            '"' => {
-                in_string = !in_string;
-            }
-            c if !in_string && c == open_char => {
-                depth += 1;
-            }
-            c if !in_string && c == close_char => {
-                depth -= 1;
-                if depth == 0 {
-                    end_pos = Some(i + 1);
-                    break;
-                }
-            }
-            _ => {}
-        }
-    }
-
-    end_pos.map(|end| &candidate[..end])
-}
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -432,40 +347,9 @@ fn extract_json_from_body(body: &str) -> Option<&str> {
 mod tests {
     use super::*;
     use crate::events::PerformanceClass;
-    use crate::log::entry::EntryHeader;
-    use chrono::{TimeZone, Utc};
-
-    /// Helper: build a UTC timestamp for tests.
-    ///
-    /// Uses `unwrap_or_default()` because `clippy::expect_used` is denied
-    /// crate-wide. The epoch fallback would visibly fail timestamp assertions.
-    fn test_timestamp() -> chrono::DateTime<Utc> {
-        Utc.with_ymd_and_hms(2026, 2, 25, 12, 0, 0)
-            .single()
-            .unwrap_or_default()
-    }
-
-    /// Helper: build a `LogEntry` with `UnityCrossThreadLogger` header.
-    fn unity_entry(body: &str) -> LogEntry {
-        LogEntry {
-            header: EntryHeader::UnityCrossThreadLogger,
-            body: body.to_owned(),
-        }
-    }
-
-    /// Helper: extract the JSON payload from a `GameEvent::DraftHuman` variant.
-    ///
-    /// Returns a static null value if the variant is not `DraftHuman`,
-    /// which will cause assertion failures that clearly indicate the wrong
-    /// variant was produced.
-    fn draft_human_payload(event: &GameEvent) -> &serde_json::Value {
-        static EMPTY: std::sync::LazyLock<serde_json::Value> =
-            std::sync::LazyLock::new(|| serde_json::json!(null));
-        match event {
-            GameEvent::DraftHuman(e) => e.payload(),
-            _ => &EMPTY,
-        }
-    }
+    use crate::parsers::test_helpers::{
+        draft_human_payload, test_timestamp, unity_entry, EntryHeader,
+    };
 
     // -- Draft.Notify parsing ------------------------------------------------
 
@@ -1191,32 +1075,6 @@ mod tests {
 
     mod helpers {
         use super::*;
-
-        #[test]
-        fn test_extract_json_from_body_object() {
-            let body = "header line\n{\"key\": \"value\"}";
-            let json = extract_json_from_body(body);
-            assert_eq!(json, Some("{\"key\": \"value\"}"));
-        }
-
-        #[test]
-        fn test_extract_json_from_body_array() {
-            let body = "header line\n[{\"key\": \"value\"}]";
-            let json = extract_json_from_body(body);
-            assert_eq!(json, Some("[{\"key\": \"value\"}]"));
-        }
-
-        #[test]
-        fn test_extract_json_from_body_no_json() {
-            assert!(extract_json_from_body("no json here").is_none());
-        }
-
-        #[test]
-        fn test_extract_json_from_body_with_header_bracket() {
-            let body = "[UnityCrossThreadLogger]some text\n{\"data\": 1}";
-            let json = extract_json_from_body(body);
-            assert_eq!(json, Some("{\"data\": 1}"));
-        }
 
         #[test]
         fn test_parse_comma_separated_ids_basic() {

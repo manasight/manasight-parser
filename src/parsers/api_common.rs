@@ -102,6 +102,52 @@ pub(crate) fn extract_json_from_body(body: &str) -> Option<&str> {
     end_pos.map(|end| &candidate[..end])
 }
 
+/// Extracts and parses JSON from a log body, warning on malformed payloads.
+///
+/// Combines [`extract_json_from_body`] with `serde_json::from_str`, logging
+/// a warning with the given `context` label when JSON parsing fails. Returns
+/// `None` if no JSON is found or if parsing fails.
+pub(crate) fn parse_json_from_body(body: &str, context: &str) -> Option<serde_json::Value> {
+    let json_str = extract_json_from_body(body)?;
+    match serde_json::from_str(json_str) {
+        Ok(v) => Some(v),
+        Err(e) => {
+            ::log::warn!("{context}: malformed JSON payload: {e}");
+            None
+        }
+    }
+}
+
+/// Extracts `EventName` or `InternalEventName` from a parsed JSON value.
+///
+/// Checks for `EventName` or `InternalEventName` at the top level first,
+/// then falls back to a nested string-escaped `request` field containing
+/// `{"EventName": "..."}`.
+pub(crate) fn event_name_from_request(parsed: &serde_json::Value) -> String {
+    // Try direct EventName field first.
+    if let Some(name) = parsed
+        .get("EventName")
+        .or_else(|| parsed.get("InternalEventName"))
+        .and_then(serde_json::Value::as_str)
+    {
+        return name.to_owned();
+    }
+
+    // Try nested string-escaped request field.
+    let Some(request_str) = parsed.get("request").and_then(serde_json::Value::as_str) else {
+        return String::new();
+    };
+    let Ok(request_json) = serde_json::from_str::<serde_json::Value>(request_str) else {
+        return String::new();
+    };
+    request_json
+        .get("EventName")
+        .or_else(|| request_json.get("InternalEventName"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("")
+        .to_owned()
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -242,6 +288,100 @@ mod tests {
             let parsed: serde_json::Value =
                 serde_json::from_str(json.unwrap_or("{}")).unwrap_or_default();
             assert_eq!(parsed["InventoryInfo"]["Gems"], 1234);
+        }
+
+        #[test]
+        fn test_extract_json_unclosed_brace() {
+            let body = "header {\"key\": \"value\"";
+            assert!(extract_json_from_body(body).is_none());
+        }
+
+        #[test]
+        fn test_extract_json_brace_in_string() {
+            let body = r#"text {"key": "value with { braces }"}"#;
+            assert_eq!(
+                extract_json_from_body(body),
+                Some(r#"{"key": "value with { braces }"}"#)
+            );
+        }
+
+        #[test]
+        fn test_extract_json_escaped_quote_in_string() {
+            let body = r#"prefix {"key": "val\"ue"}"#;
+            assert_eq!(extract_json_from_body(body), Some(r#"{"key": "val\"ue"}"#));
+        }
+    }
+
+    // -- parse_json_from_body --------------------------------------------------
+
+    mod parse_json {
+        use super::*;
+
+        #[test]
+        fn test_parse_json_from_body_valid_object() {
+            let body = "header\n{\"key\": 42}";
+            let result = parse_json_from_body(body, "test");
+            assert_eq!(result, Some(serde_json::json!({"key": 42})));
+        }
+
+        #[test]
+        fn test_parse_json_from_body_no_json_returns_none() {
+            assert!(parse_json_from_body("no json", "test").is_none());
+        }
+
+        #[test]
+        fn test_parse_json_from_body_malformed_json_returns_none() {
+            let body = "header\n{invalid}";
+            assert!(parse_json_from_body(body, "test").is_none());
+        }
+
+        #[test]
+        fn test_parse_json_from_body_valid_array() {
+            let body = "header\n[1, 2, 3]";
+            let result = parse_json_from_body(body, "test");
+            assert_eq!(result, Some(serde_json::json!([1, 2, 3])));
+        }
+    }
+
+    // -- event_name_from_request -----------------------------------------------
+
+    mod event_name {
+        use super::*;
+
+        #[test]
+        fn test_event_name_from_request_nested() {
+            let parsed = serde_json::json!({
+                "id": "test",
+                "request": "{\"EventName\":\"PremierDraft_ECL_20260120\"}"
+            });
+            assert_eq!(
+                event_name_from_request(&parsed),
+                "PremierDraft_ECL_20260120",
+            );
+        }
+
+        #[test]
+        fn test_event_name_from_request_direct() {
+            let parsed = serde_json::json!({"EventName": "DirectEvent"});
+            assert_eq!(event_name_from_request(&parsed), "DirectEvent");
+        }
+
+        #[test]
+        fn test_event_name_from_request_no_field() {
+            let parsed = serde_json::json!({"id": "test"});
+            assert_eq!(event_name_from_request(&parsed), "");
+        }
+
+        #[test]
+        fn test_event_name_from_request_invalid_nested_json() {
+            let parsed = serde_json::json!({"request": "not json"});
+            assert_eq!(event_name_from_request(&parsed), "");
+        }
+
+        #[test]
+        fn test_event_name_from_request_internal_event_name() {
+            let parsed = serde_json::json!({"InternalEventName": "InternalTest"});
+            assert_eq!(event_name_from_request(&parsed), "InternalTest");
         }
     }
 }

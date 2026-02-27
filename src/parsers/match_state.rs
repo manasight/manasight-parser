@@ -18,6 +18,7 @@
 
 use crate::events::{EventMetadata, GameEvent, MatchStateEvent};
 use crate::log::entry::LogEntry;
+use crate::parsers::api_common;
 
 /// Marker that identifies a match state change entry in the log.
 const MATCH_STATE_MARKER: &str = "matchGameRoomStateChangedEvent";
@@ -39,16 +40,8 @@ pub fn try_parse(entry: &LogEntry, timestamp: chrono::DateTime<chrono::Utc>) -> 
         return None;
     }
 
-    // Extract the JSON payload from the body.
-    let json_str = extract_json_from_body(body)?;
-
-    let parsed: serde_json::Value = match serde_json::from_str(json_str) {
-        Ok(v) => v,
-        Err(e) => {
-            ::log::warn!("matchGameRoomStateChangedEvent: malformed JSON payload: {e}");
-            return None;
-        }
-    };
+    // Extract and parse the JSON payload from the body.
+    let parsed = api_common::parse_json_from_body(body, "matchGameRoomStateChangedEvent")?;
 
     // The JSON should contain a `matchGameRoomStateChangedEvent` key.
     let state_event = parsed.get(MATCH_STATE_MARKER).or_else(|| {
@@ -190,48 +183,6 @@ fn build_game_results(result_list: Option<&Vec<serde_json::Value>>) -> serde_jso
     serde_json::json!(game_results)
 }
 
-/// Extracts the first JSON object from a multi-line log body.
-///
-/// Scans for the first `{` character and finds the matching `}` using
-/// brace-depth counting that respects string literals.
-fn extract_json_from_body(body: &str) -> Option<&str> {
-    let json_start = body.find('{')?;
-    let candidate = &body[json_start..];
-
-    let mut depth: i32 = 0;
-    let mut in_string = false;
-    let mut escape_next = false;
-    let mut end_pos = None;
-
-    for (i, ch) in candidate.char_indices() {
-        if escape_next {
-            escape_next = false;
-            continue;
-        }
-        match ch {
-            '\\' if in_string => {
-                escape_next = true;
-            }
-            '"' => {
-                in_string = !in_string;
-            }
-            '{' if !in_string => {
-                depth += 1;
-            }
-            '}' if !in_string => {
-                depth -= 1;
-                if depth == 0 {
-                    end_pos = Some(i + 1);
-                    break;
-                }
-            }
-            _ => {}
-        }
-    }
-
-    end_pos.map(|end| &candidate[..end])
-}
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -239,40 +190,9 @@ fn extract_json_from_body(body: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::log::entry::EntryHeader;
-    use chrono::{TimeZone, Utc};
-
-    /// Helper: build a UTC timestamp for tests.
-    ///
-    /// Uses `unwrap_or_default()` because `clippy::expect_used` is denied
-    /// crate-wide. The epoch fallback would visibly fail timestamp assertions.
-    fn test_timestamp() -> chrono::DateTime<Utc> {
-        Utc.with_ymd_and_hms(2026, 2, 25, 12, 0, 0)
-            .single()
-            .unwrap_or_default()
-    }
-
-    /// Helper: build a `LogEntry` with `UnityCrossThreadLogger` header.
-    fn unity_entry(body: &str) -> LogEntry {
-        LogEntry {
-            header: EntryHeader::UnityCrossThreadLogger,
-            body: body.to_owned(),
-        }
-    }
-
-    /// Helper: extract the JSON payload from a `GameEvent::MatchState` variant.
-    ///
-    /// Returns a static null value if the variant is not `MatchState`,
-    /// which will cause assertion failures that clearly indicate the wrong
-    /// variant was produced.
-    fn match_state_payload(event: &GameEvent) -> &serde_json::Value {
-        static EMPTY: std::sync::LazyLock<serde_json::Value> =
-            std::sync::LazyLock::new(|| serde_json::json!(null));
-        match event {
-            GameEvent::MatchState(e) => e.payload(),
-            _ => &EMPTY,
-        }
-    }
+    use crate::parsers::test_helpers::{
+        match_state_payload, test_timestamp, unity_entry, EntryHeader,
+    };
 
     /// Helper: build a realistic `matchGameRoomStateChangedEvent` JSON body
     /// for a match start (state type = Playing).
@@ -1055,33 +975,6 @@ mod tests {
 
     mod helpers {
         use super::*;
-
-        #[test]
-        fn test_extract_json_from_body_simple() {
-            let body = "header line\n{\"key\": \"value\"}";
-            let json = extract_json_from_body(body);
-            assert_eq!(json, Some("{\"key\": \"value\"}"));
-        }
-
-        #[test]
-        fn test_extract_json_from_body_nested() {
-            let body = "header\n{\"outer\": {\"inner\": 1}}";
-            let json = extract_json_from_body(body);
-            assert_eq!(json, Some("{\"outer\": {\"inner\": 1}}"));
-        }
-
-        #[test]
-        fn test_extract_json_from_body_no_json() {
-            let body = "no json here at all";
-            assert!(extract_json_from_body(body).is_none());
-        }
-
-        #[test]
-        fn test_extract_json_from_body_with_string_braces() {
-            let body = "header\n{\"msg\": \"hello {world}\"}";
-            let json = extract_json_from_body(body);
-            assert_eq!(json, Some("{\"msg\": \"hello {world}\"}"));
-        }
 
         #[test]
         fn test_extract_players_none_config() {

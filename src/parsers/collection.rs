@@ -44,15 +44,7 @@ pub fn try_parse(entry: &LogEntry, timestamp: chrono::DateTime<chrono::Utc>) -> 
         return None;
     }
 
-    let json_str = api_common::extract_json_from_body(body)?;
-
-    let parsed: serde_json::Value = match serde_json::from_str(json_str) {
-        Ok(v) => v,
-        Err(e) => {
-            ::log::warn!("StartHook collection: malformed JSON payload: {e}");
-            return None;
-        }
-    };
+    let parsed = api_common::parse_json_from_body(body, "StartHook collection")?;
 
     // Only claim this entry if the PlayerCards field is present.
     let player_cards = parsed.get(PLAYER_CARDS_FIELD)?;
@@ -77,33 +69,7 @@ pub fn try_parse(entry: &LogEntry, timestamp: chrono::DateTime<chrono::Utc>) -> 
 mod tests {
     use super::*;
     use crate::events::PerformanceClass;
-    use crate::log::entry::EntryHeader;
-    use chrono::{TimeZone, Utc};
-
-    /// Helper: build a UTC timestamp for tests.
-    fn test_timestamp() -> chrono::DateTime<Utc> {
-        Utc.with_ymd_and_hms(2026, 2, 25, 12, 0, 0)
-            .single()
-            .unwrap_or_default()
-    }
-
-    /// Helper: build a `LogEntry` with `UnityCrossThreadLogger` header.
-    fn unity_entry(body: &str) -> LogEntry {
-        LogEntry {
-            header: EntryHeader::UnityCrossThreadLogger,
-            body: body.to_owned(),
-        }
-    }
-
-    /// Helper: extract the JSON payload from a `GameEvent::Collection` variant.
-    fn collection_payload(event: &GameEvent) -> &serde_json::Value {
-        static EMPTY: std::sync::LazyLock<serde_json::Value> =
-            std::sync::LazyLock::new(|| serde_json::json!(null));
-        match event {
-            GameEvent::Collection(e) => e.payload(),
-            _ => &EMPTY,
-        }
-    }
+    use crate::parsers::test_helpers::{collection_payload, test_timestamp, unity_entry};
 
     // -- Matching entries (StartHook with PlayerCards) -------------------------
 
