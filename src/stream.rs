@@ -171,11 +171,12 @@ async fn run_router(
         }
     }
 
+    let stats = router.stats();
     ::log::info!(
         "router task exiting (routed: {}, unknown: {}, ts_failures: {})",
-        router.stats().routed_count(),
-        router.stats().unknown_count(),
-        router.stats().timestamp_failure_count(),
+        stats.routed_count(),
+        stats.unknown_count(),
+        stats.timestamp_failure_count(),
     );
 }
 
