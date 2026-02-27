@@ -186,7 +186,7 @@ pub enum GameEvent {
     /// Class 2 — durable per-event.
     Inventory(InventoryEvent),
 
-    /// Game result (`LogBusinessEvents` with `WinningType`).
+    /// Game result (`GameStage_GameOver` from GRE `GameStateMessage`).
     /// Class 3 — triggers post-game batch assembly.
     GameResult(GameResultEvent),
 }
