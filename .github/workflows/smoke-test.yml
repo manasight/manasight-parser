@@ -1,0 +1,66 @@
+name: Smoke Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      logs_url:
+        description: "URL to download test log archive (tar.gz). Overrides MANASIGHT_TEST_LOGS_URL secret."
+        required: false
+        type: string
+
+  schedule:
+    # Weekly on Sundays at 06:00 UTC (runs only if logs are configured).
+    - cron: "0 6 * * 0"
+
+jobs:
+  smoke-test:
+    name: Real-log smoke test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      - name: Resolve log source URL
+        id: resolve-url
+        run: |
+          URL="${{ inputs.logs_url || secrets.MANASIGHT_TEST_LOGS_URL }}"
+          if [ -z "$URL" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "No log source configured — skipping smoke test"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "url=$URL" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Cache test logs
+        if: steps.resolve-url.outputs.skip == 'false'
+        id: cache-logs
+        uses: actions/cache@v4
+        with:
+          path: /tmp/test-logs
+          key: smoke-test-logs-v1
+
+      - name: Download test logs
+        if: steps.resolve-url.outputs.skip == 'false' && steps.cache-logs.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p /tmp/test-logs
+          curl -fsSL "${{ steps.resolve-url.outputs.url }}" | tar -xz -C /tmp/test-logs
+          echo "Downloaded logs:"
+          ls -lh /tmp/test-logs/
+
+      - name: Run smoke test
+        if: steps.resolve-url.outputs.skip == 'false'
+        env:
+          MANASIGHT_TEST_LOGS: /tmp/test-logs
+        run: cargo test --all-features smoke_test_real_logs -- --nocapture 2>&1 | tee /tmp/smoke-test-report.txt
+
+      - name: Upload report
+        if: always() && steps.resolve-url.outputs.skip == 'false'
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-test-report
+          path: /tmp/smoke-test-report.txt
+          retention-days: 30
