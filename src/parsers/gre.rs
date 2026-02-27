@@ -1,7 +1,8 @@
 //! GRE message parsers for `greToClientEvent` payloads.
 //!
 //! Covers `GameStateMessage` (zones, game objects), `ConnectResp` (initial
-//! game configuration), and `QueuedGameStateMessage`.
+//! game configuration), `QueuedGameStateMessage`, and low-value noise types
+//! (`UIMessage`, `TimerStateMessage`, `SetSettingsResp`).
 //!
 //! # Message types handled
 //!
@@ -10,6 +11,9 @@
 //! | `GREMessageType_ConnectResp` | `connectResp` | Decklist, sideboard, seat IDs, settings |
 //! | `GREMessageType_GameStateMessage` | `gameStateMessage` | Zones, game objects, game info |
 //! | `GREMessageType_QueuedGameStateMessage` | `gameStateMessage` | Same as `GameStateMessage` |
+//! | `GREMessageType_UIMessage` | — | Claimed as noise (emotes, hover notifications) |
+//! | `GREMessageType_TimerStateMessage` | — | Claimed as noise (turn timer state) |
+//! | `GREMessageType_SetSettingsResp` | — | Claimed as noise (settings acknowledgment) |
 //!
 //! `ConnectResp` is emitted once at game start; `GameStateMessage` fires on
 //! every game state change (the most frequent event in a game);
@@ -54,6 +58,25 @@ const GAME_STATE_MESSAGE_TYPE: &str = "GREMessageType_GameStateMessage";
 
 /// GRE message type for queued (deferred) game state updates.
 const QUEUED_GAME_STATE_MESSAGE_TYPE: &str = "GREMessageType_QueuedGameStateMessage";
+
+/// GRE message type for UI messages (opponent emotes, hover notifications).
+const UI_MESSAGE_TYPE: &str = "GREMessageType_UIMessage";
+
+/// GRE message type for turn timer state updates.
+const TIMER_STATE_MESSAGE_TYPE: &str = "GREMessageType_TimerStateMessage";
+
+/// GRE message type for settings acknowledgment responses.
+const SET_SETTINGS_RESP_TYPE: &str = "GREMessageType_SetSettingsResp";
+
+/// Low-value GRE message types that are claimed without rich payload extraction.
+///
+/// These are recognized so they count as "claimed" entries in diagnostics,
+/// reducing noise in the unclaimed-entry residual.
+const NOISE_MESSAGE_TYPES: &[&str] = &[
+    UI_MESSAGE_TYPE,
+    TIMER_STATE_MESSAGE_TYPE,
+    SET_SETTINGS_RESP_TYPE,
+];
 
 /// Game info stage value indicating the game has ended.
 const GAME_STAGE_GAME_OVER: &str = "GameStage_GameOver";
@@ -129,6 +152,18 @@ pub fn try_parse(entry: &LogEntry, timestamp: chrono::DateTime<chrono::Utc>) -> 
         }
         let payload = build_game_state_message_payload(qgsm);
         return Some(GameEvent::GameState(GameStateEvent::new(metadata, payload)));
+    }
+
+    // Check for low-value noise types (UIMessage, TimerStateMessage,
+    // SetSettingsResp). Claimed with a minimal payload so they don't inflate
+    // the unclaimed-entry residual.
+    for &noise_type in NOISE_MESSAGE_TYPES {
+        if find_message_by_type(messages, noise_type).is_some() {
+            ::log::trace!("greToClientEvent: claimed noise type {noise_type}");
+            let payload = serde_json::json!({ "recognized_type": noise_type });
+            let metadata = EventMetadata::new(timestamp, body.as_bytes().to_vec());
+            return Some(GameEvent::GameState(GameStateEvent::new(metadata, payload)));
+        }
     }
 
     // Unrecognized GRE message type — log and skip.
@@ -2798,6 +2833,112 @@ mod tests {
     // -----------------------------------------------------------------------
     // GameStage_GameOver → GameResult detection
     // -----------------------------------------------------------------------
+
+    mod noise_message_types {
+        use super::*;
+
+        /// Helper: build a GRE entry with a single message of the given type.
+        fn gre_entry_with_type(msg_type: &str) -> LogEntry {
+            let body = format!(
+                "[UnityCrossThreadLogger]greToClientEvent\n{}",
+                serde_json::json!({
+                    "greToClientEvent": {
+                        "greToClientMessages": [
+                            {
+                                "type": msg_type,
+                                "data": {}
+                            }
+                        ]
+                    }
+                })
+            );
+            unity_entry(&body)
+        }
+
+        #[test]
+        fn test_try_parse_ui_message_returns_some() {
+            let entry = gre_entry_with_type("GREMessageType_UIMessage");
+            let result = try_parse(&entry, test_timestamp());
+            assert!(result.is_some());
+            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(matches!(event, GameEvent::GameState(_)));
+            let payload = game_state_payload(event);
+            assert_eq!(payload["recognized_type"], "GREMessageType_UIMessage");
+        }
+
+        #[test]
+        fn test_try_parse_timer_state_message_returns_some() {
+            let entry = gre_entry_with_type("GREMessageType_TimerStateMessage");
+            let result = try_parse(&entry, test_timestamp());
+            assert!(result.is_some());
+            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(matches!(event, GameEvent::GameState(_)));
+            let payload = game_state_payload(event);
+            assert_eq!(
+                payload["recognized_type"],
+                "GREMessageType_TimerStateMessage"
+            );
+        }
+
+        #[test]
+        fn test_try_parse_set_settings_resp_returns_some() {
+            let entry = gre_entry_with_type("GREMessageType_SetSettingsResp");
+            let result = try_parse(&entry, test_timestamp());
+            assert!(result.is_some());
+            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(matches!(event, GameEvent::GameState(_)));
+            let payload = game_state_payload(event);
+            assert_eq!(payload["recognized_type"], "GREMessageType_SetSettingsResp");
+        }
+
+        #[test]
+        fn test_noise_types_preserve_metadata_raw_bytes() {
+            let entry = gre_entry_with_type("GREMessageType_UIMessage");
+            let result = try_parse(&entry, test_timestamp());
+            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(!event.metadata().raw_bytes().is_empty());
+        }
+
+        #[test]
+        fn test_noise_types_prioritize_real_events() {
+            // If a message array has both a GameStateMessage and a UIMessage,
+            // the GameStateMessage should be returned (it comes first in dispatch).
+            let body = format!(
+                "[UnityCrossThreadLogger]greToClientEvent\n{}",
+                serde_json::json!({
+                    "greToClientEvent": {
+                        "greToClientMessages": [
+                            {
+                                "type": "GREMessageType_UIMessage",
+                                "data": {}
+                            },
+                            {
+                                "type": "GREMessageType_GameStateMessage",
+                                "gameStateMessage": {
+                                    "gameInfo": {},
+                                    "zones": [],
+                                    "gameObjects": []
+                                }
+                            }
+                        ]
+                    }
+                })
+            );
+            let entry = unity_entry(&body);
+            let result = try_parse(&entry, test_timestamp());
+            assert!(result.is_some());
+            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            // Should be GameState from GameStateMessage, not from UIMessage noise
+            let payload = game_state_payload(event);
+            assert!(payload.get("recognized_type").is_none());
+        }
+
+        #[test]
+        fn test_truly_unknown_type_still_returns_none() {
+            let entry = gre_entry_with_type("GREMessageType_SomeFutureType");
+            assert!(try_parse(&entry, test_timestamp()).is_none());
+        }
+    }
 
     mod game_result_detection {
         use super::*;
