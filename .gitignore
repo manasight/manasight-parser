@@ -15,5 +15,8 @@ Thumbs.db
 *.swp
 *.swo
 
+# Smoke test results (local paths, cross-session comparison only)
+tests/smoke-results/
+
 # Claude Code local config (symlinks to workspace commands)
 .claude/
