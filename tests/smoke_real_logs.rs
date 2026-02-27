@@ -179,13 +179,12 @@ fn process_file(path: &Path, parsers: &[NamedParser]) -> FileReport {
     let default_ts = DateTime::<Utc>::default();
 
     for entry in &entries {
-        let timestamp =
-            if let Some(ts) = try_extract_timestamp(&entry.body) {
-                ts
-            } else {
-                timestamp_failures += 1;
-                default_ts
-            };
+        let timestamp = if let Some(ts) = try_extract_timestamp(&entry.body) {
+            ts
+        } else {
+            timestamp_failures += 1;
+            default_ts
+        };
 
         let mut claimant_count: usize = 0;
 
