@@ -1,7 +1,9 @@
-//! Client action parsers for `ClientToGREMessage` payloads.
+//! Client action parsers for `ClientToGREMessage` and `ClientToGREUIMessage`
+//! payloads.
 //!
 //! Handles `MulliganResp`, `SelectNResp`, and `SubmitDeckResp` — player
-//! decisions sent from the client to the game server (GRE).
+//! decisions sent from the client to the game server (GRE). Also claims
+//! `ClientToGREUIMessage` entries (hover, chat) as low-value noise.
 //!
 //! # Message types handled
 //!
@@ -10,9 +12,10 @@
 //! | `ClientMessageType_MulliganResp` | `mulliganResp` | Mulligan decision (keep/mulligan) |
 //! | `ClientMessageType_SelectNResp` | `selectNResp` | Selected card instance IDs |
 //! | `ClientMessageType_SubmitDeckResp` | `submitDeckResp` | Deck + sideboard card IDs |
+//! | `ClientToGREUIMessage` (any) | — | Claimed as noise (hover, chat) |
 //!
-//! All three are Class 1 (Interactive Dispatch). They share a common
-//! client-to-GRE envelope structure:
+//! All three decision types are Class 1 (Interactive Dispatch). They share a
+//! common client-to-GRE envelope structure:
 //!
 //! ```json
 //! {
@@ -37,6 +40,14 @@ use crate::log::entry::LogEntry;
 /// but the shorter `ClientToGREMessage` suffix is used for matching since
 /// some log formats may abbreviate the prefix.
 const CLIENT_TO_GRE_MARKER: &str = "ClientToGREMessage";
+
+/// Marker that identifies a client-to-GRE **UI** message entry in the log.
+///
+/// These are hover notifications (`onHover`), chat messages (`onChat`), etc.
+/// `ClientToGREUIMessage` does NOT contain `ClientToGREMessage` as a
+/// substring (the `UI` infix breaks the match), so a separate marker is
+/// needed.
+const CLIENT_TO_GRE_UI_MARKER: &str = "ClientToGREUIMessage";
 
 /// Client message type for mulligan decisions.
 const MULLIGAN_RESP_TYPE: &str = "ClientMessageType_MulliganResp";
@@ -67,8 +78,12 @@ const SUBMIT_DECK_RESP_TYPE: &str = "ClientMessageType_SubmitDeckResp";
 pub fn try_parse(entry: &LogEntry, timestamp: chrono::DateTime<chrono::Utc>) -> Option<GameEvent> {
     let body = &entry.body;
 
-    // Quick check: bail early if the client-to-GRE marker is not present.
-    if !body.contains(CLIENT_TO_GRE_MARKER) {
+    let is_ui_message = body.contains(CLIENT_TO_GRE_UI_MARKER);
+
+    // Quick check: bail early if neither client-to-GRE marker is present.
+    // Note: `ClientToGREUIMessage` does NOT contain `ClientToGREMessage` as
+    // a substring, so both markers must be checked independently.
+    if !is_ui_message && !body.contains(CLIENT_TO_GRE_MARKER) {
         return None;
     }
 
@@ -78,10 +93,30 @@ pub fn try_parse(entry: &LogEntry, timestamp: chrono::DateTime<chrono::Utc>) -> 
     let parsed: serde_json::Value = match serde_json::from_str(json_str) {
         Ok(v) => v,
         Err(e) => {
-            ::log::warn!("ClientToGREMessage: malformed JSON payload: {e}");
+            let label = if is_ui_message {
+                "ClientToGREUIMessage"
+            } else {
+                "ClientToGREMessage"
+            };
+            ::log::warn!("{label}: malformed JSON payload: {e}");
             return None;
         }
     };
+
+    // UI messages are low-value noise (hover, chat) — claim with a minimal
+    // payload. We still parse the JSON above so malformed entries are logged
+    // rather than silently swallowed.
+    if is_ui_message {
+        ::log::trace!("ClientToGREUIMessage: claimed as noise");
+        let payload = serde_json::json!({
+            "type": "client_ui_message",
+            "raw_client_action": parsed,
+        });
+        let metadata = EventMetadata::new(timestamp, body.as_bytes().to_vec());
+        return Some(GameEvent::ClientAction(ClientActionEvent::new(
+            metadata, payload,
+        )));
+    }
 
     // The inner payload carries the message type and response data.
     let inner_payload = extract_inner_payload(&parsed)?;
@@ -1402,6 +1437,107 @@ mod tests {
                     "raw_client_action should be present for {msg_type}"
                 );
             }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // ClientToGREUIMessage (noise recognizer)
+    // -----------------------------------------------------------------------
+
+    /// Helper: build a full client-to-GRE **UI** message log body.
+    fn wrap_client_to_gre_ui(inner_payload: &serde_json::Value) -> String {
+        let envelope = serde_json::json!({
+            "clientToMatchServiceMessageType": "ClientToMatchServiceMessageType_ClientToGREUIMessage",
+            "payload": inner_payload,
+            "requestId": 99,
+            "timestamp": "638456789012345678"
+        });
+        format!(
+            "[UnityCrossThreadLogger]2/25/2026 12:00:00 PM\n{}",
+            serde_json::to_string_pretty(&envelope).unwrap_or_default()
+        )
+    }
+
+    #[test]
+    fn test_try_parse_ui_message_on_hover_returns_some() {
+        let inner = serde_json::json!({
+            "type": "ClientMessageType_UIMessage",
+            "uiMessage": {
+                "onHover": { "objectId": 12345 }
+            }
+        });
+        let body = wrap_client_to_gre_ui(&inner);
+        let entry = make_entry(&body);
+        let result = try_parse(&entry, test_timestamp());
+        assert!(result.is_some());
+        if let Some(GameEvent::ClientAction(event)) = &result {
+            assert_eq!(event.payload()["type"], "client_ui_message");
+        }
+    }
+
+    #[test]
+    fn test_try_parse_ui_message_on_chat_returns_some() {
+        let inner = serde_json::json!({
+            "type": "ClientMessageType_UIMessage",
+            "uiMessage": {
+                "onChat": { "text": "Good game" }
+            }
+        });
+        let body = wrap_client_to_gre_ui(&inner);
+        let entry = make_entry(&body);
+        let result = try_parse(&entry, test_timestamp());
+        assert!(result.is_some());
+        if let Some(GameEvent::ClientAction(event)) = &result {
+            assert_eq!(event.payload()["type"], "client_ui_message");
+            assert!(event.payload()["raw_client_action"].is_object());
+        }
+    }
+
+    #[test]
+    fn test_try_parse_ui_message_preserves_metadata() {
+        let inner = serde_json::json!({
+            "type": "ClientMessageType_UIMessage",
+            "uiMessage": { "onHover": {} }
+        });
+        let body = wrap_client_to_gre_ui(&inner);
+        let entry = make_entry(&body);
+        let result = try_parse(&entry, test_timestamp());
+        let event = result.as_ref().unwrap_or_else(|| unreachable!());
+        assert!(!event.metadata().raw_bytes().is_empty());
+        assert_eq!(event.metadata().timestamp(), test_timestamp());
+    }
+
+    #[test]
+    fn test_try_parse_ui_message_malformed_json_returns_none() {
+        let body = "[UnityCrossThreadLogger]ClientToGREUIMessage\n{invalid json}";
+        let entry = make_entry(body);
+        assert!(try_parse(&entry, test_timestamp()).is_none());
+    }
+
+    #[test]
+    fn test_try_parse_ui_message_no_json_returns_none() {
+        let body = "[UnityCrossThreadLogger]ClientToGREUIMessage with no json";
+        let entry = make_entry(body);
+        assert!(try_parse(&entry, test_timestamp()).is_none());
+    }
+
+    #[test]
+    fn test_try_parse_regular_client_message_still_works() {
+        // Verify that adding UI message support didn't break regular parsing.
+        let inner = serde_json::json!({
+            "type": "ClientMessageType_MulliganResp",
+            "gameStateId": 5,
+            "respId": 1,
+            "mulliganResp": {
+                "decision": "MulliganOption_AcceptHand"
+            }
+        });
+        let body = wrap_client_to_gre(&inner);
+        let entry = make_entry(&body);
+        let result = try_parse(&entry, test_timestamp());
+        assert!(result.is_some());
+        if let Some(GameEvent::ClientAction(event)) = &result {
+            assert_eq!(event.payload()["type"], "mulligan_resp");
         }
     }
 }
