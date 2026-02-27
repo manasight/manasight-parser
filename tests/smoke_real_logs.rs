@@ -99,6 +99,22 @@ fn all_parsers() -> Vec<NamedParser> {
             name: "draft_complete",
             func: parsers::draft::complete::try_parse,
         },
+        NamedParser {
+            name: "inventory",
+            func: parsers::inventory::try_parse,
+        },
+        NamedParser {
+            name: "collection",
+            func: parsers::collection::try_parse,
+        },
+        NamedParser {
+            name: "rank",
+            func: parsers::rank::try_parse,
+        },
+        NamedParser {
+            name: "event_lifecycle",
+            func: parsers::event_lifecycle::try_parse,
+        },
     ]
 }
 
@@ -170,6 +186,20 @@ fn try_extract_timestamp(body: &str) -> Option<DateTime<Utc>> {
 }
 
 // ---------------------------------------------------------------------------
+// Known overlapping parsers
+// ---------------------------------------------------------------------------
+
+/// Returns `true` if the set of claimant parser names represents a known,
+/// expected overlap rather than a bug.
+///
+/// `<== StartHook` responses contain both `InventoryInfo` and `PlayerCards`,
+/// so the `inventory` and `collection` parsers legitimately claim the same
+/// entry — each extracting different data from the shared response.
+fn is_known_overlap(claimants: &[&str]) -> bool {
+    claimants.len() == 2 && claimants.contains(&"inventory") && claimants.contains(&"collection")
+}
+
+// ---------------------------------------------------------------------------
 // File processing
 // ---------------------------------------------------------------------------
 
@@ -229,6 +259,7 @@ fn process_file(path: &Path, parsers: &[NamedParser]) -> FileReport {
         };
 
         let mut claimant_count: usize = 0;
+        let mut claimant_names: Vec<&'static str> = Vec::new();
 
         for (idx, parser) in parsers.iter().enumerate() {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -239,6 +270,7 @@ fn process_file(path: &Path, parsers: &[NamedParser]) -> FileReport {
                 Ok(Some(event)) => {
                     stats[idx].1.claimed += 1;
                     claimant_count += 1;
+                    claimant_names.push(parser.name);
                     *event_type_counts
                         .entry(event_type_name(&event))
                         .or_insert(0) += 1;
@@ -253,7 +285,11 @@ fn process_file(path: &Path, parsers: &[NamedParser]) -> FileReport {
         match claimant_count {
             0 => unclaimed += 1,
             1 => {}
-            _ => double_claims += 1,
+            _ => {
+                if !is_known_overlap(&claimant_names) {
+                    double_claims += 1;
+                }
+            }
         }
     }
 

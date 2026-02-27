@@ -1,5 +1,6 @@
 //! Category-specific parsers — one module per event category.
 
+pub(crate) mod api_common;
 pub mod client_actions;
 pub mod collection;
 pub mod draft;
