@@ -33,6 +33,7 @@
 
 use crate::events::{ClientActionEvent, EventMetadata, GameEvent};
 use crate::log::entry::LogEntry;
+use crate::parsers::api_common;
 
 /// Marker that identifies a client-to-GRE message entry in the log.
 ///
@@ -87,21 +88,13 @@ pub fn try_parse(entry: &LogEntry, timestamp: chrono::DateTime<chrono::Utc>) -> 
         return None;
     }
 
-    // Extract the JSON payload from the body.
-    let json_str = extract_json_from_body(body)?;
-
-    let parsed: serde_json::Value = match serde_json::from_str(json_str) {
-        Ok(v) => v,
-        Err(e) => {
-            let label = if is_ui_message {
-                "ClientToGREUIMessage"
-            } else {
-                "ClientToGREMessage"
-            };
-            ::log::warn!("{label}: malformed JSON payload: {e}");
-            return None;
-        }
+    // Extract and parse the JSON payload from the body.
+    let context = if is_ui_message {
+        "ClientToGREUIMessage"
+    } else {
+        "ClientToGREMessage"
     };
+    let parsed = api_common::parse_json_from_body(body, context)?;
 
     // UI messages are low-value noise (hover, chat) — claim with a minimal
     // payload. We still parse the JSON above so malformed entries are logged
@@ -410,48 +403,6 @@ fn extract_i64_array(value: Option<&serde_json::Value>) -> Vec<i64> {
         .unwrap_or_default()
 }
 
-/// Extracts the first JSON object from the body text.
-///
-/// Finds the first `{` and matches it with its closing `}` by tracking
-/// brace depth, respecting string literals and escape sequences.
-fn extract_json_from_body(body: &str) -> Option<&str> {
-    let json_start = body.find('{')?;
-    let candidate = &body[json_start..];
-
-    let mut depth: i32 = 0;
-    let mut in_string = false;
-    let mut escape_next = false;
-    let mut end_pos = None;
-
-    for (i, ch) in candidate.char_indices() {
-        if escape_next {
-            escape_next = false;
-            continue;
-        }
-        match ch {
-            '\\' if in_string => {
-                escape_next = true;
-            }
-            '"' => {
-                in_string = !in_string;
-            }
-            '{' if !in_string => {
-                depth += 1;
-            }
-            '}' if !in_string => {
-                depth -= 1;
-                if depth == 0 {
-                    end_pos = Some(i + 1);
-                    break;
-                }
-            }
-            _ => {}
-        }
-    }
-
-    end_pos.map(|end| &candidate[..end])
-}
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -459,30 +410,9 @@ fn extract_json_from_body(body: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::log::entry::{EntryHeader, LogEntry};
-    use chrono::{TimeZone, Utc};
+    use crate::parsers::test_helpers::{test_timestamp, unity_entry};
 
     type TestResult = Result<(), Box<dyn std::error::Error>>;
-
-    /// Helper: build a UTC timestamp for test use.
-    ///
-    /// UTC datetimes are never ambiguous so `single()` always returns
-    /// `Some`. Uses `unwrap_or_default()` because `clippy::expect_used`
-    /// is denied crate-wide. The epoch fallback (1970-01-01) would visibly
-    /// fail any timestamp assertion.
-    fn test_timestamp() -> chrono::DateTime<Utc> {
-        Utc.with_ymd_and_hms(2026, 2, 25, 12, 0, 0)
-            .single()
-            .unwrap_or_default()
-    }
-
-    /// Helper: build a `LogEntry` wrapping the given body text.
-    fn make_entry(body: &str) -> LogEntry {
-        LogEntry {
-            header: EntryHeader::UnityCrossThreadLogger,
-            body: body.to_owned(),
-        }
-    }
 
     /// Helper: build a full client-to-GRE log body from an inner payload JSON.
     fn wrap_client_to_gre(inner_payload: &serde_json::Value) -> String {
@@ -504,13 +434,13 @@ mod tests {
 
     #[test]
     fn test_try_parse_non_matching_entry_returns_none() {
-        let entry = make_entry("[UnityCrossThreadLogger] some other log line");
+        let entry = unity_entry("[UnityCrossThreadLogger] some other log line");
         assert!(try_parse(&entry, test_timestamp()).is_none());
     }
 
     #[test]
     fn test_try_parse_empty_body_returns_none() {
-        let entry = make_entry("");
+        let entry = unity_entry("");
         assert!(try_parse(&entry, test_timestamp()).is_none());
     }
 
@@ -519,7 +449,7 @@ mod tests {
         // GRE-to-client events should NOT match the client action parser.
         let body = "[UnityCrossThreadLogger]2/25/2026 12:00:00 PM\n\
             {\"greToClientEvent\":{\"greToClientMessages\":[]}}";
-        let entry = make_entry(body);
+        let entry = unity_entry(body);
         assert!(try_parse(&entry, test_timestamp()).is_none());
     }
 
@@ -527,7 +457,7 @@ mod tests {
     fn test_try_parse_marker_present_but_malformed_json_returns_none() {
         let body = "[UnityCrossThreadLogger] ClientToGREMessage\n\
             {invalid json here";
-        let entry = make_entry(body);
+        let entry = unity_entry(body);
         assert!(try_parse(&entry, test_timestamp()).is_none());
     }
 
@@ -540,7 +470,7 @@ mod tests {
                 "requestId": 1
             })
         );
-        let entry = make_entry(&body);
+        let entry = unity_entry(&body);
         assert!(try_parse(&entry, test_timestamp()).is_none());
     }
 
@@ -559,7 +489,7 @@ mod tests {
             "respId": 1
         });
         let body = wrap_client_to_gre(&inner);
-        let entry = make_entry(&body);
+        let entry = unity_entry(&body);
         let result = try_parse(&entry, test_timestamp());
 
         assert!(result.is_some());
@@ -587,7 +517,7 @@ mod tests {
             "respId": 2
         });
         let body = wrap_client_to_gre(&inner);
-        let entry = make_entry(&body);
+        let entry = unity_entry(&body);
         let result = try_parse(&entry, test_timestamp());
 
         assert!(result.is_some());
@@ -612,7 +542,7 @@ mod tests {
             "respId": 1
         });
         let body = wrap_client_to_gre(&inner);
-        let entry = make_entry(&body);
+        let entry = unity_entry(&body);
         let result = try_parse(&entry, test_timestamp());
 
         assert!(result.is_some());
@@ -636,7 +566,7 @@ mod tests {
             "respId": 1
         });
         let body = wrap_client_to_gre(&inner);
-        let entry = make_entry(&body);
+        let entry = unity_entry(&body);
         let result = try_parse(&entry, test_timestamp());
 
         assert!(result.is_some());
@@ -666,7 +596,7 @@ mod tests {
             "respId": 5
         });
         let body = wrap_client_to_gre(&inner);
-        let entry = make_entry(&body);
+        let entry = unity_entry(&body);
         let result = try_parse(&entry, test_timestamp());
 
         assert!(result.is_some());
@@ -699,7 +629,7 @@ mod tests {
             "respId": 3
         });
         let body = wrap_client_to_gre(&inner);
-        let entry = make_entry(&body);
+        let entry = unity_entry(&body);
         let result = try_parse(&entry, test_timestamp());
 
         assert!(result.is_some());
@@ -723,7 +653,7 @@ mod tests {
             "respId": 2
         });
         let body = wrap_client_to_gre(&inner);
-        let entry = make_entry(&body);
+        let entry = unity_entry(&body);
         let result = try_parse(&entry, test_timestamp());
 
         assert!(result.is_some());
@@ -749,7 +679,7 @@ mod tests {
             "respId": 4
         });
         let body = wrap_client_to_gre(&inner);
-        let entry = make_entry(&body);
+        let entry = unity_entry(&body);
         let result = try_parse(&entry, test_timestamp());
 
         assert!(result.is_some());
@@ -782,7 +712,7 @@ mod tests {
             "respId": 1
         });
         let body = wrap_client_to_gre(&inner);
-        let entry = make_entry(&body);
+        let entry = unity_entry(&body);
         let result = try_parse(&entry, test_timestamp());
 
         assert!(result.is_some());
@@ -820,7 +750,7 @@ mod tests {
             "respId": 1
         });
         let body = wrap_client_to_gre(&inner);
-        let entry = make_entry(&body);
+        let entry = unity_entry(&body);
         let result = try_parse(&entry, test_timestamp());
 
         assert!(result.is_some());
@@ -844,7 +774,7 @@ mod tests {
             "respId": 1
         });
         let body = wrap_client_to_gre(&inner);
-        let entry = make_entry(&body);
+        let entry = unity_entry(&body);
         let result = try_parse(&entry, test_timestamp());
 
         assert!(result.is_some());
@@ -872,7 +802,7 @@ mod tests {
             "respId": 1
         });
         let body = wrap_client_to_gre(&inner);
-        let entry = make_entry(&body);
+        let entry = unity_entry(&body);
         let result = try_parse(&entry, test_timestamp());
 
         assert!(result.is_some());
@@ -900,7 +830,7 @@ mod tests {
             "respId": 7
         });
         let body = wrap_client_to_gre(&inner);
-        let entry = make_entry(&body);
+        let entry = unity_entry(&body);
         let result = try_parse(&entry, test_timestamp());
 
         assert!(result.is_some());
@@ -943,7 +873,7 @@ mod tests {
             "[UnityCrossThreadLogger]2/25/2026 12:00:00 PM\n{}",
             serde_json::to_string_pretty(&envelope).unwrap_or_default()
         );
-        let entry = make_entry(&body);
+        let entry = unity_entry(&body);
         let result = try_parse(&entry, test_timestamp());
 
         assert!(result.is_some());
@@ -971,7 +901,7 @@ mod tests {
             "respId": 1
         });
         let body = wrap_client_to_gre(&inner);
-        let entry = make_entry(&body);
+        let entry = unity_entry(&body);
         let ts = test_timestamp();
         let result = try_parse(&entry, ts);
 
@@ -990,7 +920,7 @@ mod tests {
             "respId": 1
         });
         let body = wrap_client_to_gre(&inner);
-        let entry = make_entry(&body);
+        let entry = unity_entry(&body);
         let result = try_parse(&entry, test_timestamp());
 
         assert!(result.is_some());
@@ -1010,7 +940,7 @@ mod tests {
             "respId": 1
         });
         let body = wrap_client_to_gre(&inner);
-        let entry = make_entry(&body);
+        let entry = unity_entry(&body);
         let result = try_parse(&entry, test_timestamp());
 
         assert!(result.is_some());
@@ -1021,50 +951,6 @@ mod tests {
                 PerformanceClass::InteractiveDispatch
             );
         }
-    }
-
-    // -----------------------------------------------------------------------
-    // extract_json_from_body
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn test_extract_json_from_body_simple() {
-        let body = "some text {\"key\": \"value\"} more text";
-        let result = extract_json_from_body(body);
-        assert_eq!(result, Some("{\"key\": \"value\"}"));
-    }
-
-    #[test]
-    fn test_extract_json_from_body_nested() {
-        let body = "header\n{\"outer\": {\"inner\": 42}}";
-        let result = extract_json_from_body(body);
-        assert_eq!(result, Some("{\"outer\": {\"inner\": 42}}"));
-    }
-
-    #[test]
-    fn test_extract_json_from_body_no_json() {
-        let body = "no json here at all";
-        assert!(extract_json_from_body(body).is_none());
-    }
-
-    #[test]
-    fn test_extract_json_from_body_unclosed_brace() {
-        let body = "header {\"key\": \"value\"";
-        assert!(extract_json_from_body(body).is_none());
-    }
-
-    #[test]
-    fn test_extract_json_from_body_brace_in_string() {
-        let body = r#"text {"key": "value with { braces }"}"#;
-        let result = extract_json_from_body(body);
-        assert_eq!(result, Some(r#"{"key": "value with { braces }"}"#));
-    }
-
-    #[test]
-    fn test_extract_json_from_body_escaped_quote_in_string() {
-        let body = r#"prefix {"key": "val\"ue"}"#;
-        let result = extract_json_from_body(body);
-        assert_eq!(result, Some(r#"{"key": "val\"ue"}"#));
     }
 
     // -----------------------------------------------------------------------
@@ -1242,7 +1128,7 @@ mod tests {
               \"requestId\": 54321,\n\
               \"timestamp\": \"638456789012345678\"\n\
             }";
-        let entry = make_entry(body);
+        let entry = unity_entry(body);
         let result = try_parse(&entry, test_timestamp());
 
         assert!(result.is_some());
@@ -1280,7 +1166,7 @@ mod tests {
               \"requestId\": 67890,\n\
               \"timestamp\": \"638456789999999999\"\n\
             }";
-        let entry = make_entry(body);
+        let entry = unity_entry(body);
         let result = try_parse(&entry, test_timestamp());
 
         assert!(result.is_some());
@@ -1324,7 +1210,7 @@ mod tests {
               \"requestId\": 11111,\n\
               \"timestamp\": \"638456789555555555\"\n\
             }";
-        let entry = make_entry(body);
+        let entry = unity_entry(body);
         let result = try_parse(&entry, test_timestamp());
 
         assert!(result.is_some());
@@ -1353,7 +1239,7 @@ mod tests {
             "respId": 1
         });
         let body = wrap_client_to_gre(&inner);
-        let entry = make_entry(&body);
+        let entry = unity_entry(&body);
         let result = try_parse(&entry, test_timestamp());
 
         assert!(result.is_some());
@@ -1373,7 +1259,7 @@ mod tests {
             "gameStateId": 1
         });
         let body = wrap_client_to_gre(&inner);
-        let entry = make_entry(&body);
+        let entry = unity_entry(&body);
         let result = try_parse(&entry, test_timestamp());
 
         assert!(result.is_some());
@@ -1402,7 +1288,7 @@ mod tests {
             "[UnityCrossThreadLogger]2/25/2026 12:00:00 PM\n{}",
             serde_json::to_string_pretty(&envelope).unwrap_or_default()
         );
-        let entry = make_entry(&body);
+        let entry = unity_entry(&body);
         let result = try_parse(&entry, test_timestamp());
 
         assert!(result.is_some());
@@ -1427,7 +1313,7 @@ mod tests {
                 "respId": 1
             });
             let body = wrap_client_to_gre(&inner);
-            let entry = make_entry(&body);
+            let entry = unity_entry(&body);
             let result = try_parse(&entry, test_timestamp());
 
             assert!(result.is_some(), "Expected Some for {msg_type}");
@@ -1467,7 +1353,7 @@ mod tests {
             }
         });
         let body = wrap_client_to_gre_ui(&inner);
-        let entry = make_entry(&body);
+        let entry = unity_entry(&body);
         let result = try_parse(&entry, test_timestamp());
         assert!(result.is_some());
         if let Some(GameEvent::ClientAction(event)) = &result {
@@ -1484,7 +1370,7 @@ mod tests {
             }
         });
         let body = wrap_client_to_gre_ui(&inner);
-        let entry = make_entry(&body);
+        let entry = unity_entry(&body);
         let result = try_parse(&entry, test_timestamp());
         assert!(result.is_some());
         if let Some(GameEvent::ClientAction(event)) = &result {
@@ -1500,7 +1386,7 @@ mod tests {
             "uiMessage": { "onHover": {} }
         });
         let body = wrap_client_to_gre_ui(&inner);
-        let entry = make_entry(&body);
+        let entry = unity_entry(&body);
         let result = try_parse(&entry, test_timestamp());
         let event = result.as_ref().unwrap_or_else(|| unreachable!());
         assert!(!event.metadata().raw_bytes().is_empty());
@@ -1510,14 +1396,14 @@ mod tests {
     #[test]
     fn test_try_parse_ui_message_malformed_json_returns_none() {
         let body = "[UnityCrossThreadLogger]ClientToGREUIMessage\n{invalid json}";
-        let entry = make_entry(body);
+        let entry = unity_entry(body);
         assert!(try_parse(&entry, test_timestamp()).is_none());
     }
 
     #[test]
     fn test_try_parse_ui_message_no_json_returns_none() {
         let body = "[UnityCrossThreadLogger]ClientToGREUIMessage with no json";
-        let entry = make_entry(body);
+        let entry = unity_entry(body);
         assert!(try_parse(&entry, test_timestamp()).is_none());
     }
 
@@ -1533,7 +1419,7 @@ mod tests {
             }
         });
         let body = wrap_client_to_gre(&inner);
-        let entry = make_entry(&body);
+        let entry = unity_entry(&body);
         let result = try_parse(&entry, test_timestamp());
         assert!(result.is_some());
         if let Some(GameEvent::ClientAction(event)) = &result {

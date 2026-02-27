@@ -14,6 +14,7 @@
 
 use crate::events::{EventMetadata, GameEvent, SessionEvent};
 use crate::log::entry::LogEntry;
+use crate::parsers::api_common;
 
 /// Prefix that introduces account identity lines in the log.
 const ACCOUNT_UPDATE_PREFIX: &str = "Updated account. DisplayName:";
@@ -125,7 +126,7 @@ fn try_parse_authenticate_response(full_body: &str) -> Option<serde_json::Value>
     }
 
     // Try to extract JSON from the body (lines after the header line).
-    let json_body = extract_json_from_body(full_body);
+    let json_body = api_common::extract_json_from_body(full_body);
 
     if let Some(json_str) = json_body {
         match serde_json::from_str::<serde_json::Value>(json_str) {
@@ -158,50 +159,6 @@ fn try_match_front_door_close(content: &str) -> bool {
     content.contains(FRONT_DOOR_CLOSE_MARKER)
 }
 
-/// Extracts the first JSON object from a multi-line log body.
-///
-/// Scans for the first `{` character and finds the matching `}` using
-/// brace-depth counting that respects string literals.
-fn extract_json_from_body(body: &str) -> Option<&str> {
-    // Find the start of a JSON object in the body.
-    let json_start = body.find('{')?;
-    let candidate = &body[json_start..];
-
-    // Find the matching close brace by counting brace depth.
-    let mut depth: i32 = 0;
-    let mut in_string = false;
-    let mut escape_next = false;
-    let mut end_pos = None;
-
-    for (i, ch) in candidate.char_indices() {
-        if escape_next {
-            escape_next = false;
-            continue;
-        }
-        match ch {
-            '\\' if in_string => {
-                escape_next = true;
-            }
-            '"' => {
-                in_string = !in_string;
-            }
-            '{' if !in_string => {
-                depth += 1;
-            }
-            '}' if !in_string => {
-                depth -= 1;
-                if depth == 0 {
-                    end_pos = Some(i + 1);
-                    break;
-                }
-            }
-            _ => {}
-        }
-    }
-
-    end_pos.map(|end| &candidate[..end])
-}
-
 /// Recursively searches a JSON value for a `screenName` field.
 ///
 /// Checks the top level and one level of nesting (common in MTGA
@@ -231,40 +188,7 @@ fn find_screen_name(value: &serde_json::Value) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::log::entry::EntryHeader;
-    use chrono::{TimeZone, Utc};
-
-    /// Helper: build a UTC timestamp for tests.
-    ///
-    /// Uses `unwrap_or_default()` because `clippy::expect_used` is denied
-    /// crate-wide. The epoch fallback would visibly fail timestamp assertions.
-    fn test_timestamp() -> chrono::DateTime<Utc> {
-        Utc.with_ymd_and_hms(2026, 2, 25, 12, 0, 0)
-            .single()
-            .unwrap_or_default()
-    }
-
-    /// Helper: build a `LogEntry` with `UnityCrossThreadLogger` header.
-    fn unity_entry(body: &str) -> LogEntry {
-        LogEntry {
-            header: EntryHeader::UnityCrossThreadLogger,
-            body: body.to_owned(),
-        }
-    }
-
-    /// Helper: extract the JSON payload from a `GameEvent::Session` variant.
-    ///
-    /// Returns a static empty JSON value if the variant is not `Session`,
-    /// which will cause assertion failures that clearly indicate the wrong
-    /// variant was produced.
-    fn session_payload(event: &GameEvent) -> &serde_json::Value {
-        static EMPTY: std::sync::LazyLock<serde_json::Value> =
-            std::sync::LazyLock::new(|| serde_json::json!(null));
-        match event {
-            GameEvent::Session(e) => e.payload(),
-            _ => &EMPTY,
-        }
-    }
+    use crate::parsers::test_helpers::{session_payload, test_timestamp, unity_entry, EntryHeader};
 
     // -- Account update parsing -----------------------------------------------
 
@@ -629,33 +553,6 @@ mod tests {
         fn test_strip_header_prefix_no_bracket() {
             let result = strip_header_prefix("no bracket here");
             assert_eq!(result, "no bracket here");
-        }
-
-        #[test]
-        fn test_extract_json_from_body_simple() {
-            let body = "header line\n{\"key\": \"value\"}";
-            let json = extract_json_from_body(body);
-            assert_eq!(json, Some("{\"key\": \"value\"}"));
-        }
-
-        #[test]
-        fn test_extract_json_from_body_nested() {
-            let body = "header\n{\"outer\": {\"inner\": 1}}";
-            let json = extract_json_from_body(body);
-            assert_eq!(json, Some("{\"outer\": {\"inner\": 1}}"));
-        }
-
-        #[test]
-        fn test_extract_json_from_body_no_json() {
-            let body = "no json here at all";
-            assert!(extract_json_from_body(body).is_none());
-        }
-
-        #[test]
-        fn test_extract_json_from_body_with_string_braces() {
-            let body = "header\n{\"msg\": \"hello {world}\"}";
-            let json = extract_json_from_body(body);
-            assert_eq!(json, Some("{\"msg\": \"hello {world}\"}"));
         }
 
         #[test]
