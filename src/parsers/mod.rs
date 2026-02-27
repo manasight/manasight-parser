@@ -4,7 +4,6 @@ pub mod client_actions;
 pub mod collection;
 pub mod draft;
 pub mod event_lifecycle;
-pub mod game_result;
 pub mod gre;
 pub mod inventory;
 pub mod match_state;

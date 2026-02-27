@@ -85,10 +85,6 @@ fn all_parsers() -> Vec<NamedParser> {
             func: parsers::client_actions::try_parse,
         },
         NamedParser {
-            name: "game_result",
-            func: parsers::game_result::try_parse,
-        },
-        NamedParser {
             name: "draft_bot",
             func: parsers::draft::bot::try_parse,
         },
