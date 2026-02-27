@@ -245,6 +245,45 @@ pub enum PerformanceClass {
     PostGameBatch,
 }
 
+impl PerformanceClass {
+    /// Returns the numeric class identifier (1, 2, or 3).
+    ///
+    /// Useful for logging, metrics, and wire-format tagging where a compact
+    /// integer representation is preferred over the enum variant name.
+    pub fn as_class_number(&self) -> u8 {
+        match self {
+            Self::InteractiveDispatch => 1,
+            Self::DurablePerEvent => 2,
+            Self::PostGameBatch => 3,
+        }
+    }
+
+    /// Returns `true` if events in this class must be persisted to durable
+    /// storage (disk queue or disk-backed buffer) before being considered
+    /// processed.
+    ///
+    /// Class 2 events are individually persisted to a disk queue for
+    /// per-event upload. Class 3 events trigger batch assembly from a
+    /// disk-backed game buffer. Class 1 events are local-only and do not
+    /// require durable storage (though they are also accumulated into the
+    /// Class 3 buffer asynchronously).
+    pub fn requires_durable_storage(&self) -> bool {
+        match self {
+            Self::InteractiveDispatch => false,
+            Self::DurablePerEvent | Self::PostGameBatch => true,
+        }
+    }
+
+    /// Returns `true` if this class triggers post-game batch assembly.
+    ///
+    /// Only Class 3 (`PostGameBatch`) triggers the assembly and upload of
+    /// the accumulated game buffer. Downstream consumers use this to know
+    /// when to finalize and ship the game record.
+    pub fn is_batch_trigger(&self) -> bool {
+        matches!(self, Self::PostGameBatch)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // EventMetadata
 // ---------------------------------------------------------------------------
@@ -754,6 +793,78 @@ mod tests {
             PerformanceClass::DurablePerEvent,
             PerformanceClass::PostGameBatch
         );
+    }
+
+    #[test]
+    fn test_performance_class_as_class_number_interactive_dispatch_returns_1() {
+        assert_eq!(PerformanceClass::InteractiveDispatch.as_class_number(), 1);
+    }
+
+    #[test]
+    fn test_performance_class_as_class_number_durable_per_event_returns_2() {
+        assert_eq!(PerformanceClass::DurablePerEvent.as_class_number(), 2);
+    }
+
+    #[test]
+    fn test_performance_class_as_class_number_post_game_batch_returns_3() {
+        assert_eq!(PerformanceClass::PostGameBatch.as_class_number(), 3);
+    }
+
+    #[test]
+    fn test_performance_class_requires_durable_storage_class1_false() {
+        assert!(!PerformanceClass::InteractiveDispatch.requires_durable_storage());
+    }
+
+    #[test]
+    fn test_performance_class_requires_durable_storage_class2_true() {
+        assert!(PerformanceClass::DurablePerEvent.requires_durable_storage());
+    }
+
+    #[test]
+    fn test_performance_class_requires_durable_storage_class3_true() {
+        assert!(PerformanceClass::PostGameBatch.requires_durable_storage());
+    }
+
+    #[test]
+    fn test_performance_class_is_batch_trigger_class1_false() {
+        assert!(!PerformanceClass::InteractiveDispatch.is_batch_trigger());
+    }
+
+    #[test]
+    fn test_performance_class_is_batch_trigger_class2_false() {
+        assert!(!PerformanceClass::DurablePerEvent.is_batch_trigger());
+    }
+
+    #[test]
+    fn test_performance_class_is_batch_trigger_class3_true() {
+        assert!(PerformanceClass::PostGameBatch.is_batch_trigger());
+    }
+
+    #[test]
+    fn test_performance_class_class_number_matches_event_mapping() {
+        // Verify the class numbers align with the event-to-class mapping:
+        // Class 1 events map to InteractiveDispatch (number 1)
+        // Class 2 events map to DurablePerEvent (number 2)
+        // Class 3 events map to PostGameBatch (number 3)
+        let events = all_variants();
+        let expected_numbers: Vec<u8> = vec![
+            1, // GameState
+            1, // ClientAction
+            1, // MatchState
+            2, // DraftBot
+            2, // DraftHuman
+            2, // DraftComplete
+            2, // EventLifecycle
+            2, // Session
+            2, // Rank
+            2, // Collection
+            2, // Inventory
+            3, // GameResult
+        ];
+        assert_eq!(events.len(), expected_numbers.len());
+        for (event, expected_num) in events.iter().zip(expected_numbers.iter()) {
+            assert_eq!(event.performance_class().as_class_number(), *expected_num);
+        }
     }
 
     // -- Serialization round-trip --
