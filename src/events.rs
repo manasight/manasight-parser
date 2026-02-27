@@ -166,24 +166,24 @@ pub enum GameEvent {
     /// Class 2 — durable per-event.
     DraftComplete(DraftCompleteEvent),
 
-    /// Event lifecycle: join, set deck, get courses, claim prize.
-    /// Class 2 — durable per-event.
+    /// Event lifecycle: `==> EventJoin`, `==> EventClaimPrize`,
+    /// `==> EventEnterPairing`. Class 2 — durable per-event.
     EventLifecycle(EventLifecycleEvent),
 
     /// Session: login, account identity, logout.
     /// Class 2 — durable per-event.
     Session(SessionEvent),
 
-    /// Rank snapshot (`Rank_GetCombinedRankInfo`).
+    /// Rank snapshot (`<== RankGetCombinedRankInfo`).
     /// Class 2 — durable per-event.
     Rank(RankEvent),
 
-    /// Card collection snapshot (`PlayerInventory.GetPlayerCardsV3`).
+    /// Card collection snapshot (`<== StartHook` with `PlayerCards`).
     /// Class 2 — durable per-event.
     Collection(CollectionEvent),
 
-    /// Inventory snapshot (`DTO_InventoryInfo`): currency, wildcards, etc.
-    /// Class 2 — durable per-event.
+    /// Inventory snapshot (`<== StartHook` with `InventoryInfo`):
+    /// currency, wildcards, etc. Class 2 — durable per-event.
     Inventory(InventoryEvent),
 
     /// Game result (`GameStage_GameOver` from GRE `GameStateMessage`).
@@ -390,8 +390,8 @@ define_event! {
 define_event! {
     /// Event lifecycle transitions.
     ///
-    /// Covers `Event_Join`, `Event_SetDeck`, `Event_GetCourses`, and
-    /// `Event_ClaimPrize`. Each is independently meaningful.
+    /// Covers `==> EventJoin`, `==> EventClaimPrize`, and
+    /// `==> EventEnterPairing`. Each is independently meaningful.
     EventLifecycleEvent
 }
 
@@ -407,7 +407,7 @@ define_event! {
 define_event! {
     /// Rank snapshot.
     ///
-    /// Parsed from `Rank_GetCombinedRankInfo`. Infrequent, small,
+    /// Parsed from `<== RankGetCombinedRankInfo`. Infrequent, small,
     /// independently useful.
     RankEvent
 }
@@ -415,16 +415,16 @@ define_event! {
 define_event! {
     /// Card collection snapshot.
     ///
-    /// Parsed from `PlayerInventory.GetPlayerCardsV3`. Enables future
-    /// deck building features. Best-effort collection.
+    /// Parsed from `<== StartHook` responses containing `PlayerCards`.
+    /// Enables future deck building features. Best-effort collection.
     CollectionEvent
 }
 
 define_event! {
     /// Inventory snapshot.
     ///
-    /// Parsed from `DTO_InventoryInfo`. Contains currency, wildcards,
-    /// boosters, and vault progress.
+    /// Parsed from `<== StartHook` responses containing `InventoryInfo`.
+    /// Contains currency, wildcards, boosters, and vault progress.
     InventoryEvent
 }
 
