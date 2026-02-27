@@ -52,6 +52,8 @@ struct ParserStats {
 /// Aggregated report for a single log file.
 struct FileReport {
     filename: String,
+    /// Set when the file could not be read; remaining fields are zeroed.
+    read_error: bool,
     total_entries: usize,
     parser_stats: Vec<(&'static str, ParserStats)>,
     unclaimed: usize,
@@ -149,11 +151,25 @@ fn try_extract_timestamp(body: &str) -> Option<DateTime<Utc>> {
 
 /// Processes a single log file through all parsers and returns a report.
 fn process_file(path: &Path, parsers: &[NamedParser]) -> FileReport {
-    let content = std::fs::read_to_string(path).unwrap_or_default();
     let filename = path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
+
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return FileReport {
+            filename,
+            read_error: true,
+            total_entries: 0,
+            parser_stats: parsers
+                .iter()
+                .map(|p| (p.name, ParserStats::default()))
+                .collect(),
+            unclaimed: 0,
+            double_claims: 0,
+            timestamp_failures: 0,
+        };
+    };
 
     // Split content into entries via LineBuffer.
     let mut buffer = LineBuffer::new();
@@ -214,6 +230,7 @@ fn process_file(path: &Path, parsers: &[NamedParser]) -> FileReport {
 
     FileReport {
         filename,
+        read_error: false,
         total_entries,
         parser_stats: stats,
         unclaimed,
@@ -235,6 +252,16 @@ fn format_report(reports: &[FileReport]) -> String {
     let mut total_double_claims: usize = 0;
 
     for report in reports {
+        if report.read_error {
+            let _ = writeln!(
+                out,
+                "File: {} — READ ERROR (unreadable file)",
+                report.filename
+            );
+            let _ = writeln!(out);
+            continue;
+        }
+
         let _ = writeln!(
             out,
             "File: {} ({} entries)",
@@ -328,6 +355,7 @@ fn smoke_test_real_logs() {
     let _ = std::io::Write::write_all(&mut std::io::stdout(), report.as_bytes());
 
     // Aggregate totals for assertions.
+    let read_errors: usize = reports.iter().filter(|r| r.read_error).count();
     let total_panics: usize = reports
         .iter()
         .flat_map(|r| r.parser_stats.iter())
@@ -335,6 +363,10 @@ fn smoke_test_real_logs() {
         .sum();
     let total_double_claims: usize = reports.iter().map(|r| r.double_claims).sum();
 
+    assert_eq!(
+        read_errors, 0,
+        "unreadable log files detected \u{2014} see report above"
+    );
     assert_eq!(
         total_panics, 0,
         "parser panics detected \u{2014} see report above"

@@ -23,16 +23,23 @@ jobs:
       - name: Install Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1
 
-      - name: Resolve log source URL
+      - name: Resolve log source
         id: resolve-url
+        env:
+          INPUT_LOGS_URL: ${{ inputs.logs_url }}
+          SECRET_LOGS_URL: ${{ secrets.MANASIGHT_TEST_LOGS_URL }}
         run: |
-          URL="${{ inputs.logs_url || secrets.MANASIGHT_TEST_LOGS_URL }}"
+          # Determine which URL to use (input takes precedence over secret).
+          # Compute a stable cache key from the URL so that a new URL gets a
+          # fresh cache rather than reusing a hit from a previous URL.
+          URL="${INPUT_LOGS_URL:-$SECRET_LOGS_URL}"
           if [ -z "$URL" ]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
             echo "No log source configured — skipping smoke test"
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
-            echo "url=$URL" >> "$GITHUB_OUTPUT"
+            URL_HASH="$(echo -n "$URL" | sha256sum | cut -c1-16)"
+            echo "cache_key=smoke-test-logs-v1-${URL_HASH}" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Cache test logs
@@ -41,13 +48,15 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /tmp/test-logs
-          key: smoke-test-logs-v1
+          key: ${{ steps.resolve-url.outputs.cache_key }}
 
       - name: Download test logs
         if: steps.resolve-url.outputs.skip == 'false' && steps.cache-logs.outputs.cache-hit != 'true'
+        env:
+          LOGS_URL: ${{ inputs.logs_url || secrets.MANASIGHT_TEST_LOGS_URL }}
         run: |
           mkdir -p /tmp/test-logs
-          curl -fsSL "${{ steps.resolve-url.outputs.url }}" | tar -xz -C /tmp/test-logs
+          curl -fsSL "$LOGS_URL" | tar -xz -C /tmp/test-logs
           echo "Downloaded logs:"
           ls -lh /tmp/test-logs/
 
