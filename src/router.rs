@@ -30,6 +30,7 @@ use crate::events::GameEvent;
 use crate::log::entry::LogEntry;
 use crate::log::timestamp::parse_log_timestamp;
 use crate::parsers;
+use crate::util::truncate_for_log;
 
 // ---------------------------------------------------------------------------
 // RouterStats
@@ -248,19 +249,6 @@ fn dispatch_to_parsers(entry: &LogEntry, timestamp: Option<DateTime<Utc>>) -> Op
         .or_else(|| parsers::rank::try_parse(entry, timestamp))
         .or_else(|| parsers::collection::try_parse(entry, timestamp))
         .or_else(|| parsers::inventory::try_parse(entry, timestamp))
-}
-
-/// Truncates a string for safe inclusion in log messages.
-fn truncate_for_log(s: &str, max_len: usize) -> &str {
-    if s.len() <= max_len {
-        s
-    } else {
-        let mut end = max_len;
-        while end > 0 && !s.is_char_boundary(end) {
-            end -= 1;
-        }
-        &s[..end]
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -829,27 +817,6 @@ mod tests {
             let result = router.route(&entry);
             assert!(result.is_some());
             assert!(matches!(result, Some(GameEvent::GameState(_))));
-        }
-    }
-
-    // -- truncate_for_log ----------------------------------------------------
-
-    mod truncation {
-        use super::*;
-
-        #[test]
-        fn test_truncate_for_log_short_string_unchanged() {
-            assert_eq!(truncate_for_log("hello", 10), "hello");
-        }
-
-        #[test]
-        fn test_truncate_for_log_exact_length_unchanged() {
-            assert_eq!(truncate_for_log("hello", 5), "hello");
-        }
-
-        #[test]
-        fn test_truncate_for_log_long_string_truncated() {
-            assert_eq!(truncate_for_log("hello world", 5), "hello");
         }
     }
 }
