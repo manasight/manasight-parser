@@ -1,14 +1,20 @@
-//! Real-log smoke test harness with per-parser attribution.
+//! Multi-level real-log smoke test harness.
 //!
-//! Feeds saved Player.log files through every implemented parser and produces
-//! a per-parser report: claim counts, panics, double claims, unclaimed
-//! entries, and a per-event-type breakdown.
+//! Three levels of smoke testing, each progressively more integrated:
+//!
+//! 1. **Parser-only** (`smoke_test_real_logs`): feeds entries through
+//!    individual `try_parse` functions with per-parser attribution.
+//! 2. **Router-level** (`smoke_test_router_real_logs`): feeds entries
+//!    through `Router::route()` which handles timestamp extraction and
+//!    parser dispatch internally.
+//! 3. **Stream-level** (`smoke_test_stream_real_logs`): full async
+//!    pipeline via `MtgaEventStream::start_once()`.
 //!
 //! # Gating
 //!
-//! The test is gated on the `MANASIGHT_TEST_LOGS` environment variable.
+//! All tests are gated on the `MANASIGHT_TEST_LOGS` environment variable.
 //! When **set**, it points to a directory of `.log` files that are processed.
-//! When **unset**, the test returns early (passes) with a skip message.
+//! When **unset**, the tests return early (pass) with a skip message.
 //!
 //! ```bash
 //! MANASIGHT_TEST_LOGS=/path/to/logs cargo test smoke -- --nocapture
@@ -24,6 +30,8 @@ use manasight_parser::events::GameEvent;
 use manasight_parser::log::entry::{LineBuffer, LogEntry};
 use manasight_parser::log::timestamp::parse_log_timestamp;
 use manasight_parser::parsers;
+use manasight_parser::router::Router;
+use manasight_parser::stream::MtgaEventStream;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -381,16 +389,60 @@ fn format_report(reports: &[FileReport]) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Test entry point
+// Shared helpers
+// ---------------------------------------------------------------------------
+
+/// Returns the logs directory from `MANASIGHT_TEST_LOGS`, or `None` if unset.
+///
+/// When `None`, callers should print a skip message and return early.
+fn logs_dir_or_skip(test_name: &str) -> Option<PathBuf> {
+    if let Ok(dir) = std::env::var(ENV_VAR) {
+        Some(PathBuf::from(dir))
+    } else {
+        let msg = format!("{ENV_VAR} not set \u{2014} skipping {test_name}\n");
+        let _ = std::io::Write::write_all(&mut std::io::stdout(), msg.as_bytes());
+        None
+    }
+}
+
+/// Discovers `.log` files in a directory, sorted alphabetically.
+fn discover_log_files(dir: &Path) -> Vec<PathBuf> {
+    let mut log_files: Vec<PathBuf> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) == Some("log") {
+                log_files.push(path);
+            }
+        }
+    }
+    log_files.sort();
+    log_files
+}
+
+/// Reads a log file and splits it into `LogEntry` objects via `LineBuffer`.
+fn read_entries(path: &Path) -> Option<Vec<LogEntry>> {
+    let content = std::fs::read_to_string(path).ok()?;
+    let mut buffer = LineBuffer::new();
+    let mut entries = Vec::new();
+    for line in content.lines() {
+        if let Some(entry) = buffer.push_line(line) {
+            entries.push(entry);
+        }
+    }
+    if let Some(entry) = buffer.flush() {
+        entries.push(entry);
+    }
+    Some(entries)
+}
+
+// ---------------------------------------------------------------------------
+// Test entry point: Parser-only (Level 1)
 // ---------------------------------------------------------------------------
 
 #[test]
 fn smoke_test_real_logs() {
-    let logs_dir = if let Ok(dir) = std::env::var(ENV_VAR) {
-        PathBuf::from(dir)
-    } else {
-        let msg = format!("{ENV_VAR} not set \u{2014} skipping smoke test\n");
-        let _ = std::io::Write::write_all(&mut std::io::stdout(), msg.as_bytes());
+    let Some(logs_dir) = logs_dir_or_skip("smoke_test_real_logs") else {
         return;
     };
 
@@ -400,17 +452,7 @@ fn smoke_test_real_logs() {
         logs_dir.display(),
     );
 
-    // Discover .log files (excludes .log.gz).
-    let mut log_files: Vec<PathBuf> = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(&logs_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) == Some("log") {
-                log_files.push(path);
-            }
-        }
-    }
-    log_files.sort();
+    let log_files = discover_log_files(&logs_dir);
 
     assert!(
         !log_files.is_empty(),
@@ -450,4 +492,228 @@ fn smoke_test_real_logs() {
         total_double_claims, 0,
         "double claims detected \u{2014} see report above"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Router-level smoke test (Level 2)
+// ---------------------------------------------------------------------------
+
+/// Report for a single file processed through the Router.
+struct RouterFileReport {
+    filename: String,
+    total_entries: usize,
+    routed: u64,
+    unknown: u64,
+    timestamp_failures: u64,
+    event_type_counts: HashMap<&'static str, usize>,
+}
+
+/// Processes a single log file through `Router::route()`.
+fn process_file_router(path: &Path) -> Option<RouterFileReport> {
+    let filename = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+
+    let entries = read_entries(path)?;
+    let total_entries = entries.len();
+    let router = Router::new();
+    let mut event_type_counts: HashMap<&'static str, usize> = HashMap::new();
+
+    for entry in &entries {
+        if let Some(event) = router.route(entry) {
+            *event_type_counts
+                .entry(event_type_name(&event))
+                .or_insert(0) += 1;
+        }
+    }
+
+    Some(RouterFileReport {
+        filename,
+        total_entries,
+        routed: router.stats().routed_count(),
+        unknown: router.stats().unknown_count(),
+        timestamp_failures: router.stats().timestamp_failure_count(),
+        event_type_counts,
+    })
+}
+
+/// Formats router-level reports into a human-readable summary.
+fn format_router_report(reports: &[RouterFileReport]) -> String {
+    let mut out = String::new();
+    let _ = writeln!(out, "\n=== Router-Level Smoke Test Report ===\n");
+
+    for report in reports {
+        let _ = writeln!(
+            out,
+            "File: {} ({} entries)",
+            report.filename, report.total_entries,
+        );
+        let _ = writeln!(out, "  {:<18} {:>6}", "routed:", report.routed);
+        let _ = writeln!(out, "  {:<18} {:>6}", "unknown:", report.unknown);
+        let _ = writeln!(
+            out,
+            "  {:<18} {:>6}",
+            "ts_failures:", report.timestamp_failures,
+        );
+        let _ = writeln!(out, "  Event type breakdown:");
+        let mut sorted_types: Vec<(&&'static str, &usize)> =
+            report.event_type_counts.iter().collect();
+        sorted_types.sort_by_key(|(name, _)| **name);
+        for (type_name, count) in &sorted_types {
+            let label = format!("    {type_name}:");
+            let _ = writeln!(out, "  {label:<18} {count:>6}");
+        }
+        if sorted_types.is_empty() {
+            let _ = writeln!(out, "    (none)");
+        }
+        let _ = writeln!(out);
+    }
+
+    let _ = writeln!(out, "=== PASS ===");
+    out
+}
+
+#[test]
+fn smoke_test_router_real_logs() {
+    let Some(logs_dir) = logs_dir_or_skip("smoke_test_router_real_logs") else {
+        return;
+    };
+
+    assert!(
+        logs_dir.is_dir(),
+        "{ENV_VAR} is not a directory: {}",
+        logs_dir.display(),
+    );
+
+    let log_files = discover_log_files(&logs_dir);
+
+    assert!(
+        !log_files.is_empty(),
+        "no .log files found in {}",
+        logs_dir.display(),
+    );
+
+    let mut reports: Vec<RouterFileReport> = Vec::new();
+    for path in &log_files {
+        let report = process_file_router(path);
+        assert!(
+            report.is_some(),
+            "failed to read log file: {}",
+            path.display()
+        );
+        if let Some(r) = report {
+            reports.push(r);
+        }
+    }
+
+    let report = format_router_report(&reports);
+    let _ = std::io::Write::write_all(&mut std::io::stdout(), report.as_bytes());
+}
+
+// ---------------------------------------------------------------------------
+// Stream-level smoke test (Level 3)
+// ---------------------------------------------------------------------------
+
+/// Report for a single file processed through the full `MtgaEventStream` pipeline.
+struct StreamFileReport {
+    filename: String,
+    total_events: usize,
+    event_type_counts: HashMap<&'static str, usize>,
+}
+
+/// Processes a single log file through the full async pipeline.
+///
+/// Returns `None` if the file cannot be opened.
+async fn process_file_stream(path: &Path) -> Option<StreamFileReport> {
+    let filename = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+
+    let Ok((_stream, mut subscriber)) = MtgaEventStream::start_once(path).await else {
+        return None;
+    };
+
+    let mut event_type_counts: HashMap<&'static str, usize> = HashMap::new();
+    let mut total_events: usize = 0;
+
+    while let Some(event) = subscriber.recv().await {
+        total_events += 1;
+        *event_type_counts
+            .entry(event_type_name(&event))
+            .or_insert(0) += 1;
+    }
+
+    Some(StreamFileReport {
+        filename,
+        total_events,
+        event_type_counts,
+    })
+}
+
+/// Formats stream-level reports into a human-readable summary.
+fn format_stream_report(reports: &[StreamFileReport]) -> String {
+    let mut out = String::new();
+    let _ = writeln!(out, "\n=== Stream-Level Smoke Test Report ===\n");
+
+    for report in reports {
+        let _ = writeln!(
+            out,
+            "File: {} ({} events)",
+            report.filename, report.total_events,
+        );
+        let _ = writeln!(out, "  Event type breakdown:");
+        let mut sorted_types: Vec<(&&'static str, &usize)> =
+            report.event_type_counts.iter().collect();
+        sorted_types.sort_by_key(|(name, _)| **name);
+        for (type_name, count) in &sorted_types {
+            let label = format!("    {type_name}:");
+            let _ = writeln!(out, "  {label:<18} {count:>6}");
+        }
+        if sorted_types.is_empty() {
+            let _ = writeln!(out, "    (none)");
+        }
+        let _ = writeln!(out);
+    }
+
+    let _ = writeln!(out, "=== PASS ===");
+    out
+}
+
+#[tokio::test]
+async fn smoke_test_stream_real_logs() {
+    let Some(logs_dir) = logs_dir_or_skip("smoke_test_stream_real_logs") else {
+        return;
+    };
+
+    assert!(
+        logs_dir.is_dir(),
+        "{ENV_VAR} is not a directory: {}",
+        logs_dir.display(),
+    );
+
+    let log_files = discover_log_files(&logs_dir);
+
+    assert!(
+        !log_files.is_empty(),
+        "no .log files found in {}",
+        logs_dir.display(),
+    );
+
+    let mut reports: Vec<StreamFileReport> = Vec::new();
+    for path in &log_files {
+        let report = process_file_stream(path).await;
+        assert!(
+            report.is_some(),
+            "failed to open log file: {}",
+            path.display()
+        );
+        if let Some(r) = report {
+            reports.push(r);
+        }
+    }
+
+    let report = format_stream_report(&reports);
+    let _ = std::io::Write::write_all(&mut std::io::stdout(), report.as_bytes());
 }
