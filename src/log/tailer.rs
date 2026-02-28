@@ -193,41 +193,6 @@ impl FileTailer {
         })
     }
 
-    /// Opens a log file for one-shot reading from the beginning.
-    ///
-    /// Like [`open_from_start`](Self::open_from_start), but marks the
-    /// tailer for one-shot mode. Use [`run_once`](Self::run_once) to
-    /// read the entire file and exit cleanly at EOF instead of polling
-    /// indefinitely.
-    ///
-    /// This is useful for batch processing complete log files (e.g.,
-    /// smoke tests, replay analysis, or importing `Player-prev.log`).
-    ///
-    /// # Errors
-    ///
-    /// Returns [`TailerError::Io`] if the file cannot be opened.
-    pub async fn open_once(path: &Path) -> Result<Self, TailerError> {
-        let file = tokio::fs::File::open(path)
-            .await
-            .map_err(|source| TailerError::Io {
-                path: path.to_path_buf(),
-                source,
-            })?;
-
-        ::log::info!("opened log file for one-shot reading: {}", path.display());
-
-        Ok(Self {
-            path: path.to_path_buf(),
-            file,
-            offset: 0,
-            last_event_at: None,
-            line_buffer: LineBuffer::new(),
-            partial_line: String::new(),
-            read_buf: vec![0u8; READ_BUFFER_CAPACITY],
-            poll_interval_ms: DEFAULT_POLL_INTERVAL_MS,
-        })
-    }
-
     /// Sets the poll interval in milliseconds.
     ///
     /// The default is 50 ms. Values below 10 ms are clamped to 10 ms
@@ -441,9 +406,8 @@ impl FileTailer {
     /// replay analysis, `Player-prev.log` imports) but not for
     /// memory-constrained streaming of very large files.
     ///
-    /// Intended for one-shot tailers created via
-    /// [`open_once`](Self::open_once), but works with any tailer opened
-    /// from the start of a file.
+    /// Works with any tailer opened from the start of a file via
+    /// [`open_from_start`](Self::open_from_start).
     ///
     /// # Errors
     ///
@@ -576,34 +540,6 @@ mod tests {
         }
     }
 
-    // -- open_once ----------------------------------------------------------
-
-    mod open_once {
-        use super::*;
-
-        #[tokio::test]
-        async fn test_open_once_offset_is_zero() -> TestResult {
-            let f = temp_log("existing content\n")?;
-            let tailer = FileTailer::open_once(f.path()).await?;
-            assert_eq!(tailer.offset(), 0);
-            Ok(())
-        }
-
-        #[tokio::test]
-        async fn test_open_once_nonexistent_file_returns_error() {
-            let result = FileTailer::open_once(Path::new("/nonexistent/Player.log")).await;
-            assert!(result.is_err());
-        }
-
-        #[tokio::test]
-        async fn test_open_once_path_preserved() -> TestResult {
-            let f = temp_log("")?;
-            let tailer = FileTailer::open_once(f.path()).await?;
-            assert_eq!(tailer.path(), f.path());
-            Ok(())
-        }
-    }
-
     // -- run_once -----------------------------------------------------------
 
     mod run_once_tests {
@@ -616,7 +552,7 @@ mod tests {
                  [UnityCrossThreadLogger] Event2\n\
                  [UnityCrossThreadLogger] Event3\n",
             )?;
-            let mut tailer = FileTailer::open_once(f.path()).await?;
+            let mut tailer = FileTailer::open_from_start(f.path()).await?;
             let entries = tailer.run_once().await?;
             // 3 headers: Event1 flushed by Event2, Event2 flushed by Event3,
             // Event3 flushed by run_once's flush().
@@ -630,7 +566,7 @@ mod tests {
         #[tokio::test]
         async fn test_run_once_empty_file_returns_empty() -> TestResult {
             let f = temp_log("")?;
-            let mut tailer = FileTailer::open_once(f.path()).await?;
+            let mut tailer = FileTailer::open_from_start(f.path()).await?;
             let entries = tailer.run_once().await?;
             assert!(entries.is_empty());
             Ok(())
@@ -639,7 +575,7 @@ mod tests {
         #[tokio::test]
         async fn test_run_once_single_entry_flushed() -> TestResult {
             let f = temp_log("[UnityCrossThreadLogger] Only\n")?;
-            let mut tailer = FileTailer::open_once(f.path()).await?;
+            let mut tailer = FileTailer::open_from_start(f.path()).await?;
             let entries = tailer.run_once().await?;
             assert_eq!(entries.len(), 1);
             assert!(entries[0].body.contains("Only"));
@@ -653,7 +589,7 @@ mod tests {
                  {\"key\": \"value\"}\n\
                  [UnityCrossThreadLogger] Event2\n",
             )?;
-            let mut tailer = FileTailer::open_once(f.path()).await?;
+            let mut tailer = FileTailer::open_from_start(f.path()).await?;
             let entries = tailer.run_once().await?;
             assert_eq!(entries.len(), 2);
             assert!(entries[0].body.contains("key"));
@@ -679,7 +615,7 @@ mod tests {
                 "[UnityCrossThreadLogger] Event1\n\
                  [UnityCrossThreadLogger] Event2",
             )?;
-            let mut tailer = FileTailer::open_once(f.path()).await?;
+            let mut tailer = FileTailer::open_from_start(f.path()).await?;
             let entries = tailer.run_once().await?;
             assert_eq!(entries.len(), 2);
             assert!(entries[0].body.contains("Event1"));

@@ -128,10 +128,10 @@ impl MtgaEventStream {
 
     /// Starts a one-shot event stream that reads an entire log file and exits.
     ///
-    /// Opens the file via [`FileTailer::open_once`], reads all entries,
-    /// routes them through the parser dispatch chain, and sends recognized
-    /// events to the event bus. The pipeline stops automatically at EOF
-    /// rather than polling indefinitely.
+    /// Opens the file via [`FileTailer::open_from_start`], reads all
+    /// entries, routes them through the parser dispatch chain, and sends
+    /// recognized events to the event bus. The pipeline stops
+    /// automatically at EOF rather than polling indefinitely.
     ///
     /// This is useful for batch processing complete log files (smoke tests,
     /// replay analysis, importing `Player-prev.log`).
@@ -145,7 +145,7 @@ impl MtgaEventStream {
     ///
     /// Returns [`StreamError::Tailer`] if the log file cannot be opened.
     pub async fn start_once(log_path: &Path) -> Result<(Self, Subscriber), StreamError> {
-        let tailer = FileTailer::open_once(log_path).await?;
+        let tailer = FileTailer::open_from_start(log_path).await?;
         let bus = EventBus::with_default_capacity();
         let subscriber = bus.subscribe();
         let router = Router::new();
