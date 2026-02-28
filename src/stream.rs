@@ -409,7 +409,7 @@ mod tests {
     #[tokio::test]
     async fn test_start_once_nonexistent_file_returns_error() {
         let result = MtgaEventStream::start_once(Path::new("/nonexistent/Player.log")).await;
-        assert!(result.is_err());
+        assert!(matches!(result, Err(StreamError::Tailer(_))));
     }
 
     #[tokio::test]
