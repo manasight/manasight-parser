@@ -16,6 +16,8 @@
 
 use regex::Regex;
 
+use crate::util::truncate_for_log;
+
 /// The two known log entry header prefixes in MTG Arena's `Player.log`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -190,20 +192,6 @@ impl LineBuffer {
 impl Default for LineBuffer {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-/// Truncates a string for safe inclusion in log messages.
-fn truncate_for_log(s: &str, max_len: usize) -> &str {
-    if s.len() <= max_len {
-        s
-    } else {
-        // Find a valid UTF-8 boundary at or before `max_len`.
-        let mut end = max_len;
-        while end > 0 && !s.is_char_boundary(end) {
-            end -= 1;
-        }
-        &s[..end]
     }
 }
 
@@ -640,41 +628,6 @@ mod tests {
                 assert_eq!(e.header, EntryHeader::UnityCrossThreadLogger);
                 assert_eq!(e.body, format!("[UnityCrossThreadLogger] Event{i}"));
             }
-        }
-    }
-
-    // -- truncate_for_log ---------------------------------------------------
-
-    mod truncation {
-        use super::*;
-
-        #[test]
-        fn test_truncate_for_log_short_string_unchanged() {
-            assert_eq!(truncate_for_log("hello", 10), "hello");
-        }
-
-        #[test]
-        fn test_truncate_for_log_exact_length_unchanged() {
-            assert_eq!(truncate_for_log("hello", 5), "hello");
-        }
-
-        #[test]
-        fn test_truncate_for_log_long_string_truncated() {
-            assert_eq!(truncate_for_log("hello world", 5), "hello");
-        }
-
-        #[test]
-        fn test_truncate_for_log_multibyte_safe() {
-            // "café" is 5 bytes (é is 2 bytes). Truncating at 4 should
-            // not split the é.
-            let s = "café";
-            let result = truncate_for_log(s, 4);
-            assert_eq!(result, "caf");
-        }
-
-        #[test]
-        fn test_truncate_for_log_empty_string() {
-            assert_eq!(truncate_for_log("", 10), "");
         }
     }
 }

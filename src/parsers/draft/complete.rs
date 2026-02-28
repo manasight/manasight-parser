@@ -28,10 +28,13 @@ const COMPLETE_DRAFT_MARKER: &str = "DraftCompleteDraft";
 /// Returns `Some(GameEvent::DraftComplete(_))` if the entry matches the
 /// `DraftCompleteDraft` signature, or `None` if it does not match.
 ///
-/// The `timestamp` is used to construct [`EventMetadata`] for the resulting
-/// event. Callers are responsible for parsing the timestamp from the log
-/// entry header before invoking this function.
-pub fn try_parse(entry: &LogEntry, timestamp: chrono::DateTime<chrono::Utc>) -> Option<GameEvent> {
+/// The `timestamp` is `None` when the log entry header did not contain a
+/// parseable timestamp. It is passed through to [`EventMetadata`] so
+/// downstream consumers can distinguish real vs missing timestamps.
+pub fn try_parse(
+    entry: &LogEntry,
+    timestamp: Option<chrono::DateTime<chrono::Utc>>,
+) -> Option<GameEvent> {
     let body = &entry.body;
 
     if !body.contains(COMPLETE_DRAFT_MARKER) {
@@ -112,7 +115,7 @@ mod tests {
         fn test_try_parse_request_basic() {
             let body = r#"[UnityCrossThreadLogger]==> DraftCompleteDraft {"id":"abc-123-def","request":"{\"EventName\":\"PremierDraft_MKM_20260201\",\"IsBotDraft\":false}"}"#;
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
@@ -127,7 +130,7 @@ mod tests {
         fn test_try_parse_request_traditional_draft() {
             let body = r#"[UnityCrossThreadLogger]==> DraftCompleteDraft {"id":"trad-456","request":"{\"EventName\":\"TradDraft_DSK_20260115\",\"IsBotDraft\":false}"}"#;
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
@@ -141,7 +144,7 @@ mod tests {
         fn test_try_parse_request_empty_request_string() {
             let body = r#"[UnityCrossThreadLogger]==> DraftCompleteDraft {"id":"empty-req","request":"{}"}"#;
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
@@ -166,7 +169,7 @@ mod tests {
                           \"CurrentModule\":\"DeckSelect\",\
                           \"CardPool\":[98535,98381]}";
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
@@ -184,7 +187,7 @@ mod tests {
                          {\"InternalEventName\":\"PremierDraft_ECL_20260120\",\
                           \"CardPool\":[98535,98381,98366]}";
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
@@ -201,7 +204,7 @@ mod tests {
                          <== DraftCompleteDraft(fallback-test)\n\
                          {\"EventName\":\"QuickDraft_MKM_20260201\"}";
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
@@ -224,7 +227,7 @@ mod tests {
                            \"EventName\": \"PremierDraft_MKM_20260201\"\n\
                          }";
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
@@ -243,7 +246,7 @@ mod tests {
                            \"EventName\": \"TradDraft_DSK_20260115\"\n\
                          }";
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
@@ -261,7 +264,7 @@ mod tests {
                            \"EventName\": \"QuickDraft_MKM_20260201\"\n\
                          }";
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
@@ -279,7 +282,7 @@ mod tests {
                            \"EventName\": \"PremierDraft_MKM_20260201\"\n\
                          }";
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
@@ -296,7 +299,7 @@ mod tests {
                            \"InternalEventName\": \"PremierDraft_MKM_20260201\"\n\
                          }";
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
@@ -318,7 +321,7 @@ mod tests {
                            \"EventName\": \"PremierDraft_MKM_20260201\"\n\
                          }";
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
@@ -335,7 +338,7 @@ mod tests {
                            \"DraftId\": \"no-event-name\"\n\
                          }";
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
@@ -350,7 +353,7 @@ mod tests {
             let body = "[UnityCrossThreadLogger]DraftCompleteDraft\n\
                          {}";
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
@@ -370,7 +373,7 @@ mod tests {
         fn test_try_parse_preserves_raw_bytes() {
             let body = r#"[UnityCrossThreadLogger]==> DraftCompleteDraft {"id":"raw-test","request":"{\"EventName\":\"PremierDraft_MKM_20260201\"}"}"#;
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
@@ -382,7 +385,7 @@ mod tests {
             let body = "[UnityCrossThreadLogger]DraftCompleteDraft\n\
                          {\"DraftId\": \"ts-test\"}";
             let entry = unity_entry(body);
-            let ts = test_timestamp();
+            let ts = Some(test_timestamp());
             let result = try_parse(&entry, ts);
 
             assert!(result.is_some());
@@ -398,7 +401,7 @@ mod tests {
                            \"ExtraField\": \"preserved\"\n\
                          }";
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
@@ -417,14 +420,14 @@ mod tests {
         fn test_try_parse_unrelated_entry_returns_none() {
             let body = "[UnityCrossThreadLogger]greToClientEvent\n{\"data\": 1}";
             let entry = unity_entry(body);
-            assert!(try_parse(&entry, test_timestamp()).is_none());
+            assert!(try_parse(&entry, Some(test_timestamp())).is_none());
         }
 
         #[test]
         fn test_try_parse_empty_body_returns_none() {
             let body = "[UnityCrossThreadLogger]";
             let entry = unity_entry(body);
-            assert!(try_parse(&entry, test_timestamp()).is_none());
+            assert!(try_parse(&entry, Some(test_timestamp())).is_none());
         }
 
         #[test]
@@ -432,7 +435,7 @@ mod tests {
             let body = "[UnityCrossThreadLogger]BotDraft_DraftPick\n\
                          {\"PickInfo\": {\"CardId\": 12345}}";
             let entry = unity_entry(body);
-            assert!(try_parse(&entry, test_timestamp()).is_none());
+            assert!(try_parse(&entry, Some(test_timestamp())).is_none());
         }
 
         #[test]
@@ -441,7 +444,7 @@ mod tests {
                          {\"SelfPack\": 0, \"SelfPick\": 0, \
                           \"PackCards\": \"12345\"}";
             let entry = unity_entry(body);
-            assert!(try_parse(&entry, test_timestamp()).is_none());
+            assert!(try_parse(&entry, Some(test_timestamp())).is_none());
         }
 
         #[test]
@@ -449,14 +452,14 @@ mod tests {
             let body = "[UnityCrossThreadLogger]DraftCompleteDraft\n\
                          {broken json!!!}";
             let entry = unity_entry(body);
-            assert!(try_parse(&entry, test_timestamp()).is_none());
+            assert!(try_parse(&entry, Some(test_timestamp())).is_none());
         }
 
         #[test]
         fn test_try_parse_marker_only_no_json_returns_none() {
             let body = "[UnityCrossThreadLogger]DraftCompleteDraft";
             let entry = unity_entry(body);
-            assert!(try_parse(&entry, test_timestamp()).is_none());
+            assert!(try_parse(&entry, Some(test_timestamp())).is_none());
         }
 
         #[test]
@@ -465,7 +468,7 @@ mod tests {
                 header: EntryHeader::ClientGre,
                 body: "[Client GRE]some GRE message".to_owned(),
             };
-            assert!(try_parse(&entry, test_timestamp()).is_none());
+            assert!(try_parse(&entry, Some(test_timestamp())).is_none());
         }
 
         #[test]
@@ -474,7 +477,7 @@ mod tests {
                          {\"DraftId\": \"old-marker\", \
                           \"EventName\": \"PremierDraft_MKM_20260201\"}";
             let entry = unity_entry(body);
-            assert!(try_parse(&entry, test_timestamp()).is_none());
+            assert!(try_parse(&entry, Some(test_timestamp())).is_none());
         }
     }
 
@@ -490,7 +493,7 @@ mod tests {
                          {\"DraftId\": \"ts-prefix\", \
                           \"EventName\": \"PremierDraft_MKM_20260201\"}";
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
@@ -511,7 +514,7 @@ mod tests {
             let body = "[UnityCrossThreadLogger]DraftCompleteDraft\n\
                          {\"DraftId\": \"perf-test\"}";
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());

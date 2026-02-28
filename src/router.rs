@@ -16,8 +16,8 @@
 //! The router extracts the timestamp from the entry header line
 //! (e.g., `[UnityCrossThreadLogger]2/25/2026 12:00:00 PM ...`) and
 //! parses it using [`parse_log_timestamp`]. If the timestamp cannot be
-//! parsed, the router falls back to `Utc::now()` so the entry still
-//! reaches the parsers.
+//! parsed, `None` is passed to parsers so downstream consumers can
+//! distinguish real timestamps from missing ones.
 //!
 //! [`LogEntry`]: crate::log::entry::LogEntry
 //! [`parse_log_timestamp`]: crate::log::timestamp::parse_log_timestamp
@@ -30,6 +30,7 @@ use crate::events::GameEvent;
 use crate::log::entry::LogEntry;
 use crate::log::timestamp::parse_log_timestamp;
 use crate::parsers;
+use crate::util::truncate_for_log;
 
 // ---------------------------------------------------------------------------
 // RouterStats
@@ -132,25 +133,22 @@ impl Router {
     /// `Some(GameEvent)` if a parser claims the entry, or `None` if the
     /// entry is unrecognized.
     ///
-    /// Unrecognized entries and timestamp failures are counted in
-    /// [`RouterStats`] and logged at debug level.
+    /// When the timestamp cannot be parsed, `None` is passed to parsers
+    /// so downstream consumers can distinguish real timestamps from
+    /// missing ones. The timestamp failure is counted in [`RouterStats`]
+    /// and logged at debug level.
     pub fn route(&self, entry: &LogEntry) -> Option<GameEvent> {
-        let timestamp = if let Some(ts) = extract_timestamp(&entry.body) {
-            ts
-        } else {
-            // Some valid entries (e.g., `Updated account.`) may not
-            // include a parseable timestamp after the header bracket.
-            // Fall back to the current UTC time so the entry still
-            // reaches the parsers.
+        let timestamp = extract_timestamp(&entry.body);
+
+        if timestamp.is_none() {
             self.stats
                 .timestamp_failures
                 .fetch_add(1, Ordering::Relaxed);
             ::log::debug!(
-                "No timestamp in entry header, using Utc::now(): {:?}",
+                "No timestamp in entry header: {:?}",
                 truncate_for_log(&entry.body, 120),
             );
-            Utc::now()
-        };
+        }
 
         let event = dispatch_to_parsers(entry, timestamp);
 
@@ -236,7 +234,10 @@ fn extract_timestamp(body: &str) -> Option<DateTime<Utc>> {
 /// 9. Rank — rank snapshots
 /// 10. Collection — card collection from `StartHook`
 /// 11. Inventory — inventory from `StartHook`
-fn dispatch_to_parsers(entry: &LogEntry, timestamp: DateTime<Utc>) -> Option<GameEvent> {
+///
+/// `timestamp` is `None` when the log entry header did not contain a
+/// parseable timestamp; parsers pass it through to `EventMetadata`.
+fn dispatch_to_parsers(entry: &LogEntry, timestamp: Option<DateTime<Utc>>) -> Option<GameEvent> {
     None.or_else(|| parsers::gre::try_parse(entry, timestamp))
         .or_else(|| parsers::client_actions::try_parse(entry, timestamp))
         .or_else(|| parsers::match_state::try_parse(entry, timestamp))
@@ -248,19 +249,6 @@ fn dispatch_to_parsers(entry: &LogEntry, timestamp: DateTime<Utc>) -> Option<Gam
         .or_else(|| parsers::rank::try_parse(entry, timestamp))
         .or_else(|| parsers::collection::try_parse(entry, timestamp))
         .or_else(|| parsers::inventory::try_parse(entry, timestamp))
-}
-
-/// Truncates a string for safe inclusion in log messages.
-fn truncate_for_log(s: &str, max_len: usize) -> &str {
-    if s.len() <= max_len {
-        s
-    } else {
-        let mut end = max_len;
-        while end > 0 && !s.is_char_boundary(end) {
-            end -= 1;
-        }
-        &s[..end]
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -644,7 +632,7 @@ mod tests {
             let entry = unity_entry(body);
 
             let result = router.route(&entry);
-            // No timestamp -> falls back to Utc::now(), but no parser matches.
+            // No timestamp -> passes None, but no parser matches.
             assert!(result.is_none());
             assert_eq!(router.stats().timestamp_failure_count(), 1);
             assert_eq!(router.stats().unknown_count(), 1);
@@ -657,7 +645,7 @@ mod tests {
             let entry = unity_entry(body);
 
             let result = router.route(&entry);
-            // Falls back to Utc::now() but no parser claims this entry.
+            // No parseable timestamp and no parser claims this entry.
             assert!(result.is_none());
             assert_eq!(router.stats().timestamp_failure_count(), 1);
             assert_eq!(router.stats().unknown_count(), 1);
@@ -679,6 +667,55 @@ mod tests {
             assert!(matches!(result, Some(GameEvent::Session(_))));
             assert_eq!(router.stats().timestamp_failure_count(), 1);
             assert_eq!(router.stats().routed_count(), 1);
+        }
+
+        #[test]
+        fn test_route_no_timestamp_passes_none_to_metadata() {
+            let router = Router::new();
+            // Session entries without timestamps should have None timestamp
+            // in metadata rather than a synthetic Utc::now().
+            let body = "[UnityCrossThreadLogger]Updated account. \
+                         DisplayName:Player, \
+                         AccountID:abc123, \
+                         Token:token";
+            let entry = unity_entry(body);
+
+            let result = router.route(&entry);
+            assert!(result.is_some());
+            if let Some(event) = &result {
+                assert!(
+                    event.metadata().timestamp().is_none(),
+                    "entries without parseable timestamps should have None timestamp"
+                );
+            }
+        }
+
+        #[test]
+        fn test_route_with_timestamp_passes_some_to_metadata() {
+            let router = Router::new();
+            let payload = serde_json::json!({
+                "greToClientEvent": {
+                    "greToClientMessages": [{
+                        "type": "GREMessageType_GameStateMessage",
+                        "gameStateMessage": {
+                            "gameInfo": { "stage": "GameStage_Play" },
+                            "gameObjects": [],
+                            "zones": []
+                        }
+                    }]
+                }
+            });
+            let body = format!("[UnityCrossThreadLogger]2/25/2026 12:00:00 PM\n{payload}");
+            let entry = unity_entry(&body);
+
+            let result = router.route(&entry);
+            assert!(result.is_some());
+            if let Some(event) = &result {
+                assert!(
+                    event.metadata().timestamp().is_some(),
+                    "entries with parseable timestamps should have Some timestamp"
+                );
+            }
         }
     }
 
@@ -780,27 +817,6 @@ mod tests {
             let result = router.route(&entry);
             assert!(result.is_some());
             assert!(matches!(result, Some(GameEvent::GameState(_))));
-        }
-    }
-
-    // -- truncate_for_log ----------------------------------------------------
-
-    mod truncation {
-        use super::*;
-
-        #[test]
-        fn test_truncate_for_log_short_string_unchanged() {
-            assert_eq!(truncate_for_log("hello", 10), "hello");
-        }
-
-        #[test]
-        fn test_truncate_for_log_exact_length_unchanged() {
-            assert_eq!(truncate_for_log("hello", 5), "hello");
-        }
-
-        #[test]
-        fn test_truncate_for_log_long_string_truncated() {
-            assert_eq!(truncate_for_log("hello world", 5), "hello");
         }
     }
 }

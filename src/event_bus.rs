@@ -178,7 +178,7 @@ mod tests {
             .with_ymd_and_hms(2026, 2, 25, 12, 0, 0)
             .single()
             .unwrap_or_default();
-        EventMetadata::new(timestamp, raw.to_vec())
+        EventMetadata::new(Some(timestamp), raw.to_vec())
     }
 
     /// Helper: build a `GameEvent::GameState` variant for testing.

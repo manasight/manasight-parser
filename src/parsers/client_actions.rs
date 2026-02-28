@@ -73,10 +73,13 @@ const SUBMIT_DECK_RESP_TYPE: &str = "ClientMessageType_SubmitDeckResp";
 /// Returns `Some(GameEvent::ClientAction(_))` if the entry contains a
 /// recognized client-to-GRE message, or `None` if the entry does not match.
 ///
-/// The `timestamp` is used to construct [`EventMetadata`] for the resulting
-/// event. Callers are responsible for parsing the timestamp from the log
-/// entry header before invoking this function.
-pub fn try_parse(entry: &LogEntry, timestamp: chrono::DateTime<chrono::Utc>) -> Option<GameEvent> {
+/// The `timestamp` is `None` when the log entry header did not contain a
+/// parseable timestamp. It is passed through to [`EventMetadata`] so
+/// downstream consumers can distinguish real vs missing timestamps.
+pub fn try_parse(
+    entry: &LogEntry,
+    timestamp: Option<chrono::DateTime<chrono::Utc>>,
+) -> Option<GameEvent> {
     let body = &entry.body;
 
     let is_ui_message = body.contains(CLIENT_TO_GRE_UI_MARKER);
@@ -435,13 +438,13 @@ mod tests {
     #[test]
     fn test_try_parse_non_matching_entry_returns_none() {
         let entry = unity_entry("[UnityCrossThreadLogger] some other log line");
-        assert!(try_parse(&entry, test_timestamp()).is_none());
+        assert!(try_parse(&entry, Some(test_timestamp())).is_none());
     }
 
     #[test]
     fn test_try_parse_empty_body_returns_none() {
         let entry = unity_entry("");
-        assert!(try_parse(&entry, test_timestamp()).is_none());
+        assert!(try_parse(&entry, Some(test_timestamp())).is_none());
     }
 
     #[test]
@@ -450,7 +453,7 @@ mod tests {
         let body = "[UnityCrossThreadLogger]2/25/2026 12:00:00 PM\n\
             {\"greToClientEvent\":{\"greToClientMessages\":[]}}";
         let entry = unity_entry(body);
-        assert!(try_parse(&entry, test_timestamp()).is_none());
+        assert!(try_parse(&entry, Some(test_timestamp())).is_none());
     }
 
     #[test]
@@ -458,7 +461,7 @@ mod tests {
         let body = "[UnityCrossThreadLogger] ClientToGREMessage\n\
             {invalid json here";
         let entry = unity_entry(body);
-        assert!(try_parse(&entry, test_timestamp()).is_none());
+        assert!(try_parse(&entry, Some(test_timestamp())).is_none());
     }
 
     #[test]
@@ -471,7 +474,7 @@ mod tests {
             })
         );
         let entry = unity_entry(&body);
-        assert!(try_parse(&entry, test_timestamp()).is_none());
+        assert!(try_parse(&entry, Some(test_timestamp())).is_none());
     }
 
     // -----------------------------------------------------------------------
@@ -490,7 +493,7 @@ mod tests {
         });
         let body = wrap_client_to_gre(&inner);
         let entry = unity_entry(&body);
-        let result = try_parse(&entry, test_timestamp());
+        let result = try_parse(&entry, Some(test_timestamp()));
 
         assert!(result.is_some());
         if let Some(GameEvent::ClientAction(event)) = &result {
@@ -518,7 +521,7 @@ mod tests {
         });
         let body = wrap_client_to_gre(&inner);
         let entry = unity_entry(&body);
-        let result = try_parse(&entry, test_timestamp());
+        let result = try_parse(&entry, Some(test_timestamp()));
 
         assert!(result.is_some());
         if let Some(GameEvent::ClientAction(event)) = &result {
@@ -543,7 +546,7 @@ mod tests {
         });
         let body = wrap_client_to_gre(&inner);
         let entry = unity_entry(&body);
-        let result = try_parse(&entry, test_timestamp());
+        let result = try_parse(&entry, Some(test_timestamp()));
 
         assert!(result.is_some());
         if let Some(GameEvent::ClientAction(event)) = &result {
@@ -567,7 +570,7 @@ mod tests {
         });
         let body = wrap_client_to_gre(&inner);
         let entry = unity_entry(&body);
-        let result = try_parse(&entry, test_timestamp());
+        let result = try_parse(&entry, Some(test_timestamp()));
 
         assert!(result.is_some());
         if let Some(GameEvent::ClientAction(event)) = &result {
@@ -597,7 +600,7 @@ mod tests {
         });
         let body = wrap_client_to_gre(&inner);
         let entry = unity_entry(&body);
-        let result = try_parse(&entry, test_timestamp());
+        let result = try_parse(&entry, Some(test_timestamp()));
 
         assert!(result.is_some());
         if let Some(GameEvent::ClientAction(event)) = &result {
@@ -630,7 +633,7 @@ mod tests {
         });
         let body = wrap_client_to_gre(&inner);
         let entry = unity_entry(&body);
-        let result = try_parse(&entry, test_timestamp());
+        let result = try_parse(&entry, Some(test_timestamp()));
 
         assert!(result.is_some());
         if let Some(GameEvent::ClientAction(event)) = &result {
@@ -654,7 +657,7 @@ mod tests {
         });
         let body = wrap_client_to_gre(&inner);
         let entry = unity_entry(&body);
-        let result = try_parse(&entry, test_timestamp());
+        let result = try_parse(&entry, Some(test_timestamp()));
 
         assert!(result.is_some());
         if let Some(GameEvent::ClientAction(event)) = &result {
@@ -680,7 +683,7 @@ mod tests {
         });
         let body = wrap_client_to_gre(&inner);
         let entry = unity_entry(&body);
-        let result = try_parse(&entry, test_timestamp());
+        let result = try_parse(&entry, Some(test_timestamp()));
 
         assert!(result.is_some());
         if let Some(GameEvent::ClientAction(event)) = &result {
@@ -713,7 +716,7 @@ mod tests {
         });
         let body = wrap_client_to_gre(&inner);
         let entry = unity_entry(&body);
-        let result = try_parse(&entry, test_timestamp());
+        let result = try_parse(&entry, Some(test_timestamp()));
 
         assert!(result.is_some());
         if let Some(GameEvent::ClientAction(event)) = &result {
@@ -751,7 +754,7 @@ mod tests {
         });
         let body = wrap_client_to_gre(&inner);
         let entry = unity_entry(&body);
-        let result = try_parse(&entry, test_timestamp());
+        let result = try_parse(&entry, Some(test_timestamp()));
 
         assert!(result.is_some());
         if let Some(GameEvent::ClientAction(event)) = &result {
@@ -775,7 +778,7 @@ mod tests {
         });
         let body = wrap_client_to_gre(&inner);
         let entry = unity_entry(&body);
-        let result = try_parse(&entry, test_timestamp());
+        let result = try_parse(&entry, Some(test_timestamp()));
 
         assert!(result.is_some());
         if let Some(GameEvent::ClientAction(event)) = &result {
@@ -803,7 +806,7 @@ mod tests {
         });
         let body = wrap_client_to_gre(&inner);
         let entry = unity_entry(&body);
-        let result = try_parse(&entry, test_timestamp());
+        let result = try_parse(&entry, Some(test_timestamp()));
 
         assert!(result.is_some());
         if let Some(GameEvent::ClientAction(event)) = &result {
@@ -831,7 +834,7 @@ mod tests {
         });
         let body = wrap_client_to_gre(&inner);
         let entry = unity_entry(&body);
-        let result = try_parse(&entry, test_timestamp());
+        let result = try_parse(&entry, Some(test_timestamp()));
 
         assert!(result.is_some());
         if let Some(GameEvent::ClientAction(event)) = &result {
@@ -874,7 +877,7 @@ mod tests {
             serde_json::to_string_pretty(&envelope).unwrap_or_default()
         );
         let entry = unity_entry(&body);
-        let result = try_parse(&entry, test_timestamp());
+        let result = try_parse(&entry, Some(test_timestamp()));
 
         assert!(result.is_some());
         if let Some(GameEvent::ClientAction(event)) = &result {
@@ -902,7 +905,7 @@ mod tests {
         });
         let body = wrap_client_to_gre(&inner);
         let entry = unity_entry(&body);
-        let ts = test_timestamp();
+        let ts = Some(test_timestamp());
         let result = try_parse(&entry, ts);
 
         assert!(result.is_some());
@@ -921,7 +924,7 @@ mod tests {
         });
         let body = wrap_client_to_gre(&inner);
         let entry = unity_entry(&body);
-        let result = try_parse(&entry, test_timestamp());
+        let result = try_parse(&entry, Some(test_timestamp()));
 
         assert!(result.is_some());
         if let Some(event) = &result {
@@ -941,7 +944,7 @@ mod tests {
         });
         let body = wrap_client_to_gre(&inner);
         let entry = unity_entry(&body);
-        let result = try_parse(&entry, test_timestamp());
+        let result = try_parse(&entry, Some(test_timestamp()));
 
         assert!(result.is_some());
         if let Some(event) = &result {
@@ -1129,7 +1132,7 @@ mod tests {
               \"timestamp\": \"638456789012345678\"\n\
             }";
         let entry = unity_entry(body);
-        let result = try_parse(&entry, test_timestamp());
+        let result = try_parse(&entry, Some(test_timestamp()));
 
         assert!(result.is_some());
         if let Some(GameEvent::ClientAction(event)) = &result {
@@ -1167,7 +1170,7 @@ mod tests {
               \"timestamp\": \"638456789999999999\"\n\
             }";
         let entry = unity_entry(body);
-        let result = try_parse(&entry, test_timestamp());
+        let result = try_parse(&entry, Some(test_timestamp()));
 
         assert!(result.is_some());
         if let Some(GameEvent::ClientAction(event)) = &result {
@@ -1211,7 +1214,7 @@ mod tests {
               \"timestamp\": \"638456789555555555\"\n\
             }";
         let entry = unity_entry(body);
-        let result = try_parse(&entry, test_timestamp());
+        let result = try_parse(&entry, Some(test_timestamp()));
 
         assert!(result.is_some());
         if let Some(GameEvent::ClientAction(event)) = &result {
@@ -1240,7 +1243,7 @@ mod tests {
         });
         let body = wrap_client_to_gre(&inner);
         let entry = unity_entry(&body);
-        let result = try_parse(&entry, test_timestamp());
+        let result = try_parse(&entry, Some(test_timestamp()));
 
         assert!(result.is_some());
         if let Some(GameEvent::ClientAction(event)) = &result {
@@ -1260,7 +1263,7 @@ mod tests {
         });
         let body = wrap_client_to_gre(&inner);
         let entry = unity_entry(&body);
-        let result = try_parse(&entry, test_timestamp());
+        let result = try_parse(&entry, Some(test_timestamp()));
 
         assert!(result.is_some());
         if let Some(GameEvent::ClientAction(event)) = &result {
@@ -1289,7 +1292,7 @@ mod tests {
             serde_json::to_string_pretty(&envelope).unwrap_or_default()
         );
         let entry = unity_entry(&body);
-        let result = try_parse(&entry, test_timestamp());
+        let result = try_parse(&entry, Some(test_timestamp()));
 
         assert!(result.is_some());
         if let Some(GameEvent::ClientAction(event)) = &result {
@@ -1314,7 +1317,7 @@ mod tests {
             });
             let body = wrap_client_to_gre(&inner);
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some(), "Expected Some for {msg_type}");
             if let Some(GameEvent::ClientAction(event)) = &result {
@@ -1354,7 +1357,7 @@ mod tests {
         });
         let body = wrap_client_to_gre_ui(&inner);
         let entry = unity_entry(&body);
-        let result = try_parse(&entry, test_timestamp());
+        let result = try_parse(&entry, Some(test_timestamp()));
         assert!(result.is_some());
         if let Some(GameEvent::ClientAction(event)) = &result {
             assert_eq!(event.payload()["type"], "client_ui_message");
@@ -1371,7 +1374,7 @@ mod tests {
         });
         let body = wrap_client_to_gre_ui(&inner);
         let entry = unity_entry(&body);
-        let result = try_parse(&entry, test_timestamp());
+        let result = try_parse(&entry, Some(test_timestamp()));
         assert!(result.is_some());
         if let Some(GameEvent::ClientAction(event)) = &result {
             assert_eq!(event.payload()["type"], "client_ui_message");
@@ -1387,24 +1390,24 @@ mod tests {
         });
         let body = wrap_client_to_gre_ui(&inner);
         let entry = unity_entry(&body);
-        let result = try_parse(&entry, test_timestamp());
+        let result = try_parse(&entry, Some(test_timestamp()));
         let event = result.as_ref().unwrap_or_else(|| unreachable!());
         assert!(!event.metadata().raw_bytes().is_empty());
-        assert_eq!(event.metadata().timestamp(), test_timestamp());
+        assert_eq!(event.metadata().timestamp(), Some(test_timestamp()));
     }
 
     #[test]
     fn test_try_parse_ui_message_malformed_json_returns_none() {
         let body = "[UnityCrossThreadLogger]ClientToGREUIMessage\n{invalid json}";
         let entry = unity_entry(body);
-        assert!(try_parse(&entry, test_timestamp()).is_none());
+        assert!(try_parse(&entry, Some(test_timestamp())).is_none());
     }
 
     #[test]
     fn test_try_parse_ui_message_no_json_returns_none() {
         let body = "[UnityCrossThreadLogger]ClientToGREUIMessage with no json";
         let entry = unity_entry(body);
-        assert!(try_parse(&entry, test_timestamp()).is_none());
+        assert!(try_parse(&entry, Some(test_timestamp())).is_none());
     }
 
     #[test]
@@ -1420,7 +1423,7 @@ mod tests {
         });
         let body = wrap_client_to_gre(&inner);
         let entry = unity_entry(&body);
-        let result = try_parse(&entry, test_timestamp());
+        let result = try_parse(&entry, Some(test_timestamp()));
         assert!(result.is_some());
         if let Some(GameEvent::ClientAction(event)) = &result {
             assert_eq!(event.payload()["type"], "mulligan_resp");

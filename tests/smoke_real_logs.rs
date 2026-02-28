@@ -38,7 +38,7 @@ const ENV_VAR: &str = "MANASIGHT_TEST_LOGS";
 /// A parser identified by name and its `try_parse` function pointer.
 struct NamedParser {
     name: &'static str,
-    func: fn(&LogEntry, DateTime<Utc>) -> Option<GameEvent>,
+    func: fn(&LogEntry, Option<DateTime<Utc>>) -> Option<GameEvent>,
 }
 
 /// Per-parser statistics accumulated while processing a single log file.
@@ -248,15 +248,12 @@ fn process_file(path: &Path, parsers: &[NamedParser]) -> FileReport {
     let mut double_claims: usize = 0;
     let mut timestamp_failures: usize = 0;
 
-    let default_ts = DateTime::<Utc>::default();
-
     for entry in &entries {
-        let timestamp = if let Some(ts) = try_extract_timestamp(&entry.body) {
-            ts
-        } else {
+        let timestamp = try_extract_timestamp(&entry.body);
+
+        if timestamp.is_none() {
             timestamp_failures += 1;
-            default_ts
-        };
+        }
 
         let mut claimant_count: usize = 0;
         let mut claimant_names: Vec<&'static str> = Vec::new();

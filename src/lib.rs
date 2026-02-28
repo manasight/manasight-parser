@@ -40,6 +40,7 @@ pub mod log;
 pub mod parsers;
 pub mod router;
 pub mod stream;
+pub(crate) mod util;
 
 // ---------------------------------------------------------------------------
 // Re-exports — public API surface

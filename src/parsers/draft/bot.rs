@@ -43,10 +43,13 @@ const BOT_DRAFT_PICK_MARKER: &str = "BotDraft_DraftPick";
 ///
 /// Returns `None` if the entry does not match either signature.
 ///
-/// The `timestamp` is used to construct [`EventMetadata`] for the resulting
-/// event. Callers are responsible for parsing the timestamp from the log
-/// entry header before invoking this function.
-pub fn try_parse(entry: &LogEntry, timestamp: chrono::DateTime<chrono::Utc>) -> Option<GameEvent> {
+/// The `timestamp` is `None` when the log entry header did not contain a
+/// parseable timestamp. It is passed through to [`EventMetadata`] so
+/// downstream consumers can distinguish real vs missing timestamps.
+pub fn try_parse(
+    entry: &LogEntry,
+    timestamp: Option<chrono::DateTime<chrono::Utc>>,
+) -> Option<GameEvent> {
     let body = &entry.body;
 
     // Try bot draft pack presentation first (more common during drafting).
@@ -220,7 +223,7 @@ mod tests {
                            \"EventName\": \"QuickDraft_MKM_20260201\"\n\
                          }";
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
@@ -247,7 +250,7 @@ mod tests {
                            \"EventName\": \"QuickDraft_DSK_20260115\"\n\
                          }";
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
@@ -269,7 +272,7 @@ mod tests {
                            \"EventName\": \"QuickDraft_MKM_20260201\"\n\
                          }";
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
@@ -290,7 +293,7 @@ mod tests {
                            \"DraftPack\": [12345, 67890]\n\
                          }";
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
@@ -309,7 +312,7 @@ mod tests {
                            \"DraftPack\": []\n\
                          }";
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
@@ -327,7 +330,7 @@ mod tests {
                            \"PickNumber\": 0\n\
                          }";
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
@@ -346,7 +349,7 @@ mod tests {
                            \"ExtraField\": \"preserved\"\n\
                          }";
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
@@ -366,7 +369,7 @@ mod tests {
                            \"DraftPack\": [\"99999\"]\n\
                          }";
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
@@ -385,7 +388,7 @@ mod tests {
                            \"PickNumber\": 0\n\
                          }";
             let entry = unity_entry(body);
-            assert!(try_parse(&entry, test_timestamp()).is_none());
+            assert!(try_parse(&entry, Some(test_timestamp())).is_none());
         }
     }
 
@@ -405,7 +408,7 @@ mod tests {
                            }\n\
                          }";
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
@@ -428,7 +431,7 @@ mod tests {
                            }\n\
                          }";
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
@@ -451,7 +454,7 @@ mod tests {
                            }\n\
                          }";
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
@@ -475,7 +478,7 @@ mod tests {
                            \"PickNumber\": 10\n\
                          }";
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
@@ -498,7 +501,7 @@ mod tests {
                            }\n\
                          }";
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
@@ -517,7 +520,7 @@ mod tests {
                            }\n\
                          }";
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
@@ -538,7 +541,7 @@ mod tests {
                            }\n\
                          }";
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
@@ -559,7 +562,7 @@ mod tests {
                            }\n\
                          }";
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
@@ -580,7 +583,7 @@ mod tests {
                          {\"DraftStatus\": \"PickNext\", \"PackNumber\": 0, \
                           \"PickNumber\": 0, \"DraftPack\": []}";
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
@@ -593,7 +596,7 @@ mod tests {
                          {\"PickInfo\": {\"CardId\": 1, \"PackNumber\": 0, \
                           \"PickNumber\": 0}}";
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
@@ -606,7 +609,7 @@ mod tests {
                          {\"DraftStatus\": \"PickNext\", \"PackNumber\": 0, \
                           \"PickNumber\": 0}";
             let entry = unity_entry(body);
-            let ts = test_timestamp();
+            let ts = Some(test_timestamp());
             let result = try_parse(&entry, ts);
 
             assert!(result.is_some());
@@ -620,7 +623,7 @@ mod tests {
                          {\"PickInfo\": {\"CardId\": 1, \"PackNumber\": 0, \
                           \"PickNumber\": 0}}";
             let entry = unity_entry(body);
-            let ts = test_timestamp();
+            let ts = Some(test_timestamp());
             let result = try_parse(&entry, ts);
 
             assert!(result.is_some());
@@ -638,14 +641,14 @@ mod tests {
         fn test_try_parse_unrelated_entry_returns_none() {
             let body = "[UnityCrossThreadLogger]greToClientEvent\n{\"data\": 1}";
             let entry = unity_entry(body);
-            assert!(try_parse(&entry, test_timestamp()).is_none());
+            assert!(try_parse(&entry, Some(test_timestamp())).is_none());
         }
 
         #[test]
         fn test_try_parse_empty_body_returns_none() {
             let body = "[UnityCrossThreadLogger]";
             let entry = unity_entry(body);
-            assert!(try_parse(&entry, test_timestamp()).is_none());
+            assert!(try_parse(&entry, Some(test_timestamp())).is_none());
         }
 
         #[test]
@@ -653,7 +656,7 @@ mod tests {
             let body = "[UnityCrossThreadLogger]BotDraft_DraftStatus\n\
                          {\"DraftStatus\": \"DraftComplete\"}";
             let entry = unity_entry(body);
-            assert!(try_parse(&entry, test_timestamp()).is_none());
+            assert!(try_parse(&entry, Some(test_timestamp())).is_none());
         }
 
         #[test]
@@ -661,14 +664,14 @@ mod tests {
             let body = "[UnityCrossThreadLogger]BotDraft_DraftPick\n\
                          {\"PickInfo\": broken!!!}";
             let entry = unity_entry(body);
-            assert!(try_parse(&entry, test_timestamp()).is_none());
+            assert!(try_parse(&entry, Some(test_timestamp())).is_none());
         }
 
         #[test]
         fn test_try_parse_marker_only_no_json_returns_none() {
             let body = "[UnityCrossThreadLogger]BotDraft_DraftPick";
             let entry = unity_entry(body);
-            assert!(try_parse(&entry, test_timestamp()).is_none());
+            assert!(try_parse(&entry, Some(test_timestamp())).is_none());
         }
 
         #[test]
@@ -677,7 +680,7 @@ mod tests {
             let body = "[UnityCrossThreadLogger]DraftStatus is PickNext (note)\n\
                          not valid json here";
             let entry = unity_entry(body);
-            assert!(try_parse(&entry, test_timestamp()).is_none());
+            assert!(try_parse(&entry, Some(test_timestamp())).is_none());
         }
 
         #[test]
@@ -691,7 +694,7 @@ mod tests {
                            \"PackCards\": \"12345,67890\"\n\
                          }";
             let entry = unity_entry(body);
-            assert!(try_parse(&entry, test_timestamp()).is_none());
+            assert!(try_parse(&entry, Some(test_timestamp())).is_none());
         }
 
         #[test]
@@ -700,7 +703,7 @@ mod tests {
                 header: EntryHeader::ClientGre,
                 body: "[Client GRE]some GRE message".to_owned(),
             };
-            assert!(try_parse(&entry, test_timestamp()).is_none());
+            assert!(try_parse(&entry, Some(test_timestamp())).is_none());
         }
     }
 
@@ -715,7 +718,7 @@ mod tests {
                          {\"DraftStatus\": \"PickNext\", \"PackNumber\": 0, \
                           \"PickNumber\": 0}";
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
@@ -728,7 +731,7 @@ mod tests {
                          {\"PickInfo\": {\"CardId\": 1, \"PackNumber\": 0, \
                           \"PickNumber\": 0}}";
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());

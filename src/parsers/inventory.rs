@@ -33,10 +33,13 @@ const INVENTORY_FIELD: &str = "InventoryInfo";
 /// Returns `Some(GameEvent::Inventory(_))` if the entry is a `<== StartHook`
 /// response containing an `InventoryInfo` field, or `None` otherwise.
 ///
-/// The `timestamp` is used to construct [`EventMetadata`] for the resulting
-/// event. Callers are responsible for parsing the timestamp from the log
-/// entry header before invoking this function.
-pub fn try_parse(entry: &LogEntry, timestamp: chrono::DateTime<chrono::Utc>) -> Option<GameEvent> {
+/// The `timestamp` is `None` when the log entry header did not contain a
+/// parseable timestamp. It is passed through to [`EventMetadata`] so
+/// downstream consumers can distinguish real vs missing timestamps.
+pub fn try_parse(
+    entry: &LogEntry,
+    timestamp: Option<chrono::DateTime<chrono::Utc>>,
+) -> Option<GameEvent> {
     let body = &entry.body;
 
     if !api_common::is_api_response(body, START_HOOK_METHOD) {
@@ -84,7 +87,7 @@ mod tests {
                            \"PlayerCards\": {\"98535\": 4}\n\
                          }";
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
@@ -105,7 +108,7 @@ mod tests {
                            \"wcRare\": 3, \"wcMythic\": 1\
                          }}";
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
@@ -124,7 +127,7 @@ mod tests {
                            \"VaultProgress\": 42.5\
                          }}";
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
@@ -139,7 +142,7 @@ mod tests {
                          <== StartHook(raw-uuid)\n\
                          {\"InventoryInfo\": {\"Gems\": 999}, \"ExtraField\": true}";
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
@@ -153,7 +156,7 @@ mod tests {
             let body =
                 "[UnityCrossThreadLogger]<== StartHook(uuid) {\"InventoryInfo\": {\"Gems\": 42}}";
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
@@ -174,7 +177,7 @@ mod tests {
                          <== StartHook(meta-uuid)\n\
                          {\"InventoryInfo\": {\"Gems\": 1}}";
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
@@ -187,7 +190,7 @@ mod tests {
                          <== StartHook(ts-uuid)\n\
                          {\"InventoryInfo\": {\"Gems\": 1}}";
             let entry = unity_entry(body);
-            let ts = test_timestamp();
+            let ts = Some(test_timestamp());
             let result = try_parse(&entry, ts);
 
             assert!(result.is_some());
@@ -207,7 +210,7 @@ mod tests {
                          <== StartHook(no-inv-uuid)\n\
                          {\"PlayerCards\": {\"98535\": 4}, \"DeckSummariesV2\": []}";
             let entry = unity_entry(body);
-            assert!(try_parse(&entry, test_timestamp()).is_none());
+            assert!(try_parse(&entry, Some(test_timestamp())).is_none());
         }
 
         #[test]
@@ -216,35 +219,35 @@ mod tests {
                          <== RankGetCombinedRankInfo(uuid)\n\
                          {\"constructedClass\": \"Gold\"}";
             let entry = unity_entry(body);
-            assert!(try_parse(&entry, test_timestamp()).is_none());
+            assert!(try_parse(&entry, Some(test_timestamp())).is_none());
         }
 
         #[test]
         fn test_try_parse_api_request_returns_none() {
             let body = "[UnityCrossThreadLogger]==> StartHook {\"data\": 1}";
             let entry = unity_entry(body);
-            assert!(try_parse(&entry, test_timestamp()).is_none());
+            assert!(try_parse(&entry, Some(test_timestamp())).is_none());
         }
 
         #[test]
         fn test_try_parse_unrelated_entry_returns_none() {
             let body = "[UnityCrossThreadLogger]greToClientEvent\n{\"data\": 1}";
             let entry = unity_entry(body);
-            assert!(try_parse(&entry, test_timestamp()).is_none());
+            assert!(try_parse(&entry, Some(test_timestamp())).is_none());
         }
 
         #[test]
         fn test_try_parse_empty_body_returns_none() {
             let body = "[UnityCrossThreadLogger]";
             let entry = unity_entry(body);
-            assert!(try_parse(&entry, test_timestamp()).is_none());
+            assert!(try_parse(&entry, Some(test_timestamp())).is_none());
         }
 
         #[test]
         fn test_try_parse_old_marker_returns_none() {
             let body = "[UnityCrossThreadLogger]DTO_InventoryInfo\n{\"Gems\": 1234}";
             let entry = unity_entry(body);
-            assert!(try_parse(&entry, test_timestamp()).is_none());
+            assert!(try_parse(&entry, Some(test_timestamp())).is_none());
         }
 
         #[test]
@@ -253,7 +256,7 @@ mod tests {
                          <== StartHook(uuid)\n\
                          {broken json!!!}";
             let entry = unity_entry(body);
-            assert!(try_parse(&entry, test_timestamp()).is_none());
+            assert!(try_parse(&entry, Some(test_timestamp())).is_none());
         }
 
         #[test]
@@ -262,7 +265,7 @@ mod tests {
                 header: EntryHeader::ClientGre,
                 body: "[Client GRE]some GRE message".to_owned(),
             };
-            assert!(try_parse(&entry, test_timestamp()).is_none());
+            assert!(try_parse(&entry, Some(test_timestamp())).is_none());
         }
     }
 
@@ -277,7 +280,7 @@ mod tests {
                          <== StartHook(perf-uuid)\n\
                          {\"InventoryInfo\": {\"Gems\": 1}}";
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
