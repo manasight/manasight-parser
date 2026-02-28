@@ -1,54 +1,28 @@
-//! Real-log smoke test harness with per-parser attribution.
+//! Parser-only real-log smoke test (Level 1).
 //!
-//! Feeds saved Player.log files through every implemented parser and produces
-//! a per-parser report: claim counts, panics, double claims, unclaimed
-//! entries, and a per-event-type breakdown.
+//! Feeds log entries through individual `try_parse` functions with per-parser
+//! attribution. Detects panics, double claims, and timestamp extraction failures.
 //!
-//! # Gating
-//!
-//! The test is gated on the `MANASIGHT_TEST_LOGS` environment variable.
-//! When **set**, it points to a directory of `.log` files that are processed.
-//! When **unset**, the test returns early (passes) with a skip message.
+//! Gated on the `MANASIGHT_TEST_LOGS` environment variable.
 //!
 //! ```bash
-//! MANASIGHT_TEST_LOGS=/path/to/logs cargo test smoke -- --nocapture
+//! MANASIGHT_TEST_LOGS=/path/to/logs cargo test smoke_parsers -- --nocapture
 //! ```
+
+mod smoke_common;
 
 use std::collections::HashMap;
 use std::fmt::Write as FmtWrite;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use chrono::{DateTime, Utc};
-
-use manasight_parser::events::GameEvent;
-use manasight_parser::log::entry::{LineBuffer, LogEntry};
+use manasight_parser::log::entry::LineBuffer;
 use manasight_parser::log::timestamp::parse_log_timestamp;
-use manasight_parser::parsers;
 
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
-const ENV_VAR: &str = "MANASIGHT_TEST_LOGS";
+use smoke_common::{all_parsers, event_type_name, NamedParser, ParserStats};
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
-
-/// A parser identified by name and its `try_parse` function pointer.
-struct NamedParser {
-    name: &'static str,
-    func: fn(&LogEntry, Option<DateTime<Utc>>) -> Option<GameEvent>,
-}
-
-/// Per-parser statistics accumulated while processing a single log file.
-#[derive(Default)]
-struct ParserStats {
-    /// Entries successfully claimed (returned `Some`).
-    claimed: usize,
-    /// Entries where `try_parse` panicked (caught by `catch_unwind`).
-    panics: usize,
-}
 
 /// Aggregated report for a single log file.
 struct FileReport {
@@ -65,85 +39,6 @@ struct FileReport {
 }
 
 // ---------------------------------------------------------------------------
-// Parser registry
-// ---------------------------------------------------------------------------
-
-/// Returns all implemented parsers in dispatch order.
-fn all_parsers() -> Vec<NamedParser> {
-    vec![
-        NamedParser {
-            name: "session",
-            func: parsers::session::try_parse,
-        },
-        NamedParser {
-            name: "match_state",
-            func: parsers::match_state::try_parse,
-        },
-        NamedParser {
-            name: "gre",
-            func: parsers::gre::try_parse,
-        },
-        NamedParser {
-            name: "client_actions",
-            func: parsers::client_actions::try_parse,
-        },
-        NamedParser {
-            name: "draft_bot",
-            func: parsers::draft::bot::try_parse,
-        },
-        NamedParser {
-            name: "draft_human",
-            func: parsers::draft::human::try_parse,
-        },
-        NamedParser {
-            name: "draft_complete",
-            func: parsers::draft::complete::try_parse,
-        },
-        NamedParser {
-            name: "inventory",
-            func: parsers::inventory::try_parse,
-        },
-        NamedParser {
-            name: "collection",
-            func: parsers::collection::try_parse,
-        },
-        NamedParser {
-            name: "rank",
-            func: parsers::rank::try_parse,
-        },
-        NamedParser {
-            name: "event_lifecycle",
-            func: parsers::event_lifecycle::try_parse,
-        },
-    ]
-}
-
-// ---------------------------------------------------------------------------
-// Event type name
-// ---------------------------------------------------------------------------
-
-/// Returns the variant name of a `GameEvent` as a `'static str`.
-fn event_type_name(event: &GameEvent) -> &'static str {
-    match event {
-        GameEvent::GameState(_) => "GameState",
-        GameEvent::ClientAction(_) => "ClientAction",
-        GameEvent::MatchState(_) => "MatchState",
-        GameEvent::DraftBot(_) => "DraftBot",
-        GameEvent::DraftHuman(_) => "DraftHuman",
-        GameEvent::DraftComplete(_) => "DraftComplete",
-        GameEvent::EventLifecycle(_) => "EventLifecycle",
-        GameEvent::Session(_) => "Session",
-        GameEvent::Rank(_) => "Rank",
-        GameEvent::Collection(_) => "Collection",
-        GameEvent::Inventory(_) => "Inventory",
-        GameEvent::GameResult(_) => "GameResult",
-        // `GameEvent` is `#[non_exhaustive]`; this branch keeps the compiler
-        // happy if new variants are added before this match is updated.
-        _ => "Unknown",
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Timestamp extraction
 // ---------------------------------------------------------------------------
 
@@ -153,7 +48,7 @@ fn event_type_name(event: &GameEvent) -> &'static str {
 /// the remaining text as a timestamp. If the full text doesn't parse
 /// (e.g. timestamp followed by event content on the same line), tries
 /// progressively shorter prefixes.
-fn try_extract_timestamp(body: &str) -> Option<DateTime<Utc>> {
+fn try_extract_timestamp(body: &str) -> Option<chrono::DateTime<chrono::Utc>> {
     let first_line = body.lines().next()?;
     let content = match first_line.find(']') {
         Some(pos) => first_line.get(pos + 1..)?.trim(),
@@ -386,37 +281,11 @@ fn format_report(reports: &[FileReport]) -> String {
 
 #[test]
 fn smoke_test_real_logs() {
-    let logs_dir = if let Ok(dir) = std::env::var(ENV_VAR) {
-        PathBuf::from(dir)
-    } else {
-        let msg = format!("{ENV_VAR} not set \u{2014} skipping smoke test\n");
-        let _ = std::io::Write::write_all(&mut std::io::stdout(), msg.as_bytes());
+    let Some(logs_dir) = smoke_common::logs_dir_or_skip("smoke_test_real_logs") else {
         return;
     };
 
-    assert!(
-        logs_dir.is_dir(),
-        "{ENV_VAR} is not a directory: {}",
-        logs_dir.display(),
-    );
-
-    // Discover .log files (excludes .log.gz).
-    let mut log_files: Vec<PathBuf> = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(&logs_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) == Some("log") {
-                log_files.push(path);
-            }
-        }
-    }
-    log_files.sort();
-
-    assert!(
-        !log_files.is_empty(),
-        "no .log files found in {}",
-        logs_dir.display(),
-    );
+    let log_files = smoke_common::assert_logs_dir(&logs_dir);
 
     // Process each file.
     let parsers = all_parsers();

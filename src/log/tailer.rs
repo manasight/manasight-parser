@@ -393,6 +393,47 @@ impl FileTailer {
             }
         }
     }
+
+    /// Reads the entire file and returns all complete log entries.
+    ///
+    /// Polls until no new complete entries are returned (typically at
+    /// EOF), then flushes the line buffer to capture any trailing
+    /// entry. Unlike [`run`](Self::run), this method does **not** poll
+    /// indefinitely or require a shutdown signal.
+    ///
+    /// Note: the entire file is buffered into a `Vec<LogEntry>` before
+    /// returning. This is suitable for batch processing (smoke tests,
+    /// replay analysis, `Player-prev.log` imports) but not for
+    /// memory-constrained streaming of very large files.
+    ///
+    /// Works with any tailer opened from the start of a file via
+    /// [`open_from_start`](Self::open_from_start).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TailerError::Io`] if a read operation fails.
+    pub async fn run_once(&mut self) -> Result<Vec<LogEntry>, TailerError> {
+        let mut all_entries = Vec::new();
+
+        loop {
+            let entries = self.poll().await?;
+            if entries.is_empty() {
+                break;
+            }
+            all_entries.extend(entries);
+        }
+
+        // Flush any remaining buffered entries.
+        all_entries.extend(self.flush());
+
+        ::log::info!(
+            "one-shot read complete: {} entries from {}",
+            all_entries.len(),
+            self.path.display(),
+        );
+
+        Ok(all_entries)
+    }
 }
 
 impl std::fmt::Debug for FileTailer {
@@ -495,6 +536,90 @@ mod tests {
             // First header doesn't flush; second header flushes first entry.
             assert_eq!(entries.len(), 1);
             assert!(entries[0].body.contains("Event1"));
+            Ok(())
+        }
+    }
+
+    // -- run_once -----------------------------------------------------------
+
+    mod run_once_tests {
+        use super::*;
+
+        #[tokio::test]
+        async fn test_run_once_reads_entire_file() -> TestResult {
+            let f = temp_log(
+                "[UnityCrossThreadLogger] Event1\n\
+                 [UnityCrossThreadLogger] Event2\n\
+                 [UnityCrossThreadLogger] Event3\n",
+            )?;
+            let mut tailer = FileTailer::open_from_start(f.path()).await?;
+            let entries = tailer.run_once().await?;
+            // 3 headers: Event1 flushed by Event2, Event2 flushed by Event3,
+            // Event3 flushed by run_once's flush().
+            assert_eq!(entries.len(), 3);
+            assert!(entries[0].body.contains("Event1"));
+            assert!(entries[1].body.contains("Event2"));
+            assert!(entries[2].body.contains("Event3"));
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn test_run_once_empty_file_returns_empty() -> TestResult {
+            let f = temp_log("")?;
+            let mut tailer = FileTailer::open_from_start(f.path()).await?;
+            let entries = tailer.run_once().await?;
+            assert!(entries.is_empty());
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn test_run_once_single_entry_flushed() -> TestResult {
+            let f = temp_log("[UnityCrossThreadLogger] Only\n")?;
+            let mut tailer = FileTailer::open_from_start(f.path()).await?;
+            let entries = tailer.run_once().await?;
+            assert_eq!(entries.len(), 1);
+            assert!(entries[0].body.contains("Only"));
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn test_run_once_multiline_entry() -> TestResult {
+            let f = temp_log(
+                "[UnityCrossThreadLogger] Event1\n\
+                 {\"key\": \"value\"}\n\
+                 [UnityCrossThreadLogger] Event2\n",
+            )?;
+            let mut tailer = FileTailer::open_from_start(f.path()).await?;
+            let entries = tailer.run_once().await?;
+            assert_eq!(entries.len(), 2);
+            assert!(entries[0].body.contains("key"));
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn test_run_once_works_with_open_from_start() -> TestResult {
+            let f = temp_log(
+                "[UnityCrossThreadLogger] Event1\n\
+                 [UnityCrossThreadLogger] Event2\n",
+            )?;
+            let mut tailer = FileTailer::open_from_start(f.path()).await?;
+            let entries = tailer.run_once().await?;
+            assert_eq!(entries.len(), 2);
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn test_run_once_handles_partial_last_line() -> TestResult {
+            // File with no trailing newline on the last entry.
+            let f = temp_log(
+                "[UnityCrossThreadLogger] Event1\n\
+                 [UnityCrossThreadLogger] Event2",
+            )?;
+            let mut tailer = FileTailer::open_from_start(f.path()).await?;
+            let entries = tailer.run_once().await?;
+            assert_eq!(entries.len(), 2);
+            assert!(entries[0].body.contains("Event1"));
+            assert!(entries[1].body.contains("Event2"));
             Ok(())
         }
     }

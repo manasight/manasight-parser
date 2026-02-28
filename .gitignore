@@ -15,5 +15,7 @@ Thumbs.db
 *.swp
 *.swo
 
-# Claude Code local config (symlinks to workspace commands)
-.claude/
+# Claude Code — ignore symlinked workspace commands and runtime dirs
+.claude/commands/issue-to-merge.md
+.claude/commands/sequential-issues.md
+.claude/worktrees/

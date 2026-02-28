@@ -126,6 +126,57 @@ impl MtgaEventStream {
         Ok((stream, subscriber))
     }
 
+    /// Starts a one-shot event stream that reads an entire log file and exits.
+    ///
+    /// Opens the file via [`FileTailer::open_from_start`], reads all
+    /// entries, routes them through the parser dispatch chain, and sends
+    /// recognized events to the event bus. The pipeline stops
+    /// automatically at EOF rather than polling indefinitely.
+    ///
+    /// This is useful for batch processing complete log files (smoke tests,
+    /// replay analysis, importing `Player-prev.log`).
+    ///
+    /// Returns a tuple of `(MtgaEventStream, Subscriber)`. The `Subscriber`
+    /// will receive `None` once all events have been delivered and the
+    /// pipeline finishes. Calling [`shutdown`](Self::shutdown) on a
+    /// one-shot stream is a no-op -- the pipeline exits at EOF on its own.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StreamError::Tailer`] if the log file cannot be opened.
+    pub async fn start_once(log_path: &Path) -> Result<(Self, Subscriber), StreamError> {
+        let tailer = FileTailer::open_from_start(log_path).await?;
+        let bus = EventBus::with_default_capacity();
+        let subscriber = bus.subscribe();
+        let router = Router::new();
+        let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
+
+        let (entry_tx, entry_rx) = tokio::sync::mpsc::channel(256);
+
+        // Spawn the tailer task — uses run_once, exits at EOF.
+        let tailer_handle = tokio::spawn(run_tailer_once(tailer, entry_tx));
+
+        // Spawn the routing task.
+        let router_handle = tokio::spawn(run_router(entry_rx, router, bus));
+
+        // Spawn a supervisor task that joins both.
+        let pipeline_handle = tokio::spawn(async move {
+            if let Err(e) = tailer_handle.await {
+                ::log::error!("tailer task panicked: {e}");
+            }
+            if let Err(e) = router_handle.await {
+                ::log::error!("router task panicked: {e}");
+            }
+        });
+
+        let stream = Self {
+            shutdown_tx,
+            _pipeline_handle: pipeline_handle,
+        };
+
+        Ok((stream, subscriber))
+    }
+
     /// Signals the background pipeline to stop.
     ///
     /// The tailer flushes any remaining buffered entries before exiting.
@@ -157,6 +208,31 @@ async fn run_tailer(
     if let Err(e) = tailer.run(entry_tx, shutdown_rx).await {
         ::log::error!("tailer error: {e}");
     }
+}
+
+/// Runs the file tailer in one-shot mode, reading the entire file then exiting.
+///
+/// Buffers all entries from [`FileTailer::run_once`] before streaming them
+/// through the channel. This trades memory for simplicity — suitable for
+/// batch processing, not for memory-constrained streaming of very large files.
+async fn run_tailer_once(
+    mut tailer: FileTailer,
+    entry_tx: tokio::sync::mpsc::Sender<crate::log::entry::LogEntry>,
+) {
+    match tailer.run_once().await {
+        Ok(entries) => {
+            for entry in entries {
+                if entry_tx.send(entry).await.is_err() {
+                    ::log::info!("entry channel closed during one-shot read");
+                    return;
+                }
+            }
+        }
+        Err(e) => {
+            ::log::error!("tailer error during one-shot read: {e}");
+        }
+    }
+    // Dropping entry_tx signals the router that no more entries are coming.
 }
 
 /// Receives log entries, routes them through parsers, and sends events to the bus.
@@ -317,6 +393,81 @@ mod tests {
         assert!(matches!(events[1], GameEvent::GameState(_)));
 
         stream.shutdown();
+        Ok(())
+    }
+
+    // -- start_once -----------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_start_once_returns_stream_and_subscriber() -> TestResult {
+        let f = temp_log("")?;
+        let (stream, _sub) = MtgaEventStream::start_once(f.path()).await?;
+        stream.shutdown();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_start_once_nonexistent_file_returns_error() {
+        let result = MtgaEventStream::start_once(Path::new("/nonexistent/Player.log")).await;
+        assert!(matches!(result, Err(StreamError::Tailer(_))));
+    }
+
+    #[tokio::test]
+    async fn test_start_once_delivers_session_event() -> TestResult {
+        let content = "[UnityCrossThreadLogger]Updated account. \
+                        DisplayName:TestPlayer, \
+                        AccountID:abc123, \
+                        Token:sometoken\n\
+                        [UnityCrossThreadLogger]2/25/2026 12:00:00 PM\n\
+                        some filler\n";
+        let f = temp_log(content)?;
+
+        let (_stream, mut sub) = MtgaEventStream::start_once(f.path()).await?;
+
+        let event = tokio::time::timeout(std::time::Duration::from_secs(3), sub.recv()).await?;
+        assert!(event.is_some());
+        assert!(
+            matches!(&event, Some(GameEvent::Session(_))),
+            "expected Session event, got {event:?}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_start_once_subscriber_ends_after_eof() -> TestResult {
+        let content = "[UnityCrossThreadLogger]Updated account. \
+                        DisplayName:TestPlayer, \
+                        AccountID:abc123, \
+                        Token:sometoken\n\
+                        [UnityCrossThreadLogger]2/25/2026 12:00:00 PM\n\
+                        some filler\n";
+        let f = temp_log(content)?;
+
+        let (_stream, mut sub) = MtgaEventStream::start_once(f.path()).await?;
+
+        // Collect all events until None.
+        let mut events = Vec::new();
+        loop {
+            let result =
+                tokio::time::timeout(std::time::Duration::from_secs(3), sub.recv()).await?;
+            match result {
+                Some(e) => events.push(e),
+                None => break,
+            }
+        }
+        // Should have at least the Session event.
+        assert!(!events.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_start_once_empty_file_subscriber_ends() -> TestResult {
+        let f = temp_log("")?;
+        let (_stream, mut sub) = MtgaEventStream::start_once(f.path()).await?;
+
+        // Subscriber should receive None (pipeline exits at EOF).
+        let result = tokio::time::timeout(std::time::Duration::from_secs(3), sub.recv()).await?;
+        assert!(result.is_none());
         Ok(())
     }
 
