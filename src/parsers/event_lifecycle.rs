@@ -29,10 +29,13 @@ const LIFECYCLE_METHODS: &[&str] = &["EventJoin", "EventClaimPrize", "EventEnter
 /// Returns `Some(GameEvent::EventLifecycle(_))` if the entry is an `==>`
 /// request for one of the recognized lifecycle methods, or `None` otherwise.
 ///
-/// The `timestamp` is used to construct [`EventMetadata`] for the resulting
-/// event. Callers are responsible for parsing the timestamp from the log
-/// entry header before invoking this function.
-pub fn try_parse(entry: &LogEntry, timestamp: chrono::DateTime<chrono::Utc>) -> Option<GameEvent> {
+/// The `timestamp` is `None` when the log entry header did not contain a
+/// parseable timestamp. It is passed through to [`EventMetadata`] so
+/// downstream consumers can distinguish real vs missing timestamps.
+pub fn try_parse(
+    entry: &LogEntry,
+    timestamp: Option<chrono::DateTime<chrono::Utc>>,
+) -> Option<GameEvent> {
     let body = &entry.body;
 
     let method = LIFECYCLE_METHODS
@@ -77,7 +80,7 @@ mod tests {
         fn test_try_parse_event_join_basic() {
             let body = r#"[UnityCrossThreadLogger]==> EventJoin {"id":"abc-123","request":"{\"EventName\":\"PremierDraft_MKM_20260201\"}"}"#;
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
@@ -92,7 +95,7 @@ mod tests {
         fn test_try_parse_event_join_with_timestamp() {
             let body = r#"[UnityCrossThreadLogger]2/25/2026 12:00:00 PM ==> EventJoin {"id":"ts-join","request":"{\"EventName\":\"QuickDraft_DSK_20260115\"}"}"#;
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
@@ -106,7 +109,7 @@ mod tests {
         fn test_try_parse_event_join_direct_event_name() {
             let body = r#"[UnityCrossThreadLogger]==> EventJoin {"EventName":"DirectEvent_Test"}"#;
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
@@ -125,7 +128,7 @@ mod tests {
         fn test_try_parse_event_claim_prize() {
             let body = r#"[UnityCrossThreadLogger]==> EventClaimPrize {"id":"prize-123","request":"{\"EventName\":\"PremierDraft_MKM_20260201\"}"}"#;
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
@@ -140,7 +143,7 @@ mod tests {
         fn test_try_parse_event_claim_prize_empty_request() {
             let body = r#"[UnityCrossThreadLogger]==> EventClaimPrize {"id":"empty-prize","request":"{}"}"#;
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
@@ -160,7 +163,7 @@ mod tests {
         fn test_try_parse_event_enter_pairing() {
             let body = r#"[UnityCrossThreadLogger]==> EventEnterPairing {"id":"pair-123","request":"{\"EventName\":\"Ladder\"}"}"#;
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
@@ -181,7 +184,7 @@ mod tests {
         fn test_try_parse_preserves_raw_bytes() {
             let body = r#"[UnityCrossThreadLogger]==> EventJoin {"id":"raw-test","request":"{\"EventName\":\"Test\"}"}"#;
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
@@ -192,7 +195,7 @@ mod tests {
         fn test_try_parse_stores_timestamp() {
             let body = r#"[UnityCrossThreadLogger]==> EventJoin {"id":"ts-test","request":"{\"EventName\":\"Test\"}"}"#;
             let entry = unity_entry(body);
-            let ts = test_timestamp();
+            let ts = Some(test_timestamp());
             let result = try_parse(&entry, ts);
 
             assert!(result.is_some());
@@ -204,7 +207,7 @@ mod tests {
         fn test_try_parse_preserves_raw_request() {
             let body = r#"[UnityCrossThreadLogger]==> EventJoin {"id":"raw-req","request":"{\"EventName\":\"Test\"}","extraField":"preserved"}"#;
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
@@ -225,49 +228,49 @@ mod tests {
                          <== EventJoin(uuid)\n\
                          {\"result\": \"success\"}";
             let entry = unity_entry(body);
-            assert!(try_parse(&entry, test_timestamp()).is_none());
+            assert!(try_parse(&entry, Some(test_timestamp())).is_none());
         }
 
         #[test]
         fn test_try_parse_unrecognized_method_returns_none() {
             let body = r#"[UnityCrossThreadLogger]==> EventGetCourses {"id":"courses-123"}"#;
             let entry = unity_entry(body);
-            assert!(try_parse(&entry, test_timestamp()).is_none());
+            assert!(try_parse(&entry, Some(test_timestamp())).is_none());
         }
 
         #[test]
         fn test_try_parse_unrelated_entry_returns_none() {
             let body = "[UnityCrossThreadLogger]greToClientEvent\n{\"data\": 1}";
             let entry = unity_entry(body);
-            assert!(try_parse(&entry, test_timestamp()).is_none());
+            assert!(try_parse(&entry, Some(test_timestamp())).is_none());
         }
 
         #[test]
         fn test_try_parse_old_underscore_marker_returns_none() {
             let body = "[UnityCrossThreadLogger]Event_Join\n{\"EventName\": \"Test\"}";
             let entry = unity_entry(body);
-            assert!(try_parse(&entry, test_timestamp()).is_none());
+            assert!(try_parse(&entry, Some(test_timestamp())).is_none());
         }
 
         #[test]
         fn test_try_parse_old_claim_prize_marker_returns_none() {
             let body = "[UnityCrossThreadLogger]Event_ClaimPrize\n{\"EventName\": \"Test\"}";
             let entry = unity_entry(body);
-            assert!(try_parse(&entry, test_timestamp()).is_none());
+            assert!(try_parse(&entry, Some(test_timestamp())).is_none());
         }
 
         #[test]
         fn test_try_parse_empty_body_returns_none() {
             let body = "[UnityCrossThreadLogger]";
             let entry = unity_entry(body);
-            assert!(try_parse(&entry, test_timestamp()).is_none());
+            assert!(try_parse(&entry, Some(test_timestamp())).is_none());
         }
 
         #[test]
         fn test_try_parse_malformed_json_returns_none() {
             let body = "[UnityCrossThreadLogger]==> EventJoin {broken json!!!}";
             let entry = unity_entry(body);
-            assert!(try_parse(&entry, test_timestamp()).is_none());
+            assert!(try_parse(&entry, Some(test_timestamp())).is_none());
         }
 
         #[test]
@@ -276,7 +279,7 @@ mod tests {
                 header: EntryHeader::ClientGre,
                 body: "[Client GRE]some GRE message".to_owned(),
             };
-            assert!(try_parse(&entry, test_timestamp()).is_none());
+            assert!(try_parse(&entry, Some(test_timestamp())).is_none());
         }
     }
 
@@ -289,7 +292,7 @@ mod tests {
         fn test_event_lifecycle_is_durable_per_event() {
             let body = r#"[UnityCrossThreadLogger]==> EventJoin {"id":"perf-test","request":"{\"EventName\":\"Test\"}"}"#;
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());

@@ -31,10 +31,13 @@ const FRONT_DOOR_CLOSE_MARKER: &str = "FrontDoorConnection.Close";
 /// three recognized session signatures, or `None` if the entry is not a
 /// session event.
 ///
-/// The `timestamp` is used to construct [`EventMetadata`] for the resulting
-/// event. Callers are responsible for parsing the timestamp from the log
-/// entry header before invoking this function.
-pub fn try_parse(entry: &LogEntry, timestamp: chrono::DateTime<chrono::Utc>) -> Option<GameEvent> {
+/// The `timestamp` is `None` when the log entry header did not contain a
+/// parseable timestamp. It is passed through to [`EventMetadata`] so
+/// downstream consumers can distinguish real vs missing timestamps.
+pub fn try_parse(
+    entry: &LogEntry,
+    timestamp: Option<chrono::DateTime<chrono::Utc>>,
+) -> Option<GameEvent> {
     let body = &entry.body;
 
     // Strip the header prefix (e.g., "[UnityCrossThreadLogger]") to get
@@ -202,7 +205,7 @@ mod tests {
                          AccountID:abcdef123456, \
                          Token:sometoken123";
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| {
@@ -222,7 +225,7 @@ mod tests {
                          DisplayName:Player Two, \
                          AccountID:xyz789";
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
@@ -238,7 +241,7 @@ mod tests {
             let body = "[UnityCrossThreadLogger]Updated account. \
                          DisplayName:, AccountID:abc123";
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
@@ -252,7 +255,7 @@ mod tests {
         fn test_try_parse_account_update_no_account_id() {
             let body = "[UnityCrossThreadLogger]Updated account. DisplayName:Solo";
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
@@ -267,7 +270,7 @@ mod tests {
             let body = "[UnityCrossThreadLogger]Updated account. \
                          DisplayName:RawTest, AccountID:raw123";
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
@@ -279,7 +282,7 @@ mod tests {
             let body = "[UnityCrossThreadLogger]Updated account. \
                          DisplayName:TsTest, AccountID:ts123";
             let entry = unity_entry(body);
-            let ts = test_timestamp();
+            let ts = Some(test_timestamp());
             let result = try_parse(&entry, ts);
 
             assert!(result.is_some());
@@ -293,7 +296,7 @@ mod tests {
                          Updated account. DisplayName:TimestampPlayer, \
                          AccountID:ts456";
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
@@ -316,7 +319,7 @@ mod tests {
                            \"screenName\": \"TestPlayer#12345\"\n\
                          }";
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
@@ -335,7 +338,7 @@ mod tests {
                            }\n\
                          }";
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
@@ -348,7 +351,7 @@ mod tests {
         fn test_try_parse_authenticate_response_no_json() {
             let body = "[UnityCrossThreadLogger]authenticateResponse";
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
@@ -363,7 +366,7 @@ mod tests {
             let body = "[UnityCrossThreadLogger]authenticateResponse\n\
                          {\"otherField\": \"value\"}";
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
@@ -378,7 +381,7 @@ mod tests {
             let body = "[UnityCrossThreadLogger]authenticateResponse\n\
                          {\"screenName\": \"Player#1\", \"token\": \"abc\"}";
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
@@ -394,7 +397,7 @@ mod tests {
                          authenticateResponse\n\
                          {\"screenName\": \"TsPlayer#555\"}";
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
@@ -413,7 +416,7 @@ mod tests {
         fn test_try_parse_front_door_close_basic() {
             let body = "[UnityCrossThreadLogger]FrontDoorConnection.Close";
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
@@ -427,7 +430,7 @@ mod tests {
             let body = "[UnityCrossThreadLogger]FrontDoorConnection.Close \
                          reason: server shutdown";
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
@@ -441,7 +444,7 @@ mod tests {
             let body = "[UnityCrossThreadLogger]2/25/2026 12:00:00 PM \
                          FrontDoorConnection.Close";
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
@@ -454,7 +457,7 @@ mod tests {
         fn test_try_parse_front_door_close_preserves_metadata() {
             let body = "[UnityCrossThreadLogger]FrontDoorConnection.Close";
             let entry = unity_entry(body);
-            let ts = test_timestamp();
+            let ts = Some(test_timestamp());
             let result = try_parse(&entry, ts);
 
             assert!(result.is_some());
@@ -473,14 +476,14 @@ mod tests {
         fn test_try_parse_unrelated_entry_returns_none() {
             let body = "[UnityCrossThreadLogger]greToClientEvent\n{\"data\": 1}";
             let entry = unity_entry(body);
-            assert!(try_parse(&entry, test_timestamp()).is_none());
+            assert!(try_parse(&entry, Some(test_timestamp())).is_none());
         }
 
         #[test]
         fn test_try_parse_empty_body_returns_none() {
             let body = "[UnityCrossThreadLogger]";
             let entry = unity_entry(body);
-            assert!(try_parse(&entry, test_timestamp()).is_none());
+            assert!(try_parse(&entry, Some(test_timestamp())).is_none());
         }
 
         #[test]
@@ -489,21 +492,21 @@ mod tests {
                 header: EntryHeader::ClientGre,
                 body: "[Client GRE]some GRE message".to_owned(),
             };
-            assert!(try_parse(&entry, test_timestamp()).is_none());
+            assert!(try_parse(&entry, Some(test_timestamp())).is_none());
         }
 
         #[test]
         fn test_try_parse_similar_but_different_marker_returns_none() {
             let body = "[UnityCrossThreadLogger]FrontDoorConnection.Open";
             let entry = unity_entry(body);
-            assert!(try_parse(&entry, test_timestamp()).is_none());
+            assert!(try_parse(&entry, Some(test_timestamp())).is_none());
         }
 
         #[test]
         fn test_try_parse_partial_account_marker_returns_none() {
             let body = "[UnityCrossThreadLogger]Updated account status";
             let entry = unity_entry(body);
-            assert!(try_parse(&entry, test_timestamp()).is_none());
+            assert!(try_parse(&entry, Some(test_timestamp())).is_none());
         }
     }
 
@@ -518,7 +521,7 @@ mod tests {
             let body = "[UnityCrossThreadLogger]Updated account. \
                          DisplayName:ClassTest, AccountID:class123";
             let entry = unity_entry(body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
 
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());

@@ -98,10 +98,13 @@ const GAME_STAGE_GAME_OVER: &str = "GameStage_GameOver";
 /// `Some(GameEvent::GameResult(_))` for game-over messages, or `None` if
 /// the entry does not match.
 ///
-/// The `timestamp` is used to construct [`EventMetadata`] for the resulting
-/// event. Callers are responsible for parsing the timestamp from the log
-/// entry header before invoking this function.
-pub fn try_parse(entry: &LogEntry, timestamp: chrono::DateTime<chrono::Utc>) -> Option<GameEvent> {
+/// The `timestamp` is `None` when the log entry header did not contain a
+/// parseable timestamp. It is passed through to [`EventMetadata`] so
+/// downstream consumers can distinguish real vs missing timestamps.
+pub fn try_parse(
+    entry: &LogEntry,
+    timestamp: Option<chrono::DateTime<chrono::Utc>>,
+) -> Option<GameEvent> {
     let body = &entry.body;
 
     // Quick check: bail early if the GRE marker is not present.
@@ -940,7 +943,7 @@ mod tests {
         fn test_try_parse_connect_resp_detected() {
             let body = connect_resp_body();
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
         }
 
@@ -948,7 +951,7 @@ mod tests {
         fn test_try_parse_connect_resp_correct_variant() {
             let body = connect_resp_body();
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             assert!(matches!(event, GameEvent::GameState(_)));
@@ -958,7 +961,7 @@ mod tests {
         fn test_try_parse_connect_resp_type_field() {
             let body = connect_resp_body();
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(event);
@@ -975,7 +978,7 @@ mod tests {
         fn test_try_parse_connect_resp_deck_cards() {
             let body = connect_resp_body();
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(event);
@@ -995,7 +998,7 @@ mod tests {
         fn test_try_parse_connect_resp_sideboard_cards() {
             let body = connect_resp_body();
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(event);
@@ -1013,7 +1016,7 @@ mod tests {
         fn test_try_parse_connect_resp_no_sideboard_returns_empty() {
             let body = minimal_connect_resp_body();
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(event);
@@ -1028,7 +1031,7 @@ mod tests {
         fn test_try_parse_connect_resp_deck_cards_minimal() {
             let body = minimal_connect_resp_body();
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(event);
@@ -1051,7 +1054,7 @@ mod tests {
         fn test_try_parse_connect_resp_system_seat_ids() {
             let body = connect_resp_body();
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(event);
@@ -1068,7 +1071,7 @@ mod tests {
         fn test_try_parse_connect_resp_seat_ids_flat_format() {
             let body = flat_connect_resp_body();
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(event);
@@ -1089,7 +1092,7 @@ mod tests {
         fn test_try_parse_connect_resp_settings() {
             let body = connect_resp_body();
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(event);
@@ -1105,7 +1108,7 @@ mod tests {
         fn test_try_parse_connect_resp_auto_pass_option() {
             let body = connect_resp_body();
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(event);
@@ -1120,7 +1123,7 @@ mod tests {
         fn test_try_parse_connect_resp_missing_settings_returns_empty_object() {
             let body = minimal_connect_resp_body();
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(event);
@@ -1136,7 +1139,7 @@ mod tests {
         fn test_try_parse_connect_resp_msg_id() {
             let body = connect_resp_body();
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(event);
@@ -1147,7 +1150,7 @@ mod tests {
         fn test_try_parse_connect_resp_game_state_id() {
             let body = connect_resp_body();
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(event);
@@ -1164,7 +1167,7 @@ mod tests {
         fn test_try_parse_flat_format_detected() {
             let body = flat_connect_resp_body();
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
         }
 
@@ -1172,7 +1175,7 @@ mod tests {
         fn test_try_parse_flat_format_deck_cards() {
             let body = flat_connect_resp_body();
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(event);
@@ -1190,7 +1193,7 @@ mod tests {
         fn test_try_parse_flat_format_sideboard() {
             let body = flat_connect_resp_body();
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(event);
@@ -1206,7 +1209,7 @@ mod tests {
         fn test_try_parse_flat_format_settings() {
             let body = flat_connect_resp_body();
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(event);
@@ -1221,7 +1224,7 @@ mod tests {
         fn test_try_parse_flat_format_msg_id() {
             let body = flat_connect_resp_body();
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(event);
@@ -1232,7 +1235,7 @@ mod tests {
         fn test_try_parse_flat_format_game_state_message() {
             let body = flat_game_state_message_body();
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(event);
@@ -1250,7 +1253,7 @@ mod tests {
         fn test_try_parse_connect_resp_preserves_raw_connect_resp() {
             let body = connect_resp_body();
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(event);
@@ -1266,7 +1269,7 @@ mod tests {
         fn test_try_parse_connect_resp_preserves_raw_bytes() {
             let body = connect_resp_body();
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             assert_eq!(event.metadata().raw_bytes(), body.as_bytes());
@@ -1276,7 +1279,7 @@ mod tests {
         fn test_try_parse_connect_resp_stores_timestamp() {
             let body = connect_resp_body();
             let entry = unity_entry(&body);
-            let ts = test_timestamp();
+            let ts = Some(test_timestamp());
             let result = try_parse(&entry, ts);
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
@@ -1293,14 +1296,14 @@ mod tests {
         fn test_try_parse_unrelated_entry_returns_none() {
             let body = "[UnityCrossThreadLogger]Updated account. DisplayName:Test";
             let entry = unity_entry(body);
-            assert!(try_parse(&entry, test_timestamp()).is_none());
+            assert!(try_parse(&entry, Some(test_timestamp())).is_none());
         }
 
         #[test]
         fn test_try_parse_empty_body_returns_none() {
             let body = "[UnityCrossThreadLogger]";
             let entry = unity_entry(body);
-            assert!(try_parse(&entry, test_timestamp()).is_none());
+            assert!(try_parse(&entry, Some(test_timestamp())).is_none());
         }
 
         #[test]
@@ -1308,21 +1311,21 @@ mod tests {
             let body = "[UnityCrossThreadLogger]matchGameRoomStateChangedEvent\n\
                          {\"matchGameRoomStateChangedEvent\": {\"gameRoomInfo\": {}}}";
             let entry = unity_entry(body);
-            assert!(try_parse(&entry, test_timestamp()).is_none());
+            assert!(try_parse(&entry, Some(test_timestamp())).is_none());
         }
 
         #[test]
         fn test_try_parse_no_json_body_returns_none() {
             let body = "[UnityCrossThreadLogger]greToClientEvent with no json";
             let entry = unity_entry(body);
-            assert!(try_parse(&entry, test_timestamp()).is_none());
+            assert!(try_parse(&entry, Some(test_timestamp())).is_none());
         }
 
         #[test]
         fn test_try_parse_malformed_json_returns_none() {
             let body = "[UnityCrossThreadLogger]greToClientEvent\n{invalid json}";
             let entry = unity_entry(body);
-            assert!(try_parse(&entry, test_timestamp()).is_none());
+            assert!(try_parse(&entry, Some(test_timestamp())).is_none());
         }
 
         #[test]
@@ -1336,7 +1339,7 @@ mod tests {
                 })
             );
             let entry = unity_entry(&body);
-            assert!(try_parse(&entry, test_timestamp()).is_none());
+            assert!(try_parse(&entry, Some(test_timestamp())).is_none());
         }
 
         #[test]
@@ -1350,7 +1353,7 @@ mod tests {
                 })
             );
             let entry = unity_entry(&body);
-            assert!(try_parse(&entry, test_timestamp()).is_none());
+            assert!(try_parse(&entry, Some(test_timestamp())).is_none());
         }
 
         #[test]
@@ -1378,7 +1381,7 @@ mod tests {
             // Note: This returns Some because the parser only checks the body
             // content, not the header type. The GRE marker is present in the
             // body. This is valid -- ConnectResp can appear under either header.
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
         }
 
@@ -1398,7 +1401,7 @@ mod tests {
                 })
             );
             let entry = unity_entry(&body);
-            assert!(try_parse(&entry, test_timestamp()).is_none());
+            assert!(try_parse(&entry, Some(test_timestamp())).is_none());
         }
     }
 
@@ -1424,7 +1427,7 @@ mod tests {
                 })
             );
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(event);
@@ -1451,7 +1454,7 @@ mod tests {
                 })
             );
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(event);
@@ -1484,7 +1487,7 @@ mod tests {
                 })
             );
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(event);
@@ -1514,7 +1517,7 @@ mod tests {
                 })
             );
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(event);
@@ -1549,7 +1552,7 @@ mod tests {
                 })
             );
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(event);
@@ -1583,7 +1586,7 @@ mod tests {
                 })
             );
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(event);
@@ -1600,7 +1603,7 @@ mod tests {
         fn test_try_parse_game_state_message_detected() {
             let body = game_state_message_body();
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
         }
 
@@ -1608,7 +1611,7 @@ mod tests {
         fn test_try_parse_game_state_message_correct_variant() {
             let body = game_state_message_body();
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             assert!(matches!(event, GameEvent::GameState(_)));
@@ -1618,7 +1621,7 @@ mod tests {
         fn test_try_parse_game_state_message_type_field() {
             let body = game_state_message_body();
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(event);
@@ -1629,7 +1632,7 @@ mod tests {
         fn test_try_parse_game_state_message_msg_id() {
             let body = game_state_message_body();
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(event);
@@ -1640,7 +1643,7 @@ mod tests {
         fn test_try_parse_game_state_message_game_state_id() {
             let body = game_state_message_body();
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(event);
@@ -1651,7 +1654,7 @@ mod tests {
         fn test_try_parse_game_state_message_preserves_raw_bytes() {
             let body = game_state_message_body();
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             assert_eq!(event.metadata().raw_bytes(), body.as_bytes());
@@ -1661,7 +1664,7 @@ mod tests {
         fn test_try_parse_game_state_message_stores_timestamp() {
             let body = game_state_message_body();
             let entry = unity_entry(&body);
-            let ts = test_timestamp();
+            let ts = Some(test_timestamp());
             let result = try_parse(&entry, ts);
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
@@ -1678,7 +1681,7 @@ mod tests {
         fn test_try_parse_game_state_message_zone_count() {
             let body = game_state_message_body();
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(event);
@@ -1693,7 +1696,7 @@ mod tests {
         fn test_try_parse_game_state_message_hand_zone() {
             let body = game_state_message_body();
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(event);
@@ -1719,7 +1722,7 @@ mod tests {
         fn test_try_parse_game_state_message_library_zone() {
             let body = game_state_message_body();
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(event);
@@ -1740,7 +1743,7 @@ mod tests {
         fn test_try_parse_game_state_message_battlefield_zone() {
             let body = game_state_message_body();
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(event);
@@ -1761,7 +1764,7 @@ mod tests {
         fn test_try_parse_game_state_message_graveyard_zone() {
             let body = game_state_message_body();
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(event);
@@ -1781,7 +1784,7 @@ mod tests {
         fn test_try_parse_game_state_message_exile_zone_empty() {
             let body = game_state_message_body();
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(event);
@@ -1801,7 +1804,7 @@ mod tests {
         fn test_try_parse_game_state_message_stack_zone() {
             let body = game_state_message_body();
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(event);
@@ -1822,7 +1825,7 @@ mod tests {
         fn test_try_parse_game_state_message_no_zones_returns_empty() {
             let body = empty_game_state_message_body();
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(event);
@@ -1837,7 +1840,7 @@ mod tests {
         fn test_try_parse_game_state_message_incremental_single_zone() {
             let body = minimal_game_state_message_body();
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(event);
@@ -1863,7 +1866,7 @@ mod tests {
         fn test_try_parse_game_state_message_object_count() {
             let body = game_state_message_body();
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(event);
@@ -1878,7 +1881,7 @@ mod tests {
         fn test_try_parse_game_state_message_creature_object() {
             let body = game_state_message_body();
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(event);
@@ -1900,7 +1903,7 @@ mod tests {
         fn test_try_parse_game_state_message_creature_card_types() {
             let body = game_state_message_body();
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(event);
@@ -1920,7 +1923,7 @@ mod tests {
         fn test_try_parse_game_state_message_creature_subtypes() {
             let body = game_state_message_body();
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(event);
@@ -1941,7 +1944,7 @@ mod tests {
         fn test_try_parse_game_state_message_creature_abilities() {
             let body = game_state_message_body();
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(event);
@@ -1961,7 +1964,7 @@ mod tests {
         fn test_try_parse_game_state_message_creature_power_toughness() {
             let body = game_state_message_body();
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(event);
@@ -1978,7 +1981,7 @@ mod tests {
         fn test_try_parse_game_state_message_land_object() {
             let body = game_state_message_body();
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(event);
@@ -2003,7 +2006,7 @@ mod tests {
         fn test_try_parse_game_state_message_instant_on_stack() {
             let body = game_state_message_body();
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(event);
@@ -2024,7 +2027,7 @@ mod tests {
         fn test_try_parse_game_state_message_no_objects_returns_empty() {
             let body = empty_game_state_message_body();
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(event);
@@ -2039,7 +2042,7 @@ mod tests {
         fn test_try_parse_game_state_message_object_name_integer() {
             let body = game_state_message_body();
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(event);
@@ -2055,7 +2058,7 @@ mod tests {
         fn test_try_parse_game_state_message_minimal_object() {
             let body = flat_game_state_message_body();
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(event);
@@ -2083,7 +2086,7 @@ mod tests {
         fn test_try_parse_game_state_message_game_info_present() {
             let body = game_state_message_body();
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(event);
@@ -2095,7 +2098,7 @@ mod tests {
         fn test_try_parse_game_state_message_game_info_match_id() {
             let body = game_state_message_body();
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(event);
@@ -2107,7 +2110,7 @@ mod tests {
         fn test_try_parse_game_state_message_game_info_stage() {
             let body = game_state_message_body();
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(event);
@@ -2119,7 +2122,7 @@ mod tests {
         fn test_try_parse_game_state_message_game_info_mulligan_type() {
             let body = game_state_message_body();
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(event);
@@ -2131,7 +2134,7 @@ mod tests {
         fn test_try_parse_game_state_message_missing_game_info_returns_null() {
             let body = empty_game_state_message_body();
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(event);
@@ -2149,7 +2152,7 @@ mod tests {
         fn test_try_parse_queued_game_state_message_detected() {
             let body = queued_game_state_message_body();
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
         }
 
@@ -2157,7 +2160,7 @@ mod tests {
         fn test_try_parse_queued_game_state_message_type_field() {
             let body = queued_game_state_message_body();
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(event);
@@ -2168,7 +2171,7 @@ mod tests {
         fn test_try_parse_queued_game_state_message_msg_id() {
             let body = queued_game_state_message_body();
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(event);
@@ -2179,7 +2182,7 @@ mod tests {
         fn test_try_parse_queued_game_state_message_zones() {
             let body = queued_game_state_message_body();
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(event);
@@ -2199,7 +2202,7 @@ mod tests {
         fn test_try_parse_queued_game_state_message_objects() {
             let body = queued_game_state_message_body();
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(event);
@@ -2219,7 +2222,7 @@ mod tests {
         fn test_try_parse_queued_game_state_message_preserves_raw_bytes() {
             let body = queued_game_state_message_body();
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             assert_eq!(event.metadata().raw_bytes(), body.as_bytes());
@@ -2236,7 +2239,7 @@ mod tests {
         fn test_try_parse_connect_resp_performance_class_interactive_dispatch() {
             let body = connect_resp_body();
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             assert_eq!(
@@ -2249,7 +2252,7 @@ mod tests {
         fn test_try_parse_game_state_message_performance_class_interactive_dispatch() {
             let body = game_state_message_body();
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             assert_eq!(
@@ -2262,7 +2265,7 @@ mod tests {
         fn test_try_parse_queued_game_state_message_performance_class_interactive_dispatch() {
             let body = queued_game_state_message_body();
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             assert_eq!(
@@ -2498,7 +2501,7 @@ mod tests {
                 })
             );
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(event);
@@ -2537,7 +2540,7 @@ mod tests {
                 })
             );
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(event);
@@ -2582,7 +2585,7 @@ mod tests {
                 })
             );
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(event);
@@ -2619,7 +2622,7 @@ mod tests {
                 })
             );
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(event);
@@ -2661,7 +2664,7 @@ mod tests {
                 })
             );
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(event);
@@ -2708,7 +2711,7 @@ mod tests {
                 })
             );
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(event);
@@ -2751,7 +2754,7 @@ mod tests {
         #[test]
         fn test_try_parse_ui_message_returns_some() {
             let entry = gre_entry_with_type("GREMessageType_UIMessage");
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             assert!(matches!(event, GameEvent::GameState(_)));
@@ -2762,7 +2765,7 @@ mod tests {
         #[test]
         fn test_try_parse_timer_state_message_returns_some() {
             let entry = gre_entry_with_type("GREMessageType_TimerStateMessage");
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             assert!(matches!(event, GameEvent::GameState(_)));
@@ -2776,7 +2779,7 @@ mod tests {
         #[test]
         fn test_try_parse_set_settings_resp_returns_some() {
             let entry = gre_entry_with_type("GREMessageType_SetSettingsResp");
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             assert!(matches!(event, GameEvent::GameState(_)));
@@ -2787,7 +2790,7 @@ mod tests {
         #[test]
         fn test_noise_types_preserve_metadata_raw_bytes() {
             let entry = gre_entry_with_type("GREMessageType_UIMessage");
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             assert!(!event.metadata().raw_bytes().is_empty());
         }
@@ -2818,7 +2821,7 @@ mod tests {
                 })
             );
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             // Should be GameState from GameStateMessage, not from UIMessage noise
@@ -2829,7 +2832,7 @@ mod tests {
         #[test]
         fn test_truly_unknown_type_still_returns_none() {
             let entry = gre_entry_with_type("GREMessageType_SomeFutureType");
-            assert!(try_parse(&entry, test_timestamp()).is_none());
+            assert!(try_parse(&entry, Some(test_timestamp())).is_none());
         }
     }
 
@@ -2906,7 +2909,7 @@ mod tests {
         #[test]
         fn test_try_parse_game_state_message_game_over_emits_game_result() {
             let entry = unity_entry(&game_over_body());
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             assert!(matches!(event, GameEvent::GameResult(_)));
@@ -2915,14 +2918,14 @@ mod tests {
         #[test]
         fn test_try_parse_game_over_performance_class_post_game_batch() {
             let entry = unity_entry(&game_over_body());
-            let event = try_parse(&entry, test_timestamp()).unwrap_or_else(|| unreachable!());
+            let event = try_parse(&entry, Some(test_timestamp())).unwrap_or_else(|| unreachable!());
             assert_eq!(event.performance_class(), PerformanceClass::PostGameBatch);
         }
 
         #[test]
         fn test_try_parse_game_over_payload_type_and_source() {
             let entry = unity_entry(&game_over_body());
-            let event = try_parse(&entry, test_timestamp()).unwrap_or_else(|| unreachable!());
+            let event = try_parse(&entry, Some(test_timestamp())).unwrap_or_else(|| unreachable!());
             let payload = game_result_payload(&event);
             assert_eq!(payload["type"], "game_result");
             assert_eq!(payload["source"], "gre_game_state");
@@ -2931,7 +2934,7 @@ mod tests {
         #[test]
         fn test_try_parse_game_over_extracts_stage_and_match_state() {
             let entry = unity_entry(&game_over_body());
-            let event = try_parse(&entry, test_timestamp()).unwrap_or_else(|| unreachable!());
+            let event = try_parse(&entry, Some(test_timestamp())).unwrap_or_else(|| unreachable!());
             let payload = game_result_payload(&event);
             assert_eq!(payload["stage"], "GameStage_GameOver");
             assert_eq!(payload["match_state"], "MatchState_GameComplete");
@@ -2940,7 +2943,7 @@ mod tests {
         #[test]
         fn test_try_parse_game_over_extracts_winning_team_id() {
             let entry = unity_entry(&game_over_body());
-            let event = try_parse(&entry, test_timestamp()).unwrap_or_else(|| unreachable!());
+            let event = try_parse(&entry, Some(test_timestamp())).unwrap_or_else(|| unreachable!());
             let payload = game_result_payload(&event);
             assert_eq!(payload["winning_team_id"], 1);
         }
@@ -2948,7 +2951,7 @@ mod tests {
         #[test]
         fn test_try_parse_game_over_extracts_result_type() {
             let entry = unity_entry(&game_over_body());
-            let event = try_parse(&entry, test_timestamp()).unwrap_or_else(|| unreachable!());
+            let event = try_parse(&entry, Some(test_timestamp())).unwrap_or_else(|| unreachable!());
             let payload = game_result_payload(&event);
             assert_eq!(payload["result_type"], "ResultType_WinLoss");
         }
@@ -2956,7 +2959,7 @@ mod tests {
         #[test]
         fn test_try_parse_game_over_extracts_reason() {
             let entry = unity_entry(&game_over_body());
-            let event = try_parse(&entry, test_timestamp()).unwrap_or_else(|| unreachable!());
+            let event = try_parse(&entry, Some(test_timestamp())).unwrap_or_else(|| unreachable!());
             let payload = game_result_payload(&event);
             assert_eq!(payload["reason"], "ResultReason_Game");
         }
@@ -2964,7 +2967,7 @@ mod tests {
         #[test]
         fn test_try_parse_game_over_preserves_results_array() {
             let entry = unity_entry(&game_over_body());
-            let event = try_parse(&entry, test_timestamp()).unwrap_or_else(|| unreachable!());
+            let event = try_parse(&entry, Some(test_timestamp())).unwrap_or_else(|| unreachable!());
             let payload = game_result_payload(&event);
             let results = payload["results"]
                 .as_array()
@@ -2976,7 +2979,7 @@ mod tests {
         #[test]
         fn test_try_parse_game_over_preserves_raw_game_info() {
             let entry = unity_entry(&game_over_body());
-            let event = try_parse(&entry, test_timestamp()).unwrap_or_else(|| unreachable!());
+            let event = try_parse(&entry, Some(test_timestamp())).unwrap_or_else(|| unreachable!());
             let payload = game_result_payload(&event);
             let gi = &payload["game_info"];
             assert_eq!(gi["matchID"], "match-abc-123");
@@ -2987,22 +2990,22 @@ mod tests {
         #[test]
         fn test_try_parse_game_over_preserves_timestamp() {
             let entry = unity_entry(&game_over_body());
-            let event = try_parse(&entry, test_timestamp()).unwrap_or_else(|| unreachable!());
-            assert_eq!(event.metadata().timestamp(), test_timestamp());
+            let event = try_parse(&entry, Some(test_timestamp())).unwrap_or_else(|| unreachable!());
+            assert_eq!(event.metadata().timestamp(), Some(test_timestamp()));
         }
 
         #[test]
         fn test_try_parse_game_over_preserves_raw_bytes() {
             let body = game_over_body();
             let entry = unity_entry(&body);
-            let event = try_parse(&entry, test_timestamp()).unwrap_or_else(|| unreachable!());
+            let event = try_parse(&entry, Some(test_timestamp())).unwrap_or_else(|| unreachable!());
             assert_eq!(event.metadata().raw_bytes(), body.as_bytes());
         }
 
         #[test]
         fn test_try_parse_queued_game_state_message_game_over_emits_game_result() {
             let entry = unity_entry(&queued_game_over_body());
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             assert!(matches!(event, GameEvent::GameResult(_)));
@@ -3015,7 +3018,7 @@ mod tests {
         fn test_try_parse_non_game_over_stage_emits_game_state() {
             // GameStage_Play should still emit GameState, not GameResult.
             let entry = unity_entry(&game_state_message_body());
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             assert!(matches!(event, GameEvent::GameState(_)));
@@ -3041,7 +3044,7 @@ mod tests {
                 })
             );
             let entry = unity_entry(&body);
-            let event = try_parse(&entry, test_timestamp()).unwrap_or_else(|| unreachable!());
+            let event = try_parse(&entry, Some(test_timestamp())).unwrap_or_else(|| unreachable!());
             assert!(matches!(event, GameEvent::GameResult(_)));
             let payload = game_result_payload(&event);
             assert_eq!(payload["winning_team_id"], 0);
@@ -3087,7 +3090,7 @@ mod tests {
                 })
             );
             let entry = unity_entry(&body);
-            let event = try_parse(&entry, test_timestamp()).unwrap_or_else(|| unreachable!());
+            let event = try_parse(&entry, Some(test_timestamp())).unwrap_or_else(|| unreachable!());
             let payload = game_result_payload(&event);
             // Top-level fields come from the MatchScope_Game entry.
             assert_eq!(payload["winning_team_id"], 0);
@@ -3120,7 +3123,7 @@ mod tests {
                 })
             );
             let entry = unity_entry(&body);
-            let result = try_parse(&entry, test_timestamp());
+            let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             assert!(matches!(event, GameEvent::GameState(_)));

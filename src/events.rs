@@ -294,6 +294,12 @@ impl PerformanceClass {
 /// from `raw_bytes` to enforce the invariant that the hash always matches.
 /// This is critical for server-side deduplication via event fingerprints.
 ///
+/// The `timestamp` is `Option<DateTime<Utc>>` because some log entries lack
+/// a parseable timestamp in the header. `None` means "no timestamp found in
+/// the log entry" — downstream consumers must handle this explicitly rather
+/// than receiving a synthetic `Utc::now()` that would break fingerprinting
+/// and chronological ordering.
+///
 /// All fields are private to protect the hash invariant. Use the accessor
 /// methods to read them.
 ///
@@ -301,8 +307,9 @@ impl PerformanceClass {
 /// `raw_bytes` during deserialization rather than trusting the serialized value.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct EventMetadata {
-    /// UTC timestamp parsed from the log entry header.
-    timestamp: DateTime<Utc>,
+    /// UTC timestamp parsed from the log entry header, or `None` if the
+    /// entry did not contain a parseable timestamp.
+    timestamp: Option<DateTime<Utc>>,
 
     /// Original log entry bytes, serialized as base64. Private to prevent
     /// mutation that would break the `raw_bytes_hash` invariant.
@@ -319,7 +326,12 @@ pub struct EventMetadata {
 impl EventMetadata {
     /// Creates a new `EventMetadata`, computing `raw_bytes_hash` as the
     /// SHA-256 digest of `raw_bytes`.
-    pub fn new(timestamp: DateTime<Utc>, raw_bytes: Vec<u8>) -> Self {
+    ///
+    /// `timestamp` is `None` when the log entry header did not contain a
+    /// parseable timestamp. This preserves the distinction between "real
+    /// timestamp from the log" and "no timestamp available" for downstream
+    /// consumers.
+    pub fn new(timestamp: Option<DateTime<Utc>>, raw_bytes: Vec<u8>) -> Self {
         let raw_bytes_hash: [u8; 32] = Sha256::digest(&raw_bytes).into();
         Self {
             timestamp,
@@ -328,8 +340,9 @@ impl EventMetadata {
         }
     }
 
-    /// Returns the UTC timestamp parsed from the log entry header.
-    pub fn timestamp(&self) -> DateTime<Utc> {
+    /// Returns the UTC timestamp parsed from the log entry header, or
+    /// `None` if the entry did not contain a parseable timestamp.
+    pub fn timestamp(&self) -> Option<DateTime<Utc>> {
         self.timestamp
     }
 
@@ -356,7 +369,7 @@ impl<'de> Deserialize<'de> for EventMetadata {
         /// hash is always recomputed from `raw_bytes`.
         #[derive(Deserialize)]
         struct EventMetadataWire {
-            timestamp: DateTime<Utc>,
+            timestamp: Option<DateTime<Utc>>,
             #[serde(with = "base64_serde")]
             raw_bytes: Vec<u8>,
             // Accepts any format (hex string, integer array) or absence.
@@ -503,7 +516,7 @@ mod tests {
             .with_ymd_and_hms(2026, 2, 25, 12, 0, 0)
             .single()
             .unwrap_or_default();
-        EventMetadata::new(timestamp, raw.to_vec())
+        EventMetadata::new(Some(timestamp), raw.to_vec())
     }
 
     /// Helper: build all 12 `GameEvent` variants for exhaustive testing.
@@ -550,8 +563,11 @@ mod tests {
     #[test]
     fn test_event_metadata_new_stores_timestamp() {
         let meta = make_metadata(b"data");
-        assert_eq!(meta.timestamp().year(), 2026);
-        assert_eq!(meta.timestamp().month(), 2);
+        let ts = meta.timestamp();
+        assert!(ts.is_some());
+        let ts = ts.unwrap_or_default();
+        assert_eq!(ts.year(), 2026);
+        assert_eq!(ts.month(), 2);
     }
 
     #[test]
@@ -601,9 +617,17 @@ mod tests {
     fn test_event_metadata_timestamp_getter() {
         let meta = make_metadata(b"data");
         let ts = meta.timestamp();
+        assert!(ts.is_some());
+        let ts = ts.unwrap_or_default();
         assert_eq!(ts.year(), 2026);
         assert_eq!(ts.month(), 2);
         assert_eq!(ts.day(), 25);
+    }
+
+    #[test]
+    fn test_event_metadata_none_timestamp() {
+        let meta = EventMetadata::new(None, b"data".to_vec());
+        assert!(meta.timestamp().is_none());
     }
 
     // -- Per-category struct field access (via accessors) --
@@ -972,6 +996,28 @@ mod tests {
         // Hash is recomputed, not taken from wire
         let expected: [u8; 32] = Sha256::digest(b"data").into();
         assert_eq!(*meta.raw_bytes_hash(), expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_event_metadata_none_timestamp_serde_round_trip() -> TestResult {
+        let meta = EventMetadata::new(None, b"no timestamp".to_vec());
+        let serialized = serde_json::to_string(&meta)?;
+        let deserialized: EventMetadata = serde_json::from_str(&serialized)?;
+        assert_eq!(deserialized, meta);
+        assert!(deserialized.timestamp().is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn test_event_metadata_deserialize_null_timestamp() -> TestResult {
+        let json = serde_json::json!({
+            "timestamp": null,
+            "raw_bytes": BASE64_STANDARD.encode(b"data"),
+        });
+        let meta: EventMetadata = serde_json::from_value(json)?;
+        assert!(meta.timestamp().is_none());
+        assert_eq!(meta.raw_bytes(), b"data");
         Ok(())
     }
 }
