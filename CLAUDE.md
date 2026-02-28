@@ -37,6 +37,7 @@ cargo build
 - `src/events.rs` — Public event type enums and structs
 - `src/event_bus.rs` — Async broadcast channel
 - `src/router.rs` — Raw entry to parser dispatch
+- `src/util.rs` — Shared `pub(crate)` helper functions
 - `src/log/` — Log file discovery, tailing, entry parsing, timestamps
 - `src/parsers/` — One parser per event category
 - `tests/fixtures/` — Sanitized Player.log snippets for integration tests
@@ -68,6 +69,9 @@ Critical build-breaker reminders (enforced by clippy deny lints):
 - Follow the Rust logging policy: `../manasight-docs/docs/conventions/rust-logging.md`
 - **Library crate rule**: Must NOT initialize a logger — use `log` facade only
 - Internal code must use `::log` (e.g., `::log::info!()`) because `pub mod log` shadows the crate
+
+### Shared Helpers
+- Place `pub(crate)` utility functions in `src/util.rs` — do not duplicate helpers across modules
 
 ### Library Crate Rules
 - Must NOT depend on Tauri or any desktop-specific crates
