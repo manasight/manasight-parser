@@ -443,10 +443,15 @@ impl FileTailer {
 
     /// Reads the entire file and returns all complete log entries.
     ///
-    /// Polls until EOF (zero bytes read), flushes any remaining
-    /// buffered entries, and returns the complete list. Unlike
-    /// [`run`](Self::run), this method does **not** poll indefinitely
-    /// or require a shutdown signal.
+    /// Polls until no new complete entries are returned (typically at
+    /// EOF), then flushes the line buffer to capture any trailing
+    /// entry. Unlike [`run`](Self::run), this method does **not** poll
+    /// indefinitely or require a shutdown signal.
+    ///
+    /// Note: the entire file is buffered into a `Vec<LogEntry>` before
+    /// returning. This is suitable for batch processing (smoke tests,
+    /// replay analysis, `Player-prev.log` imports) but not for
+    /// memory-constrained streaming of very large files.
     ///
     /// Intended for one-shot tailers created via
     /// [`open_once`](Self::open_once), but works with any tailer opened

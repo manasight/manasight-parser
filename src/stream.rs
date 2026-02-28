@@ -138,7 +138,8 @@ impl MtgaEventStream {
     ///
     /// Returns a tuple of `(MtgaEventStream, Subscriber)`. The `Subscriber`
     /// will receive `None` once all events have been delivered and the
-    /// pipeline finishes.
+    /// pipeline finishes. Calling [`shutdown`](Self::shutdown) on a
+    /// one-shot stream is a no-op -- the pipeline exits at EOF on its own.
     ///
     /// # Errors
     ///
@@ -210,6 +211,10 @@ async fn run_tailer(
 }
 
 /// Runs the file tailer in one-shot mode, reading the entire file then exiting.
+///
+/// Buffers all entries from [`FileTailer::run_once`] before streaming them
+/// through the channel. This trades memory for simplicity — suitable for
+/// batch processing, not for memory-constrained streaming of very large files.
 async fn run_tailer_once(
     mut tailer: FileTailer,
     entry_tx: tokio::sync::mpsc::Sender<crate::log::entry::LogEntry>,
