@@ -110,9 +110,6 @@ pub struct FileTailer {
     read_buf: Vec<u8>,
     /// Poll interval in milliseconds.
     poll_interval_ms: u64,
-    /// When `true`, [`run_once`](Self::run_once) reads to EOF and exits
-    /// instead of polling indefinitely.
-    one_shot: bool,
 }
 
 impl FileTailer {
@@ -143,7 +140,6 @@ impl FileTailer {
             partial_line: String::new(),
             read_buf: vec![0u8; READ_BUFFER_CAPACITY],
             poll_interval_ms: DEFAULT_POLL_INTERVAL_MS,
-            one_shot: false,
         };
 
         // Seek to end — tail mode.
@@ -194,7 +190,6 @@ impl FileTailer {
             partial_line: String::new(),
             read_buf: vec![0u8; READ_BUFFER_CAPACITY],
             poll_interval_ms: DEFAULT_POLL_INTERVAL_MS,
-            one_shot: false,
         })
     }
 
@@ -230,14 +225,7 @@ impl FileTailer {
             partial_line: String::new(),
             read_buf: vec![0u8; READ_BUFFER_CAPACITY],
             poll_interval_ms: DEFAULT_POLL_INTERVAL_MS,
-            one_shot: true,
         })
-    }
-
-    /// Returns `true` if this tailer was opened in one-shot mode via
-    /// [`open_once`](Self::open_once).
-    pub fn is_one_shot(&self) -> bool {
-        self.one_shot
     }
 
     /// Sets the poll interval in milliseconds.
@@ -598,30 +586,6 @@ mod tests {
             let f = temp_log("existing content\n")?;
             let tailer = FileTailer::open_once(f.path()).await?;
             assert_eq!(tailer.offset(), 0);
-            Ok(())
-        }
-
-        #[tokio::test]
-        async fn test_open_once_is_one_shot() -> TestResult {
-            let f = temp_log("")?;
-            let tailer = FileTailer::open_once(f.path()).await?;
-            assert!(tailer.is_one_shot());
-            Ok(())
-        }
-
-        #[tokio::test]
-        async fn test_open_is_not_one_shot() -> TestResult {
-            let f = temp_log("")?;
-            let tailer = FileTailer::open(f.path()).await?;
-            assert!(!tailer.is_one_shot());
-            Ok(())
-        }
-
-        #[tokio::test]
-        async fn test_open_from_start_is_not_one_shot() -> TestResult {
-            let f = temp_log("")?;
-            let tailer = FileTailer::open_from_start(f.path()).await?;
-            assert!(!tailer.is_one_shot());
             Ok(())
         }
 
