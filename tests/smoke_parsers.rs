@@ -15,6 +15,7 @@ use std::collections::HashMap;
 use std::fmt::Write as FmtWrite;
 use std::path::Path;
 
+use manasight_parser::events::GameEvent;
 use manasight_parser::log::entry::LineBuffer;
 use manasight_parser::log::timestamp::parse_log_timestamp;
 
@@ -36,6 +37,10 @@ struct FileReport {
     unclaimed: usize,
     double_claims: usize,
     timestamp_failures: usize,
+    /// Number of `GameStateMessage` events with `turn_info` present (non-null).
+    gsm_turn_info_present: usize,
+    /// Number of `GameStateMessage` events with `turn_info` absent or null.
+    gsm_turn_info_absent: usize,
 }
 
 // ---------------------------------------------------------------------------
@@ -118,6 +123,8 @@ fn process_file(path: &Path, parsers: &[NamedParser]) -> FileReport {
             unclaimed: 0,
             double_claims: 0,
             timestamp_failures: 0,
+            gsm_turn_info_present: 0,
+            gsm_turn_info_absent: 0,
         };
     };
 
@@ -142,6 +149,8 @@ fn process_file(path: &Path, parsers: &[NamedParser]) -> FileReport {
     let mut unclaimed: usize = 0;
     let mut double_claims: usize = 0;
     let mut timestamp_failures: usize = 0;
+    let mut gsm_turn_info_present: usize = 0;
+    let mut gsm_turn_info_absent: usize = 0;
 
     for entry in &entries {
         let timestamp = try_extract_timestamp(&entry.body);
@@ -163,6 +172,17 @@ fn process_file(path: &Path, parsers: &[NamedParser]) -> FileReport {
                     stats[idx].1.claimed += 1;
                     claimant_count += 1;
                     claimant_names.push(parser.name);
+
+                    // Track turn_info presence for GameState events.
+                    if let GameEvent::GameState(ref gs) = event {
+                        let ti = gs.payload().get("turn_info");
+                        if ti.is_some_and(|v| !v.is_null()) {
+                            gsm_turn_info_present += 1;
+                        } else {
+                            gsm_turn_info_absent += 1;
+                        }
+                    }
+
                     *event_type_counts
                         .entry(event_type_name(&event))
                         .or_insert(0) += 1;
@@ -194,6 +214,8 @@ fn process_file(path: &Path, parsers: &[NamedParser]) -> FileReport {
         unclaimed,
         double_claims,
         timestamp_failures,
+        gsm_turn_info_present,
+        gsm_turn_info_absent,
     }
 }
 
@@ -259,6 +281,17 @@ fn format_report(reports: &[FileReport]) -> String {
             out,
             "  {:<18} {:>6}",
             "ts_failures:", report.timestamp_failures,
+        );
+        let _ = writeln!(out, "  GSM turn_info:");
+        let _ = writeln!(
+            out,
+            "    {:<16} {:>6}",
+            "present:", report.gsm_turn_info_present,
+        );
+        let _ = writeln!(
+            out,
+            "    {:<16} {:>6}",
+            "absent:", report.gsm_turn_info_absent,
         );
         let _ = writeln!(out);
 
