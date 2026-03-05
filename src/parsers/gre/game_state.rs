@@ -19,14 +19,15 @@ use super::turn_info::extract_turn_info;
 ///   "game_objects": [ { "instance_id": 100, "grp_id": 68398, ... }, ... ],
 ///   "game_info": { ... },
 ///   "turn_info": { "turn_number": 3, "phase": "Phase_Main1", ... },
-///   "annotations": [ { "id": 145, "affector_id": 296, ... }, ... ]
+///   "annotations": [ { "id": 145, "affector_id": 296, ... }, ... ],
+///   "timers": [ { "timer_id": 9, "type": "TimerType_ActivePlayer", ... }, ... ]
 /// }
 /// ```
 ///
 /// Incremental updates may include only a subset of zones and objects.
 /// Missing fields default to empty arrays / null. `turn_info` is `null`
-/// when `gameInfo.turnInfo` is absent. `annotations` is an empty array
-/// when `gameStateMessage.annotations` is absent.
+/// when `gameInfo.turnInfo` is absent. `annotations` and `timers` are
+/// empty arrays when their respective source arrays are absent.
 pub(super) fn build_game_state_message_payload(gre_msg: &serde_json::Value) -> serde_json::Value {
     let gsm = gre_msg.get("gameStateMessage");
 
@@ -70,6 +71,9 @@ pub(super) fn build_game_state_message_payload(gre_msg: &serde_json::Value) -> s
     // Extract annotations from gameStateMessage.annotations[].
     let annotations = extract_annotations(gsm);
 
+    // Extract inline timers from gameStateMessage.timers[].
+    let timers = extract_timers(gsm);
+
     serde_json::json!({
         "type": payload_type,
         "msg_id": msg_id,
@@ -79,7 +83,76 @@ pub(super) fn build_game_state_message_payload(gre_msg: &serde_json::Value) -> s
         "game_info": game_info,
         "turn_info": turn_info,
         "annotations": annotations,
+        "timers": timers,
     })
+}
+
+/// Extracts timer data from the `gameStateMessage.timers` array.
+///
+/// Each timer has fields like `timerId`, `type`, `durationSec`, `elapsedSec`,
+/// `elapsedMs`, `running`, `behavior`, and `warningThresholdSec`. Field names
+/// are normalized to `snake_case`.
+///
+/// Returns an empty `Vec` when `timers` is absent or empty.
+fn extract_timers(gsm: Option<&serde_json::Value>) -> Vec<serde_json::Value> {
+    let Some(raw_timers) = gsm
+        .and_then(|g| g.get("timers"))
+        .and_then(serde_json::Value::as_array)
+    else {
+        return Vec::new();
+    };
+
+    raw_timers.iter().filter_map(extract_single_timer).collect()
+}
+
+/// Extracts a single timer, normalizing field names to `snake_case`.
+fn extract_single_timer(timer: &serde_json::Value) -> Option<serde_json::Value> {
+    let timer_id = timer.get("timerId").and_then(serde_json::Value::as_i64)?;
+
+    let timer_type = timer
+        .get("type")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+
+    let duration_sec = timer
+        .get("durationSec")
+        .and_then(serde_json::Value::as_i64)
+        .unwrap_or(0);
+
+    let behavior = timer
+        .get("behavior")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+
+    let mut result = serde_json::json!({
+        "timer_id": timer_id,
+        "type": timer_type,
+        "duration_sec": duration_sec,
+        "behavior": behavior,
+    });
+
+    if let Some(obj) = result.as_object_mut() {
+        if let Some(elapsed_sec) = timer.get("elapsedSec").and_then(serde_json::Value::as_i64) {
+            obj.insert("elapsed_sec".to_string(), serde_json::json!(elapsed_sec));
+        }
+        if let Some(elapsed_ms) = timer.get("elapsedMs").and_then(serde_json::Value::as_i64) {
+            obj.insert("elapsed_ms".to_string(), serde_json::json!(elapsed_ms));
+        }
+        if let Some(running) = timer.get("running").and_then(serde_json::Value::as_bool) {
+            obj.insert("running".to_string(), serde_json::json!(running));
+        }
+        if let Some(warning) = timer
+            .get("warningThresholdSec")
+            .and_then(serde_json::Value::as_i64)
+        {
+            obj.insert(
+                "warning_threshold_sec".to_string(),
+                serde_json::json!(warning),
+            );
+        }
+    }
+
+    Some(result)
 }
 
 /// Extracts zone descriptors from the `gameStateMessage.zones` array.
@@ -1228,6 +1301,126 @@ mod tests {
                 "type": "GameObjectType_Card"
             });
             assert!(extract_single_game_object(&obj).is_none());
+        }
+    }
+
+    // -- Timer extraction ----------------------------------------------------
+
+    mod timer_extraction {
+        use super::*;
+
+        fn game_state_with_timers_body() -> String {
+            format!(
+                "[UnityCrossThreadLogger]greToClientEvent\n{}",
+                serde_json::json!({
+                    "greToClientEvent": {
+                        "greToClientMessages": [{
+                            "type": "GREMessageType_GameStateMessage",
+                            "msgId": 30,
+                            "gameStateId": 95,
+                            "gameStateMessage": {
+                                "timers": [
+                                    {
+                                        "timerId": 9,
+                                        "type": "TimerType_ActivePlayer",
+                                        "durationSec": 116,
+                                        "elapsedSec": 16,
+                                        "running": true,
+                                        "behavior": "TimerBehavior_TakeControl",
+                                        "warningThresholdSec": 30,
+                                        "elapsedMs": 16889
+                                    },
+                                    {
+                                        "timerId": 12,
+                                        "type": "TimerType_Inactivity",
+                                        "durationSec": 150,
+                                        "behavior": "TimerBehavior_Timeout",
+                                        "warningThresholdSec": 30
+                                    }
+                                ]
+                            }
+                        }]
+                    }
+                })
+            )
+        }
+
+        #[test]
+        fn test_timers_present_is_array() {
+            let body = game_state_with_timers_body();
+            let entry = unity_entry(&body);
+            let event = try_parse(&entry, Some(test_timestamp())).unwrap_or_else(|| unreachable!());
+            let payload = game_state_payload(&event);
+
+            assert!(payload["timers"].is_array());
+        }
+
+        #[test]
+        fn test_timers_count() {
+            let body = game_state_with_timers_body();
+            let entry = unity_entry(&body);
+            let event = try_parse(&entry, Some(test_timestamp())).unwrap_or_else(|| unreachable!());
+            let payload = game_state_payload(&event);
+
+            let timers = payload["timers"]
+                .as_array()
+                .unwrap_or_else(|| unreachable!());
+            assert_eq!(timers.len(), 2);
+        }
+
+        #[test]
+        fn test_timer_base_fields() {
+            let body = game_state_with_timers_body();
+            let entry = unity_entry(&body);
+            let event = try_parse(&entry, Some(test_timestamp())).unwrap_or_else(|| unreachable!());
+            let payload = game_state_payload(&event);
+
+            let timer = &payload["timers"][0];
+            assert_eq!(timer["timer_id"], 9);
+            assert_eq!(timer["type"], "TimerType_ActivePlayer");
+            assert_eq!(timer["duration_sec"], 116);
+            assert_eq!(timer["behavior"], "TimerBehavior_TakeControl");
+        }
+
+        #[test]
+        fn test_timer_optional_fields_present() {
+            let body = game_state_with_timers_body();
+            let entry = unity_entry(&body);
+            let event = try_parse(&entry, Some(test_timestamp())).unwrap_or_else(|| unreachable!());
+            let payload = game_state_payload(&event);
+
+            let timer = &payload["timers"][0];
+            assert_eq!(timer["elapsed_sec"], 16);
+            assert_eq!(timer["elapsed_ms"], 16889);
+            assert_eq!(timer["running"], true);
+            assert_eq!(timer["warning_threshold_sec"], 30);
+        }
+
+        #[test]
+        fn test_timer_optional_fields_absent() {
+            let body = game_state_with_timers_body();
+            let entry = unity_entry(&body);
+            let event = try_parse(&entry, Some(test_timestamp())).unwrap_or_else(|| unreachable!());
+            let payload = game_state_payload(&event);
+
+            let timer = &payload["timers"][1];
+            assert_eq!(timer["timer_id"], 12);
+            assert!(timer.get("elapsed_sec").is_none());
+            assert!(timer.get("elapsed_ms").is_none());
+            assert!(timer.get("running").is_none());
+        }
+
+        #[test]
+        fn test_missing_timers_returns_empty_array() {
+            let body = game_state_message_body();
+            let entry = unity_entry(&body);
+            let event = try_parse(&entry, Some(test_timestamp())).unwrap_or_else(|| unreachable!());
+            let payload = game_state_payload(&event);
+
+            let timers = payload["timers"]
+                .as_array()
+                .unwrap_or_else(|| unreachable!());
+            assert!(timers.is_empty());
         }
     }
 }
