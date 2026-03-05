@@ -789,16 +789,21 @@ fn extract_single_annotation(annotation: &serde_json::Value) -> Option<serde_jso
                 .and_then(serde_json::Value::as_array)
                 .and_then(|arr| arr.first())
             {
+                // Arena logs may use either snake_case or camelCase for
+                // ZoneTransferData fields depending on the client version.
                 let zone_src = ztd
                     .get("zone_src")
+                    .or_else(|| ztd.get("zoneSrc"))
                     .and_then(serde_json::Value::as_i64)
                     .unwrap_or(0);
                 let zone_dest = ztd
                     .get("zone_dest")
+                    .or_else(|| ztd.get("zoneDest"))
                     .and_then(serde_json::Value::as_i64)
                     .unwrap_or(0);
                 let category = ztd
                     .get("category")
+                    .or_else(|| ztd.get("Category"))
                     .and_then(serde_json::Value::as_str)
                     .unwrap_or("");
 
@@ -2804,6 +2809,43 @@ mod tests {
             // Second annotation has two affected IDs.
             let ann = &payload["annotations"][1];
             assert_eq!(ann["affected_ids"], serde_json::json!([410, 411]));
+        }
+
+        #[test]
+        fn test_zone_transfer_camel_case_field_names() {
+            let body = format!(
+                "[UnityCrossThreadLogger]greToClientEvent\n{}",
+                serde_json::json!({
+                    "greToClientEvent": {
+                        "greToClientMessages": [{
+                            "type": "GREMessageType_GameStateMessage",
+                            "msgId": 19,
+                            "gameStateId": 84,
+                            "gameStateMessage": {
+                                "annotations": [{
+                                    "id": 300,
+                                    "affectorId": 400,
+                                    "affectedIds": [500],
+                                    "type": "AnnotationType_ZoneTransfer",
+                                    "ZoneTransferData": [{
+                                        "zoneSrc": 29,
+                                        "zoneDest": 31,
+                                        "category": "Draw"
+                                    }]
+                                }]
+                            }
+                        }]
+                    }
+                })
+            );
+            let entry = unity_entry(&body);
+            let event = try_parse(&entry, Some(test_timestamp())).unwrap_or_else(|| unreachable!());
+            let payload = game_state_payload(&event);
+
+            let ann = &payload["annotations"][0];
+            assert_eq!(ann["zone_src"], 29);
+            assert_eq!(ann["zone_dest"], 31);
+            assert_eq!(ann["category"], "Draw");
         }
     }
 
