@@ -1,4 +1,12 @@
 //! Annotations extraction from `gameStateMessage.annotations`.
+//!
+//! Arena logs use a uniform `details` array of key-value pairs for
+//! type-specific annotation data, e.g.:
+//! ```json
+//! {"key": "zone_src", "type": "KeyValuePairValueType_int32", "valueInt32": [31]}
+//! ```
+//!
+//! The `type` field is an array of strings (e.g. `["AnnotationType_ZoneTransfer"]`).
 
 /// Annotation type for zone transfers (draw, play, exile, etc.).
 const ANNOTATION_TYPE_ZONE_TRANSFER: &str = "AnnotationType_ZoneTransfer";
@@ -12,9 +20,9 @@ const ANNOTATION_TYPE_OBJECT_ID_CHANGED: &str = "AnnotationType_ObjectIdChanged"
 /// `type`. Special handling normalizes type-specific data:
 ///
 /// - **`AnnotationType_ZoneTransfer`**: extracts `zone_src`, `zone_dest`,
-///   `category` from `ZoneTransferData[0]`.
+///   `category` from the `details` key-value pairs.
 /// - **`AnnotationType_ObjectIdChanged`**: extracts `old_id` / `new_id`
-///   from `ObjectIdChangedData[0]`.
+///   from the `details` key-value pairs.
 /// - **All other types**: passed through with base fields only.
 ///
 /// Returns an empty `Vec` when `annotations` is absent or empty.
@@ -30,6 +38,47 @@ pub(super) fn extract_annotations(gsm: Option<&serde_json::Value>) -> Vec<serde_
         .iter()
         .filter_map(extract_single_annotation)
         .collect()
+}
+
+/// Reads the annotation `type` field, which is an array of strings.
+/// Returns the first type string found, or an empty string when absent.
+fn read_annotation_type(annotation: &serde_json::Value) -> &str {
+    annotation
+        .get("type")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|arr| arr.first())
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("")
+}
+
+/// Looks up an `i64` value from a `details` key-value pair array by key name.
+///
+/// Each entry has `{"key": "<name>", "valueInt32": [<val>]}`.
+fn detail_int(details: &[serde_json::Value], key: &str) -> Option<i64> {
+    details
+        .iter()
+        .find(|d| d.get("key").and_then(serde_json::Value::as_str) == Some(key))
+        .and_then(|d| {
+            d.get("valueInt32")
+                .and_then(serde_json::Value::as_array)
+                .and_then(|arr| arr.first())
+                .and_then(serde_json::Value::as_i64)
+        })
+}
+
+/// Looks up a string value from a `details` key-value pair array by key name.
+///
+/// Each entry has `{"key": "<name>", "valueString": ["<val>"]}`.
+fn detail_str<'a>(details: &'a [serde_json::Value], key: &str) -> Option<&'a str> {
+    details
+        .iter()
+        .find(|d| d.get("key").and_then(serde_json::Value::as_str) == Some(key))
+        .and_then(|d| {
+            d.get("valueString")
+                .and_then(serde_json::Value::as_array)
+                .and_then(|arr| arr.first())
+                .and_then(serde_json::Value::as_str)
+        })
 }
 
 /// Extracts a single annotation, normalizing base fields and adding
@@ -52,10 +101,11 @@ fn extract_single_annotation(annotation: &serde_json::Value) -> Option<serde_jso
         })
         .unwrap_or_default();
 
-    let annotation_type = annotation
-        .get("type")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("");
+    let annotation_type = read_annotation_type(annotation);
+
+    let details = annotation
+        .get("details")
+        .and_then(serde_json::Value::as_array);
 
     let mut result = serde_json::json!({
         "id": id,
@@ -64,31 +114,13 @@ fn extract_single_annotation(annotation: &serde_json::Value) -> Option<serde_jso
         "type": annotation_type,
     });
 
-    // Add type-specific data.
-    match annotation_type {
-        ANNOTATION_TYPE_ZONE_TRANSFER => {
-            if let Some(ztd) = annotation
-                .get("ZoneTransferData")
-                .and_then(serde_json::Value::as_array)
-                .and_then(|arr| arr.first())
-            {
-                // Arena logs may use either snake_case or camelCase for
-                // ZoneTransferData fields depending on the client version.
-                let zone_src = ztd
-                    .get("zone_src")
-                    .or_else(|| ztd.get("zoneSrc"))
-                    .and_then(serde_json::Value::as_i64)
-                    .unwrap_or(0);
-                let zone_dest = ztd
-                    .get("zone_dest")
-                    .or_else(|| ztd.get("zoneDest"))
-                    .and_then(serde_json::Value::as_i64)
-                    .unwrap_or(0);
-                let category = ztd
-                    .get("category")
-                    .or_else(|| ztd.get("Category"))
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or("");
+    // Add type-specific data from `details`.
+    if let Some(d) = details {
+        match annotation_type {
+            ANNOTATION_TYPE_ZONE_TRANSFER => {
+                let zone_src = detail_int(d, "zone_src").unwrap_or(0);
+                let zone_dest = detail_int(d, "zone_dest").unwrap_or(0);
+                let category = detail_str(d, "category").unwrap_or("");
 
                 if let Some(obj) = result.as_object_mut() {
                     obj.insert("zone_src".to_string(), serde_json::json!(zone_src));
@@ -96,29 +128,17 @@ fn extract_single_annotation(annotation: &serde_json::Value) -> Option<serde_jso
                     obj.insert("category".to_string(), serde_json::json!(category));
                 }
             }
-        }
-        ANNOTATION_TYPE_OBJECT_ID_CHANGED => {
-            if let Some(oid) = annotation
-                .get("ObjectIdChangedData")
-                .and_then(serde_json::Value::as_array)
-                .and_then(|arr| arr.first())
-            {
-                let old_id = oid
-                    .get("oldId")
-                    .and_then(serde_json::Value::as_i64)
-                    .unwrap_or(0);
-                let new_id = oid
-                    .get("newId")
-                    .and_then(serde_json::Value::as_i64)
-                    .unwrap_or(0);
+            ANNOTATION_TYPE_OBJECT_ID_CHANGED => {
+                let old_id = detail_int(d, "orig_id").unwrap_or(0);
+                let new_id = detail_int(d, "new_id").unwrap_or(0);
 
                 if let Some(obj) = result.as_object_mut() {
                     obj.insert("old_id".to_string(), serde_json::json!(old_id));
                     obj.insert("new_id".to_string(), serde_json::json!(new_id));
                 }
             }
+            _ => {}
         }
-        _ => {}
     }
 
     Some(result)
@@ -134,7 +154,8 @@ mod tests {
     use super::super::try_parse;
     use crate::parsers::test_helpers::{game_state_payload, test_timestamp, unity_entry};
 
-    /// Helper: build a `GameStateMessage` body with annotations.
+    /// Helper: build a `GameStateMessage` body with annotations using the
+    /// current Arena `details` key-value pair format.
     fn game_state_message_with_annotations_body() -> String {
         format!(
             "[UnityCrossThreadLogger]greToClientEvent\n{}",
@@ -157,28 +178,28 @@ mod tests {
                                     "id": 145,
                                     "affectorId": 296,
                                     "affectedIds": [409],
-                                    "type": "AnnotationType_ZoneTransfer",
-                                    "ZoneTransferData": [{
-                                        "zone_src": 29,
-                                        "zone_dest": 31,
-                                        "category": "Draw"
-                                    }]
+                                    "type": ["AnnotationType_ZoneTransfer"],
+                                    "details": [
+                                        { "key": "zone_src", "type": "KeyValuePairValueType_int32", "valueInt32": [29] },
+                                        { "key": "zone_dest", "type": "KeyValuePairValueType_int32", "valueInt32": [31] },
+                                        { "key": "category", "type": "KeyValuePairValueType_string", "valueString": ["Draw"] }
+                                    ]
                                 },
                                 {
                                     "id": 146,
                                     "affectorId": 300,
                                     "affectedIds": [410, 411],
-                                    "type": "AnnotationType_ObjectIdChanged",
-                                    "ObjectIdChangedData": [{
-                                        "oldId": 410,
-                                        "newId": 500
-                                    }]
+                                    "type": ["AnnotationType_ObjectIdChanged"],
+                                    "details": [
+                                        { "key": "orig_id", "type": "KeyValuePairValueType_int32", "valueInt32": [410] },
+                                        { "key": "new_id", "type": "KeyValuePairValueType_int32", "valueInt32": [500] }
+                                    ]
                                 },
                                 {
                                     "id": 147,
                                     "affectorId": 305,
                                     "affectedIds": [412],
-                                    "type": "AnnotationType_ResolutionStart"
+                                    "type": ["AnnotationType_ResolutionStart"]
                                 }
                             ]
                         }
@@ -205,12 +226,12 @@ mod tests {
                                     "id": 200,
                                     "affectorId": 350,
                                     "affectedIds": [420],
-                                    "type": "AnnotationType_ZoneTransfer",
-                                    "ZoneTransferData": [{
-                                        "zone_src": 30,
-                                        "zone_dest": 34,
-                                        "category": "CastSpell"
-                                    }]
+                                    "type": ["AnnotationType_ZoneTransfer"],
+                                    "details": [
+                                        { "key": "zone_src", "type": "KeyValuePairValueType_int32", "valueInt32": [30] },
+                                        { "key": "zone_dest", "type": "KeyValuePairValueType_int32", "valueInt32": [34] },
+                                        { "key": "category", "type": "KeyValuePairValueType_string", "valueString": ["CastSpell"] }
+                                    ]
                                 }
                             ]
                         }
@@ -221,8 +242,8 @@ mod tests {
     }
 
     /// Helper: build a `GameStateMessage` body with a `ZoneTransfer` annotation
-    /// that has no `ZoneTransferData` array (edge case).
-    fn game_state_message_with_missing_ztd_body() -> String {
+    /// that has no `details` array (edge case).
+    fn game_state_message_with_missing_details_body() -> String {
         format!(
             "[UnityCrossThreadLogger]greToClientEvent\n{}",
             serde_json::json!({
@@ -237,7 +258,7 @@ mod tests {
                                     "id": 201,
                                     "affectorId": 355,
                                     "affectedIds": [430],
-                                    "type": "AnnotationType_ZoneTransfer"
+                                    "type": ["AnnotationType_ZoneTransfer"]
                                 }
                             ]
                         }
@@ -376,8 +397,8 @@ mod tests {
         }
 
         #[test]
-        fn test_zone_transfer_missing_ztd_still_has_base_fields() {
-            let body = game_state_message_with_missing_ztd_body();
+        fn test_zone_transfer_missing_details_still_has_base_fields() {
+            let body = game_state_message_with_missing_details_body();
             let entry = unity_entry(&body);
             let event = try_parse(&entry, Some(test_timestamp())).unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(&event);
@@ -389,7 +410,7 @@ mod tests {
             let ann = &annotations[0];
             assert_eq!(ann["id"], 201);
             assert_eq!(ann["type"], "AnnotationType_ZoneTransfer");
-            // No zone_src/zone_dest/category when ZoneTransferData is missing.
+            // No zone_src/zone_dest/category when details is missing.
             assert!(ann.get("zone_src").is_none());
         }
 
@@ -406,7 +427,7 @@ mod tests {
         }
 
         #[test]
-        fn test_zone_transfer_camel_case_field_names() {
+        fn test_multi_type_annotation_uses_first_type() {
             let body = format!(
                 "[UnityCrossThreadLogger]greToClientEvent\n{}",
                 serde_json::json!({
@@ -420,12 +441,11 @@ mod tests {
                                     "id": 300,
                                     "affectorId": 400,
                                     "affectedIds": [500],
-                                    "type": "AnnotationType_ZoneTransfer",
-                                    "ZoneTransferData": [{
-                                        "zoneSrc": 29,
-                                        "zoneDest": 31,
-                                        "category": "Draw"
-                                    }]
+                                    "type": [
+                                        "AnnotationType_ModifiedToughness",
+                                        "AnnotationType_ModifiedPower",
+                                        "AnnotationType_Counter"
+                                    ]
                                 }]
                             }
                         }]
@@ -437,9 +457,57 @@ mod tests {
             let payload = game_state_payload(&event);
 
             let ann = &payload["annotations"][0];
-            assert_eq!(ann["zone_src"], 29);
-            assert_eq!(ann["zone_dest"], 31);
-            assert_eq!(ann["category"], "Draw");
+            assert_eq!(ann["type"], "AnnotationType_ModifiedToughness");
+        }
+    }
+
+    mod detail_helpers {
+        use super::super::{detail_int, detail_str};
+
+        #[test]
+        fn test_detail_int_found() {
+            let details = vec![serde_json::json!({
+                "key": "zone_src",
+                "type": "KeyValuePairValueType_int32",
+                "valueInt32": [31]
+            })];
+            assert_eq!(detail_int(&details, "zone_src"), Some(31));
+        }
+
+        #[test]
+        fn test_detail_int_missing_key() {
+            let details = vec![serde_json::json!({
+                "key": "zone_src",
+                "type": "KeyValuePairValueType_int32",
+                "valueInt32": [31]
+            })];
+            assert_eq!(detail_int(&details, "zone_dest"), None);
+        }
+
+        #[test]
+        fn test_detail_str_found() {
+            let details = vec![serde_json::json!({
+                "key": "category",
+                "type": "KeyValuePairValueType_string",
+                "valueString": ["PlayLand"]
+            })];
+            assert_eq!(detail_str(&details, "category"), Some("PlayLand"));
+        }
+
+        #[test]
+        fn test_detail_str_missing_key() {
+            let details = vec![serde_json::json!({
+                "key": "category",
+                "type": "KeyValuePairValueType_string",
+                "valueString": ["PlayLand"]
+            })];
+            assert_eq!(detail_str(&details, "other"), None);
+        }
+
+        #[test]
+        fn test_detail_int_empty_array() {
+            let details: Vec<serde_json::Value> = vec![];
+            assert_eq!(detail_int(&details, "zone_src"), None);
         }
     }
 }
