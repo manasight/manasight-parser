@@ -44,8 +44,9 @@
 //!
 //! Turn info is extracted as a structured `turn_info` sub-object (B-7d partial).
 //! Annotations are extracted from the `annotations` array (B-7d-b), with
-//! special handling for `AnnotationType_ZoneTransfer` and
-//! `AnnotationType_ObjectIdChanged`. Timers are deferred to a future task.
+//! special handling for `ZoneTransfer`, `ObjectIdChanged`, `DamageDealt`,
+//! `CounterAdded`, `TargetSpec`, and `ModifiedLife` (B-15). Inline timers
+//! are extracted from `gameStateMessage.timers` (B-15).
 
 mod annotations;
 mod connect_resp;
