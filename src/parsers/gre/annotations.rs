@@ -54,24 +54,28 @@ pub(super) fn extract_annotations(gsm: Option<&serde_json::Value>) -> Vec<serde_
         .collect()
 }
 
-/// Reads the annotation `type` field, which is an array of strings.
-/// Returns the first type string found, or an empty string when absent.
+/// Reads the annotation `type` field, which may be an array of strings
+/// (current format) or a single string (legacy format).
+/// Returns the first/only type string, or an empty string when absent.
 fn read_annotation_type(annotation: &serde_json::Value) -> &str {
-    annotation
-        .get("type")
-        .and_then(serde_json::Value::as_array)
+    let v = &annotation["type"];
+    if let Some(s) = v.as_str() {
+        return s;
+    }
+    v.as_array()
         .and_then(|arr| arr.first())
         .and_then(serde_json::Value::as_str)
         .unwrap_or("")
 }
 
-/// Reads all annotation type strings from the `type` array.
+/// Reads all annotation type strings from the `type` field. Handles both
+/// the array format (`["A", "B"]`) and the legacy single-string format.
 fn read_annotation_types(annotation: &serde_json::Value) -> Vec<&str> {
-    annotation
-        .get("type")
-        .and_then(serde_json::Value::as_array)
-        .map(|arr| arr.iter().filter_map(serde_json::Value::as_str).collect())
-        .unwrap_or_default()
+    let v = &annotation["type"];
+    if let Some(arr) = v.as_array() {
+        return arr.iter().filter_map(serde_json::Value::as_str).collect();
+    }
+    v.as_str().into_iter().collect()
 }
 
 /// Looks up an `i64` value from a `details` key-value pair array by key name.
