@@ -20,14 +20,16 @@ use super::turn_info::extract_turn_info;
 ///   "game_info": { ... },
 ///   "turn_info": { "turn_number": 3, "phase": "Phase_Main1", ... },
 ///   "annotations": [ { "id": 145, "affector_id": 296, ... }, ... ],
-///   "timers": [ { "timer_id": 9, "type": "TimerType_ActivePlayer", ... }, ... ]
+///   "timers": [ { "timer_id": 9, "type": "TimerType_ActivePlayer", ... }, ... ],
+///   "diff_deleted_instance_ids": [279, 282, 284]
 /// }
 /// ```
 ///
 /// Incremental updates may include only a subset of zones and objects.
 /// Missing fields default to empty arrays / null. `turn_info` is `null`
-/// when `gameInfo.turnInfo` is absent. `annotations` and `timers` are
-/// empty arrays when their respective source arrays are absent.
+/// when `gameInfo.turnInfo` is absent. `annotations`, `timers`, and
+/// `diff_deleted_instance_ids` are empty arrays when their respective
+/// source arrays are absent.
 pub(super) fn build_game_state_message_payload(gre_msg: &serde_json::Value) -> serde_json::Value {
     let gsm = gre_msg.get("gameStateMessage");
 
@@ -74,6 +76,17 @@ pub(super) fn build_game_state_message_payload(gre_msg: &serde_json::Value) -> s
     // Extract inline timers from gameStateMessage.timers[].
     let timers = extract_timers(gsm);
 
+    // Extract diffDeletedInstanceIds (instance IDs removed from game state).
+    let diff_deleted_instance_ids = gsm
+        .and_then(|g| g.get("diffDeletedInstanceIds"))
+        .and_then(serde_json::Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(serde_json::Value::as_i64)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
     serde_json::json!({
         "type": payload_type,
         "msg_id": msg_id,
@@ -84,6 +97,7 @@ pub(super) fn build_game_state_message_payload(gre_msg: &serde_json::Value) -> s
         "turn_info": turn_info,
         "annotations": annotations,
         "timers": timers,
+        "diff_deleted_instance_ids": diff_deleted_instance_ids,
     })
 }
 
@@ -1421,6 +1435,114 @@ mod tests {
                 .as_array()
                 .unwrap_or_else(|| unreachable!());
             assert!(timers.is_empty());
+        }
+    }
+
+    mod diff_deleted_instance_ids_extraction {
+        use super::*;
+
+        /// Helper: build a `GameStateMessage` body with `diffDeletedInstanceIds`.
+        fn game_state_with_diff_deleted_body() -> String {
+            format!(
+                "[UnityCrossThreadLogger]greToClientEvent\n{}",
+                serde_json::json!({
+                    "greToClientEvent": {
+                        "greToClientMessages": [{
+                            "type": "GREMessageType_GameStateMessage",
+                            "msgId": 30,
+                            "gameStateId": 100,
+                            "gameStateMessage": {
+                                "gameObjects": [],
+                                "diffDeletedInstanceIds": [279, 282, 284]
+                            }
+                        }]
+                    }
+                })
+            )
+        }
+
+        #[test]
+        fn test_diff_deleted_instance_ids_present() {
+            let body = game_state_with_diff_deleted_body();
+            let entry = unity_entry(&body);
+            let event = try_parse(&entry, Some(test_timestamp())).unwrap_or_else(|| unreachable!());
+            let payload = game_state_payload(&event);
+
+            let ids = payload["diff_deleted_instance_ids"]
+                .as_array()
+                .unwrap_or_else(|| unreachable!());
+            assert_eq!(ids.len(), 3);
+            assert_eq!(ids[0], 279);
+            assert_eq!(ids[1], 282);
+            assert_eq!(ids[2], 284);
+        }
+
+        #[test]
+        fn test_diff_deleted_instance_ids_empty_array() {
+            let body = format!(
+                "[UnityCrossThreadLogger]greToClientEvent\n{}",
+                serde_json::json!({
+                    "greToClientEvent": {
+                        "greToClientMessages": [{
+                            "type": "GREMessageType_GameStateMessage",
+                            "msgId": 31,
+                            "gameStateId": 101,
+                            "gameStateMessage": {
+                                "diffDeletedInstanceIds": []
+                            }
+                        }]
+                    }
+                })
+            );
+            let entry = unity_entry(&body);
+            let event = try_parse(&entry, Some(test_timestamp())).unwrap_or_else(|| unreachable!());
+            let payload = game_state_payload(&event);
+
+            let ids = payload["diff_deleted_instance_ids"]
+                .as_array()
+                .unwrap_or_else(|| unreachable!());
+            assert!(ids.is_empty());
+        }
+
+        #[test]
+        fn test_diff_deleted_instance_ids_absent_returns_empty() {
+            let body = game_state_message_body();
+            let entry = unity_entry(&body);
+            let event = try_parse(&entry, Some(test_timestamp())).unwrap_or_else(|| unreachable!());
+            let payload = game_state_payload(&event);
+
+            let ids = payload["diff_deleted_instance_ids"]
+                .as_array()
+                .unwrap_or_else(|| unreachable!());
+            assert!(ids.is_empty());
+        }
+
+        #[test]
+        fn test_diff_deleted_single_id() {
+            let body = format!(
+                "[UnityCrossThreadLogger]greToClientEvent\n{}",
+                serde_json::json!({
+                    "greToClientEvent": {
+                        "greToClientMessages": [{
+                            "type": "GREMessageType_GameStateMessage",
+                            "msgId": 32,
+                            "gameStateId": 102,
+                            "gameStateMessage": {
+                                "diffDeletedInstanceIds": [500]
+                            }
+                        }]
+                    }
+                })
+            );
+            let entry = unity_entry(&body);
+            let event = try_parse(&entry, Some(test_timestamp())).unwrap_or_else(|| unreachable!());
+            let payload = game_state_payload(&event);
+
+            let ids = payload["diff_deleted_instance_ids"]
+                .as_array()
+                .unwrap_or_else(|| unreachable!());
+            assert_eq!(ids.len(), 1);
+            assert_eq!(ids[0], 500);
         }
     }
 }
