@@ -41,6 +41,89 @@ struct FileReport {
     gsm_turn_info_present: usize,
     /// Number of `GameStateMessage` events with `turn_info` absent or null.
     gsm_turn_info_absent: usize,
+    /// Number of GSM events with at least one annotation.
+    gsm_annotations_present: usize,
+    /// Total annotation count across all GSM events.
+    gsm_annotations_total: usize,
+    /// Annotation counts broken down by primary type string.
+    gsm_annotation_type_counts: HashMap<String, usize>,
+    /// Number of GSM events with at least one timer.
+    gsm_timers_present: usize,
+    /// Total timer count across all GSM events.
+    gsm_timers_total: usize,
+    /// Number of GSM events with at least one `diff_deleted_instance_id`.
+    gsm_diff_deleted_present: usize,
+    /// Total `diff_deleted_instance_ids` count across all GSM events.
+    gsm_diff_deleted_total: usize,
+}
+
+// ---------------------------------------------------------------------------
+// GSM field tracking
+// ---------------------------------------------------------------------------
+
+/// Tracks presence and counts of fields within `GameStateMessage` payloads.
+#[derive(Default)]
+struct GsmFieldStats {
+    turn_info_present: usize,
+    turn_info_absent: usize,
+    annotations_present: usize,
+    annotations_total: usize,
+    annotation_type_counts: HashMap<String, usize>,
+    timers_present: usize,
+    timers_total: usize,
+    diff_deleted_present: usize,
+    diff_deleted_total: usize,
+}
+
+impl GsmFieldStats {
+    /// Updates stats from a single `GameState` event payload.
+    fn track(&mut self, payload: &serde_json::Value) {
+        // turn_info
+        let ti = payload.get("turn_info");
+        if ti.is_some_and(|v| !v.is_null()) {
+            self.turn_info_present += 1;
+        } else {
+            self.turn_info_absent += 1;
+        }
+
+        // annotations
+        if let Some(anns) = payload.get("annotations").and_then(|v| v.as_array()) {
+            let count = anns.len();
+            if count > 0 {
+                self.annotations_present += 1;
+            }
+            self.annotations_total += count;
+            for ann in anns {
+                if let Some(t) = ann.get("type").and_then(|v| v.as_str()) {
+                    *self
+                        .annotation_type_counts
+                        .entry(t.to_string())
+                        .or_insert(0) += 1;
+                }
+            }
+        }
+
+        // timers
+        if let Some(timers) = payload.get("timers").and_then(|v| v.as_array()) {
+            let count = timers.len();
+            if count > 0 {
+                self.timers_present += 1;
+            }
+            self.timers_total += count;
+        }
+
+        // diff_deleted_instance_ids
+        if let Some(ids) = payload
+            .get("diff_deleted_instance_ids")
+            .and_then(|v| v.as_array())
+        {
+            let count = ids.len();
+            if count > 0 {
+                self.diff_deleted_present += 1;
+            }
+            self.diff_deleted_total += count;
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -103,6 +186,32 @@ fn is_known_overlap(claimants: &[&str]) -> bool {
 // File processing
 // ---------------------------------------------------------------------------
 
+/// Creates an error `FileReport` when a file cannot be read.
+fn error_report(filename: String, parsers: &[NamedParser]) -> FileReport {
+    FileReport {
+        filename,
+        read_error: true,
+        total_entries: 0,
+        parser_stats: parsers
+            .iter()
+            .map(|p| (p.name, ParserStats::default()))
+            .collect(),
+        event_type_counts: HashMap::new(),
+        unclaimed: 0,
+        double_claims: 0,
+        timestamp_failures: 0,
+        gsm_turn_info_present: 0,
+        gsm_turn_info_absent: 0,
+        gsm_annotations_present: 0,
+        gsm_annotations_total: 0,
+        gsm_annotation_type_counts: HashMap::new(),
+        gsm_timers_present: 0,
+        gsm_timers_total: 0,
+        gsm_diff_deleted_present: 0,
+        gsm_diff_deleted_total: 0,
+    }
+}
+
 /// Processes a single log file through all parsers and returns a report.
 fn process_file(path: &Path, parsers: &[NamedParser]) -> FileReport {
     let filename = path
@@ -111,21 +220,7 @@ fn process_file(path: &Path, parsers: &[NamedParser]) -> FileReport {
         .unwrap_or_default();
 
     let Ok(content) = std::fs::read_to_string(path) else {
-        return FileReport {
-            filename,
-            read_error: true,
-            total_entries: 0,
-            parser_stats: parsers
-                .iter()
-                .map(|p| (p.name, ParserStats::default()))
-                .collect(),
-            event_type_counts: HashMap::new(),
-            unclaimed: 0,
-            double_claims: 0,
-            timestamp_failures: 0,
-            gsm_turn_info_present: 0,
-            gsm_turn_info_absent: 0,
-        };
+        return error_report(filename, parsers);
     };
 
     // Split content into entries via LineBuffer.
@@ -149,8 +244,7 @@ fn process_file(path: &Path, parsers: &[NamedParser]) -> FileReport {
     let mut unclaimed: usize = 0;
     let mut double_claims: usize = 0;
     let mut timestamp_failures: usize = 0;
-    let mut gsm_turn_info_present: usize = 0;
-    let mut gsm_turn_info_absent: usize = 0;
+    let mut gsm_stats = GsmFieldStats::default();
 
     for entry in &entries {
         let timestamp = try_extract_timestamp(&entry.body);
@@ -173,14 +267,9 @@ fn process_file(path: &Path, parsers: &[NamedParser]) -> FileReport {
                     claimant_count += 1;
                     claimant_names.push(parser.name);
 
-                    // Track turn_info presence for GameState events.
+                    // Track GSM field presence for GameState events.
                     if let GameEvent::GameState(ref gs) = event {
-                        let ti = gs.payload().get("turn_info");
-                        if ti.is_some_and(|v| !v.is_null()) {
-                            gsm_turn_info_present += 1;
-                        } else {
-                            gsm_turn_info_absent += 1;
-                        }
+                        gsm_stats.track(gs.payload());
                     }
 
                     *event_type_counts
@@ -214,8 +303,15 @@ fn process_file(path: &Path, parsers: &[NamedParser]) -> FileReport {
         unclaimed,
         double_claims,
         timestamp_failures,
-        gsm_turn_info_present,
-        gsm_turn_info_absent,
+        gsm_turn_info_present: gsm_stats.turn_info_present,
+        gsm_turn_info_absent: gsm_stats.turn_info_absent,
+        gsm_annotations_present: gsm_stats.annotations_present,
+        gsm_annotations_total: gsm_stats.annotations_total,
+        gsm_annotation_type_counts: gsm_stats.annotation_type_counts,
+        gsm_timers_present: gsm_stats.timers_present,
+        gsm_timers_total: gsm_stats.timers_total,
+        gsm_diff_deleted_present: gsm_stats.diff_deleted_present,
+        gsm_diff_deleted_total: gsm_stats.diff_deleted_total,
     }
 }
 
@@ -292,6 +388,35 @@ fn format_report(reports: &[FileReport]) -> String {
             out,
             "    {:<16} {:>6}",
             "absent:", report.gsm_turn_info_absent,
+        );
+        let _ = writeln!(out, "  GSM annotations:");
+        let _ = writeln!(
+            out,
+            "    {:<16} {:>6} GSMs, {:>6} total",
+            "present:", report.gsm_annotations_present, report.gsm_annotations_total,
+        );
+        if !report.gsm_annotation_type_counts.is_empty() {
+            let mut sorted_ann: Vec<(&String, &usize)> =
+                report.gsm_annotation_type_counts.iter().collect();
+            sorted_ann.sort_by_key(|(name, _)| name.as_str());
+            for (ann_type, count) in &sorted_ann {
+                // Strip the "AnnotationType_" prefix for readability.
+                let short = ann_type.strip_prefix("AnnotationType_").unwrap_or(ann_type);
+                let label = format!("      {short}:");
+                let _ = writeln!(out, "  {label:<30} {count:>6}");
+            }
+        }
+        let _ = writeln!(out, "  GSM timers:");
+        let _ = writeln!(
+            out,
+            "    {:<16} {:>6} GSMs, {:>6} total",
+            "present:", report.gsm_timers_present, report.gsm_timers_total,
+        );
+        let _ = writeln!(out, "  GSM diff_deleted_instance_ids:");
+        let _ = writeln!(
+            out,
+            "    {:<16} {:>6} GSMs, {:>6} total",
+            "present:", report.gsm_diff_deleted_present, report.gsm_diff_deleted_total,
         );
         let _ = writeln!(out);
 
