@@ -1,0 +1,400 @@
+# Multi-Level Smoke Test Results
+# Date: 2026-03-05 17:24:33
+# Branch: main
+# Commit: 4cf7440ca851b7e43a29938e363234472ff23376
+# Commit message: Fix manasight/manasight-parser#37: extract diffDeletedInstanceIds from GameStateMessage (#38)
+# Log directory: /home/timc/manasight-data/player-log-trial/raw/
+# Log files: 6
+
+     Running tests/smoke_parsers.rs (target/debug/deps/smoke_parsers-abd2ab90ad4e8940)
+
+running 1 test
+
+=== Smoke Test Report ===
+
+File: session_2026-02-22_a.log (4913 entries)
+  session:                6 claimed,   0 panics
+  match_state:           10 claimed,   0 panics
+  gre:                 2617 claimed,   0 panics
+  client_actions:      2026 claimed,   0 panics
+  draft_bot:              0 claimed,   0 panics
+  draft_human:            0 claimed,   0 panics
+  draft_complete:         0 claimed,   0 panics
+  inventory:              7 claimed,   0 panics
+  collection:             0 claimed,   0 panics
+  rank:                   7 claimed,   0 panics
+  event_lifecycle:        6 claimed,   0 panics
+  Event type breakdown:
+      ClientAction:    2026
+      EventLifecycle:      6
+      GameResult:         5
+      GameState:       2612
+      Inventory:          7
+      MatchState:        10
+      Rank:               7
+      Session:            6
+  unclaimed:            234
+  double_claims:          0
+  ts_failures:          163
+  GSM turn_info:
+    present:              0
+    absent:            2612
+  GSM annotations:
+    present:            428 GSMs,   2429 total
+  GSM timers:
+    present:            667 GSMs,   1312 total
+  GSM diff_deleted_instance_ids:
+    present:            170 GSMs,    766 total
+
+File: session_2026-02-22_b.log (3995 entries)
+  session:                5 claimed,   0 panics
+  match_state:            8 claimed,   0 panics
+  gre:                 2172 claimed,   0 panics
+  client_actions:      1488 claimed,   0 panics
+  draft_bot:              0 claimed,   0 panics
+  draft_human:          116 claimed,   0 panics
+  draft_complete:         2 claimed,   0 panics
+  inventory:              5 claimed,   0 panics
+  collection:             0 claimed,   0 panics
+  rank:                   5 claimed,   0 panics
+  event_lifecycle:        6 claimed,   0 panics
+  Event type breakdown:
+      ClientAction:    1488
+      DraftComplete:      2
+      DraftHuman:       116
+      EventLifecycle:      6
+      GameResult:         2
+      GameState:       2170
+      Inventory:          5
+      MatchState:         8
+      Rank:               5
+      Session:            5
+  unclaimed:            188
+  double_claims:          0
+  ts_failures:          213
+  GSM turn_info:
+    present:              0
+    absent:            2170
+  GSM annotations:
+    present:            341 GSMs,   2174 total
+  GSM timers:
+    present:            526 GSMs,   1161 total
+  GSM diff_deleted_instance_ids:
+    present:            144 GSMs,    742 total
+
+File: session_2026-02-23.log (948 entries)
+  session:                3 claimed,   0 panics
+  match_state:            4 claimed,   0 panics
+  gre:                  375 claimed,   0 panics
+  client_actions:       425 claimed,   0 panics
+  draft_bot:              0 claimed,   0 panics
+  draft_human:            0 claimed,   0 panics
+  draft_complete:         0 claimed,   0 panics
+  inventory:              3 claimed,   0 panics
+  collection:             0 claimed,   0 panics
+  rank:                   3 claimed,   0 panics
+  event_lifecycle:        4 claimed,   0 panics
+  Event type breakdown:
+      ClientAction:     425
+      EventLifecycle:      4
+      GameResult:         1
+      GameState:        374
+      Inventory:          3
+      MatchState:         4
+      Rank:               3
+      Session:            3
+  unclaimed:            131
+  double_claims:          0
+  ts_failures:           89
+  GSM turn_info:
+    present:              0
+    absent:             374
+  GSM annotations:
+    present:             95 GSMs,    442 total
+  GSM timers:
+    present:            146 GSMs,    284 total
+  GSM diff_deleted_instance_ids:
+    present:             29 GSMs,    179 total
+
+File: session_2026-02-23_game01.log (425 entries)
+  session:                1 claimed,   0 panics
+  match_state:            2 claimed,   0 panics
+  gre:                  193 claimed,   0 panics
+  client_actions:       172 claimed,   0 panics
+  draft_bot:              0 claimed,   0 panics
+  draft_human:            0 claimed,   0 panics
+  draft_complete:         0 claimed,   0 panics
+  inventory:              1 claimed,   0 panics
+  collection:             0 claimed,   0 panics
+  rank:                   1 claimed,   0 panics
+  event_lifecycle:        2 claimed,   0 panics
+  Event type breakdown:
+      ClientAction:     172
+      EventLifecycle:      2
+      GameResult:         1
+      GameState:        192
+      Inventory:          1
+      MatchState:         2
+      Rank:               1
+      Session:            1
+  unclaimed:             53
+  double_claims:          0
+  ts_failures:           36
+  GSM turn_info:
+    present:              0
+    absent:             192
+  GSM annotations:
+    present:             37 GSMs,    161 total
+  GSM timers:
+    present:             61 GSMs,    116 total
+  GSM diff_deleted_instance_ids:
+    present:             11 GSMs,     21 total
+
+File: session_2026-02-23_game02.log (946 entries)
+  session:                2 claimed,   0 panics
+  match_state:            4 claimed,   0 panics
+  gre:                  375 claimed,   0 panics
+  client_actions:       425 claimed,   0 panics
+  draft_bot:              0 claimed,   0 panics
+  draft_human:            0 claimed,   0 panics
+  draft_complete:         0 claimed,   0 panics
+  inventory:              3 claimed,   0 panics
+  collection:             0 claimed,   0 panics
+  rank:                   3 claimed,   0 panics
+  event_lifecycle:        4 claimed,   0 panics
+  Event type breakdown:
+      ClientAction:     425
+      EventLifecycle:      4
+      GameResult:         1
+      GameState:        374
+      Inventory:          3
+      MatchState:         4
+      Rank:               3
+      Session:            2
+  unclaimed:            130
+  double_claims:          0
+  ts_failures:           87
+  GSM turn_info:
+    present:              0
+    absent:             374
+  GSM annotations:
+    present:             95 GSMs,    442 total
+  GSM timers:
+    present:            146 GSMs,    284 total
+  GSM diff_deleted_instance_ids:
+    present:             29 GSMs,    179 total
+
+File: session_2026-03-05.log (771 entries)
+  session:                2 claimed,   0 panics
+  match_state:            2 claimed,   0 panics
+  gre:                  454 claimed,   0 panics
+  client_actions:       236 claimed,   0 panics
+  draft_bot:              0 claimed,   0 panics
+  draft_human:            0 claimed,   0 panics
+  draft_complete:         0 claimed,   0 panics
+  inventory:              2 claimed,   0 panics
+  collection:             0 claimed,   0 panics
+  rank:                   2 claimed,   0 panics
+  event_lifecycle:        2 claimed,   0 panics
+  Event type breakdown:
+      ClientAction:     236
+      EventLifecycle:      2
+      GameResult:         1
+      GameState:        453
+      Inventory:          2
+      MatchState:         2
+      Rank:               2
+      Session:            2
+  unclaimed:             71
+  double_claims:          0
+  ts_failures:           48
+  GSM turn_info:
+    present:              0
+    absent:             453
+  GSM annotations:
+    present:             60 GSMs,    332 total
+  GSM timers:
+    present:            111 GSMs,    237 total
+  GSM diff_deleted_instance_ids:
+    present:             23 GSMs,    169 total
+
+=== PASS ===
+test smoke_test_real_logs ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 22.66s
+
+     Running tests/smoke_router.rs (target/debug/deps/smoke_router-25a9c9bf2ef5a76c)
+
+running 1 test
+
+=== Router-Level Smoke Test Report ===
+
+File: session_2026-02-22_a.log (4913 entries)
+  routed:              4679
+  unknown:              234
+  ts_failures:          163
+  Event type breakdown:
+      ClientAction:    2026
+      EventLifecycle:      6
+      GameResult:         5
+      GameState:       2612
+      Inventory:          7
+      MatchState:        10
+      Rank:               7
+      Session:            6
+
+File: session_2026-02-22_b.log (3995 entries)
+  routed:              3807
+  unknown:              188
+  ts_failures:          213
+  Event type breakdown:
+      ClientAction:    1488
+      DraftComplete:      2
+      DraftHuman:       116
+      EventLifecycle:      6
+      GameResult:         2
+      GameState:       2170
+      Inventory:          5
+      MatchState:         8
+      Rank:               5
+      Session:            5
+
+File: session_2026-02-23.log (948 entries)
+  routed:               817
+  unknown:              131
+  ts_failures:           89
+  Event type breakdown:
+      ClientAction:     425
+      EventLifecycle:      4
+      GameResult:         1
+      GameState:        374
+      Inventory:          3
+      MatchState:         4
+      Rank:               3
+      Session:            3
+
+File: session_2026-02-23_game01.log (425 entries)
+  routed:               372
+  unknown:               53
+  ts_failures:           36
+  Event type breakdown:
+      ClientAction:     172
+      EventLifecycle:      2
+      GameResult:         1
+      GameState:        192
+      Inventory:          1
+      MatchState:         2
+      Rank:               1
+      Session:            1
+
+File: session_2026-02-23_game02.log (946 entries)
+  routed:               816
+  unknown:              130
+  ts_failures:           87
+  Event type breakdown:
+      ClientAction:     425
+      EventLifecycle:      4
+      GameResult:         1
+      GameState:        374
+      Inventory:          3
+      MatchState:         4
+      Rank:               3
+      Session:            2
+
+File: session_2026-03-05.log (771 entries)
+  routed:               700
+  unknown:               71
+  ts_failures:           48
+  Event type breakdown:
+      ClientAction:     236
+      EventLifecycle:      2
+      GameResult:         1
+      GameState:        453
+      Inventory:          2
+      MatchState:         2
+      Rank:               2
+      Session:            2
+
+=== PASS ===
+test smoke_test_router_real_logs ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 19.26s
+
+     Running tests/smoke_stream.rs (target/debug/deps/smoke_stream-1e8dc920f6e2067a)
+
+running 1 test
+
+=== Stream-Level Smoke Test Report ===
+
+File: session_2026-02-22_a.log (4679 events)
+  Event type breakdown:
+      ClientAction:    2026
+      EventLifecycle:      6
+      GameResult:         5
+      GameState:       2612
+      Inventory:          7
+      MatchState:        10
+      Rank:               7
+      Session:            6
+
+File: session_2026-02-22_b.log (3807 events)
+  Event type breakdown:
+      ClientAction:    1488
+      DraftComplete:      2
+      DraftHuman:       116
+      EventLifecycle:      6
+      GameResult:         2
+      GameState:       2170
+      Inventory:          5
+      MatchState:         8
+      Rank:               5
+      Session:            5
+
+File: session_2026-02-23.log (817 events)
+  Event type breakdown:
+      ClientAction:     425
+      EventLifecycle:      4
+      GameResult:         1
+      GameState:        374
+      Inventory:          3
+      MatchState:         4
+      Rank:               3
+      Session:            3
+
+File: session_2026-02-23_game01.log (372 events)
+  Event type breakdown:
+      ClientAction:     172
+      EventLifecycle:      2
+      GameResult:         1
+      GameState:        192
+      Inventory:          1
+      MatchState:         2
+      Rank:               1
+      Session:            1
+
+File: session_2026-02-23_game02.log (816 events)
+  Event type breakdown:
+      ClientAction:     425
+      EventLifecycle:      4
+      GameResult:         1
+      GameState:        374
+      Inventory:          3
+      MatchState:         4
+      Rank:               3
+      Session:            2
+
+File: session_2026-03-05.log (700 events)
+  Event type breakdown:
+      ClientAction:     236
+      EventLifecycle:      2
+      GameResult:         1
+      GameState:        453
+      Inventory:          2
+      MatchState:         2
+      Rank:               2
+      Session:            2
+
+=== PASS ===
+test smoke_test_stream_real_logs ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 24.05s
