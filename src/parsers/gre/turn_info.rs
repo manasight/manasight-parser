@@ -1,6 +1,6 @@
-//! Turn info extraction from `gameStateMessage.gameInfo.turnInfo`.
+//! Turn info extraction from `gameStateMessage.turnInfo`.
 
-/// Extracts structured turn info from `gameStateMessage.gameInfo.turnInfo`.
+/// Extracts structured turn info from `gameStateMessage.turnInfo`.
 ///
 /// The `turnInfo` sub-object in the MTGA log has the structure:
 /// ```json
@@ -14,14 +14,11 @@
 /// ```
 ///
 /// The output normalizes field names to `snake_case`. Returns `null` when
-/// `gameInfo` or `turnInfo` is absent. Partial `turnInfo` objects are
-/// handled gracefully — missing fields get default values (`0` for
-/// integers, empty string for strings).
+/// `turnInfo` is absent. Partial `turnInfo` objects are handled
+/// gracefully — missing fields get default values (`0` for integers,
+/// empty string for strings).
 pub(super) fn extract_turn_info(gsm: Option<&serde_json::Value>) -> serde_json::Value {
-    let Some(turn_info) = gsm
-        .and_then(|g| g.get("gameInfo"))
-        .and_then(|gi| gi.get("turnInfo"))
-    else {
+    let Some(turn_info) = gsm.and_then(|g| g.get("turnInfo")) else {
         return serde_json::Value::Null;
     };
 
@@ -74,8 +71,8 @@ mod tests {
     use super::super::try_parse;
     use crate::parsers::test_helpers::{game_state_payload, test_timestamp, unity_entry};
 
-    /// Helper: build a `GameStateMessage` containing `turnInfo` inside
-    /// `gameInfo` for turn/phase extraction tests.
+    /// Helper: build a `GameStateMessage` containing `turnInfo` as a
+    /// direct child of `gameStateMessage` (sibling of `gameInfo`).
     fn game_state_message_with_turn_info_body() -> String {
         format!(
             "[UnityCrossThreadLogger]greToClientEvent\n{}",
@@ -88,20 +85,20 @@ mod tests {
                         "gameStateMessage": {
                             "zones": [],
                             "gameObjects": [],
+                            "turnInfo": {
+                                "turnNumber": 3,
+                                "phase": "Phase_Main1",
+                                "step": "Step_Upkeep",
+                                "activePlayer": 1,
+                                "decisionPlayer": 2
+                            },
                             "gameInfo": {
                                 "matchID": "match-id-99999",
                                 "gameNumber": 1,
                                 "stage": "GameStage_Play",
                                 "type": "GameType_Standard",
                                 "variant": "GameVariant_Normal",
-                                "mulliganType": "MulliganType_London",
-                                "turnInfo": {
-                                    "turnNumber": 3,
-                                    "phase": "Phase_Main1",
-                                    "step": "Step_Upkeep",
-                                    "activePlayer": 1,
-                                    "decisionPlayer": 2
-                                }
+                                "mulliganType": "MulliganType_London"
                             }
                         }
                     }]
@@ -124,12 +121,12 @@ mod tests {
                         "gameStateMessage": {
                             "zones": [],
                             "gameObjects": [],
+                            "turnInfo": {
+                                "turnNumber": 5
+                            },
                             "gameInfo": {
                                 "matchID": "match-id-partial",
-                                "stage": "GameStage_Play",
-                                "turnInfo": {
-                                    "turnNumber": 5
-                                }
+                                "stage": "GameStage_Play"
                             }
                         }
                     }]
@@ -226,7 +223,7 @@ mod tests {
         }
 
         #[test]
-        fn test_turn_info_missing_when_no_game_info() {
+        fn test_turn_info_missing_when_gsm_empty() {
             let body = empty_game_state_message_body();
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
