@@ -358,7 +358,10 @@ mod tests {
         fn test_annotations_present_is_array() {
             let body = game_state_message_with_annotations_body();
             let entry = unity_entry(&body);
-            let event = try_parse(&entry, Some(test_timestamp())).unwrap_or_else(|| unreachable!());
+            let event = try_parse(&entry, Some(test_timestamp()))
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(&event);
 
             assert!(payload["annotations"].is_array());
@@ -368,7 +371,10 @@ mod tests {
         fn test_annotations_count_three() {
             let body = game_state_message_with_annotations_body();
             let entry = unity_entry(&body);
-            let event = try_parse(&entry, Some(test_timestamp())).unwrap_or_else(|| unreachable!());
+            let event = try_parse(&entry, Some(test_timestamp()))
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(&event);
 
             let annotations = payload["annotations"]
@@ -381,7 +387,10 @@ mod tests {
         fn test_single_annotation_base_fields() {
             let body = game_state_message_with_single_annotation_body();
             let entry = unity_entry(&body);
-            let event = try_parse(&entry, Some(test_timestamp())).unwrap_or_else(|| unreachable!());
+            let event = try_parse(&entry, Some(test_timestamp()))
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(&event);
 
             let annotations = payload["annotations"]
@@ -399,7 +408,10 @@ mod tests {
         fn test_zone_transfer_fields() {
             let body = game_state_message_with_annotations_body();
             let entry = unity_entry(&body);
-            let event = try_parse(&entry, Some(test_timestamp())).unwrap_or_else(|| unreachable!());
+            let event = try_parse(&entry, Some(test_timestamp()))
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(&event);
 
             let ann = &payload["annotations"][0];
@@ -413,7 +425,10 @@ mod tests {
         fn test_object_id_changed_fields() {
             let body = game_state_message_with_annotations_body();
             let entry = unity_entry(&body);
-            let event = try_parse(&entry, Some(test_timestamp())).unwrap_or_else(|| unreachable!());
+            let event = try_parse(&entry, Some(test_timestamp()))
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(&event);
 
             let ann = &payload["annotations"][1];
@@ -426,7 +441,10 @@ mod tests {
         fn test_unknown_annotation_type_passed_through() {
             let body = game_state_message_with_annotations_body();
             let entry = unity_entry(&body);
-            let event = try_parse(&entry, Some(test_timestamp())).unwrap_or_else(|| unreachable!());
+            let event = try_parse(&entry, Some(test_timestamp()))
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(&event);
 
             let ann = &payload["annotations"][2];
@@ -457,7 +475,10 @@ mod tests {
                 })
             );
             let entry = unity_entry(&body);
-            let event = try_parse(&entry, Some(test_timestamp())).unwrap_or_else(|| unreachable!());
+            let event = try_parse(&entry, Some(test_timestamp()))
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(&event);
 
             let annotations = payload["annotations"]
@@ -470,7 +491,10 @@ mod tests {
         fn test_missing_annotations_returns_empty_array() {
             let body = game_state_message_body();
             let entry = unity_entry(&body);
-            let event = try_parse(&entry, Some(test_timestamp())).unwrap_or_else(|| unreachable!());
+            let event = try_parse(&entry, Some(test_timestamp()))
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(&event);
 
             let annotations = payload["annotations"]
@@ -483,7 +507,10 @@ mod tests {
         fn test_zone_transfer_missing_details_still_has_base_fields() {
             let body = game_state_message_with_missing_details_body();
             let entry = unity_entry(&body);
-            let event = try_parse(&entry, Some(test_timestamp())).unwrap_or_else(|| unreachable!());
+            let event = try_parse(&entry, Some(test_timestamp()))
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(&event);
 
             let annotations = payload["annotations"]
@@ -501,7 +528,10 @@ mod tests {
         fn test_multiple_affected_ids() {
             let body = game_state_message_with_annotations_body();
             let entry = unity_entry(&body);
-            let event = try_parse(&entry, Some(test_timestamp())).unwrap_or_else(|| unreachable!());
+            let event = try_parse(&entry, Some(test_timestamp()))
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(&event);
 
             // Second annotation has two affected IDs.
@@ -536,7 +566,10 @@ mod tests {
                 })
             );
             let entry = unity_entry(&body);
-            let event = try_parse(&entry, Some(test_timestamp())).unwrap_or_else(|| unreachable!());
+            let event = try_parse(&entry, Some(test_timestamp()))
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(&event);
 
             let ann = &payload["annotations"][0];
@@ -570,7 +603,10 @@ mod tests {
                 })
             );
             let entry = unity_entry(&body);
-            let event = try_parse(&entry, Some(test_timestamp())).unwrap_or_else(|| unreachable!());
+            let event = try_parse(&entry, Some(test_timestamp()))
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(&event);
 
             let ann = &payload["annotations"][0];
@@ -588,7 +624,10 @@ mod tests {
         fn test_single_type_annotation_has_types_array() {
             let body = game_state_message_with_single_annotation_body();
             let entry = unity_entry(&body);
-            let event = try_parse(&entry, Some(test_timestamp())).unwrap_or_else(|| unreachable!());
+            let event = try_parse(&entry, Some(test_timestamp()))
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(&event);
 
             let ann = &payload["annotations"][0];
@@ -634,7 +673,10 @@ mod tests {
         fn test_damage_dealt_damage_amount() {
             let body = damage_dealt_body();
             let entry = unity_entry(&body);
-            let event = try_parse(&entry, Some(test_timestamp())).unwrap_or_else(|| unreachable!());
+            let event = try_parse(&entry, Some(test_timestamp()))
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(&event);
 
             let ann = &payload["annotations"][0];
@@ -646,7 +688,10 @@ mod tests {
         fn test_damage_dealt_damage_type() {
             let body = damage_dealt_body();
             let entry = unity_entry(&body);
-            let event = try_parse(&entry, Some(test_timestamp())).unwrap_or_else(|| unreachable!());
+            let event = try_parse(&entry, Some(test_timestamp()))
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(&event);
 
             let ann = &payload["annotations"][0];
@@ -657,7 +702,10 @@ mod tests {
         fn test_damage_dealt_affector_and_affected() {
             let body = damage_dealt_body();
             let entry = unity_entry(&body);
-            let event = try_parse(&entry, Some(test_timestamp())).unwrap_or_else(|| unreachable!());
+            let event = try_parse(&entry, Some(test_timestamp()))
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(&event);
 
             let ann = &payload["annotations"][0];
@@ -692,7 +740,10 @@ mod tests {
                 })
             );
             let entry = unity_entry(&body);
-            let event = try_parse(&entry, Some(test_timestamp())).unwrap_or_else(|| unreachable!());
+            let event = try_parse(&entry, Some(test_timestamp()))
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(&event);
 
             let ann = &payload["annotations"][0];
@@ -735,7 +786,10 @@ mod tests {
         fn test_counter_added_type() {
             let body = counter_added_body();
             let entry = unity_entry(&body);
-            let event = try_parse(&entry, Some(test_timestamp())).unwrap_or_else(|| unreachable!());
+            let event = try_parse(&entry, Some(test_timestamp()))
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(&event);
 
             let ann = &payload["annotations"][0];
@@ -747,7 +801,10 @@ mod tests {
         fn test_counter_added_amount() {
             let body = counter_added_body();
             let entry = unity_entry(&body);
-            let event = try_parse(&entry, Some(test_timestamp())).unwrap_or_else(|| unreachable!());
+            let event = try_parse(&entry, Some(test_timestamp()))
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(&event);
 
             let ann = &payload["annotations"][0];
@@ -758,7 +815,10 @@ mod tests {
         fn test_counter_added_affector_and_affected() {
             let body = counter_added_body();
             let entry = unity_entry(&body);
-            let event = try_parse(&entry, Some(test_timestamp())).unwrap_or_else(|| unreachable!());
+            let event = try_parse(&entry, Some(test_timestamp()))
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(&event);
 
             let ann = &payload["annotations"][0];
@@ -803,7 +863,10 @@ mod tests {
         fn test_target_spec_ability_grp_id() {
             let body = target_spec_body();
             let entry = unity_entry(&body);
-            let event = try_parse(&entry, Some(test_timestamp())).unwrap_or_else(|| unreachable!());
+            let event = try_parse(&entry, Some(test_timestamp()))
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(&event);
 
             let ann = &payload["annotations"][0];
@@ -815,7 +878,10 @@ mod tests {
         fn test_target_spec_index() {
             let body = target_spec_body();
             let entry = unity_entry(&body);
-            let event = try_parse(&entry, Some(test_timestamp())).unwrap_or_else(|| unreachable!());
+            let event = try_parse(&entry, Some(test_timestamp()))
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(&event);
 
             let ann = &payload["annotations"][0];
@@ -826,7 +892,10 @@ mod tests {
         fn test_target_spec_affector_and_affected() {
             let body = target_spec_body();
             let entry = unity_entry(&body);
-            let event = try_parse(&entry, Some(test_timestamp())).unwrap_or_else(|| unreachable!());
+            let event = try_parse(&entry, Some(test_timestamp()))
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(&event);
 
             let ann = &payload["annotations"][0];
@@ -864,7 +933,10 @@ mod tests {
                 })
             );
             let entry = unity_entry(&body);
-            let event = try_parse(&entry, Some(test_timestamp())).unwrap_or_else(|| unreachable!());
+            let event = try_parse(&entry, Some(test_timestamp()))
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(&event);
 
             let ann = &payload["annotations"][0];
@@ -898,7 +970,10 @@ mod tests {
                 })
             );
             let entry = unity_entry(&body);
-            let event = try_parse(&entry, Some(test_timestamp())).unwrap_or_else(|| unreachable!());
+            let event = try_parse(&entry, Some(test_timestamp()))
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(&event);
 
             let ann = &payload["annotations"][0];

@@ -7,9 +7,10 @@
 //! # Dispatch strategy
 //!
 //! Each [`LogEntry`] is offered to category parsers in a fixed priority
-//! order (most frequent first). The first parser that returns
-//! `Some(GameEvent)` claims the entry. If no parser matches, the entry
-//! is counted as unrecognized and discarded.
+//! order (most frequent first). The first parser that returns one or
+//! more events claims the entry. GRE entries may produce multiple
+//! events from batched `GameStateMessage` values. If no parser matches,
+//! the entry is counted as unrecognized and discarded.
 //!
 //! # Timestamp extraction
 //!
@@ -104,8 +105,8 @@ impl RouterStats {
 ///     body: "[UnityCrossThreadLogger]some unrecognized line".to_owned(),
 /// };
 ///
-/// let event = router.route(&entry);
-/// assert!(event.is_none());
+/// let events = router.route(&entry);
+/// assert!(events.is_empty());
 /// assert_eq!(router.stats().unknown_count(), 1);
 /// ```
 pub struct Router {
@@ -129,15 +130,18 @@ impl Router {
     /// Routes a [`LogEntry`] to the appropriate parser.
     ///
     /// Extracts the timestamp from the entry header line, then offers the
-    /// entry to each category parser in priority order. Returns
-    /// `Some(GameEvent)` if a parser claims the entry, or `None` if the
-    /// entry is unrecognized.
+    /// entry to each category parser in priority order. Returns a
+    /// `Vec<GameEvent>` with one or more events if a parser claims the
+    /// entry, or an empty `Vec` if unrecognized.
+    ///
+    /// GRE entries may contain multiple batched `GameStateMessage` values
+    /// in a single log entry, producing multiple events from one entry.
     ///
     /// When the timestamp cannot be parsed, `None` is passed to parsers
     /// so downstream consumers can distinguish real timestamps from
     /// missing ones. The timestamp failure is counted in [`RouterStats`]
     /// and logged at debug level.
-    pub fn route(&self, entry: &LogEntry) -> Option<GameEvent> {
+    pub fn route(&self, entry: &LogEntry) -> Vec<GameEvent> {
         let timestamp = extract_timestamp(&entry.body);
 
         if timestamp.is_none() {
@@ -150,20 +154,20 @@ impl Router {
             );
         }
 
-        let event = dispatch_to_parsers(entry, timestamp);
+        let events = dispatch_to_parsers(entry, timestamp);
 
-        if event.is_some() {
-            self.stats.routed.fetch_add(1, Ordering::Relaxed);
-        } else {
+        if events.is_empty() {
             self.stats.unknown.fetch_add(1, Ordering::Relaxed);
             ::log::debug!(
                 "Unrecognized entry (header={}, body={:?})",
                 entry.header,
                 truncate_for_log(&entry.body, 120),
             );
+        } else {
+            self.stats.routed.fetch_add(1, Ordering::Relaxed);
         }
 
-        event
+        events
     }
 }
 
@@ -235,10 +239,21 @@ fn extract_timestamp(body: &str) -> Option<DateTime<Utc>> {
 /// 10. Collection — card collection from `StartHook`
 /// 11. Inventory — inventory from `StartHook`
 ///
+/// The GRE parser may return multiple events from a single entry
+/// (batched `GameStateMessage` values). All other parsers return at
+/// most one event.
+///
 /// `timestamp` is `None` when the log entry header did not contain a
 /// parseable timestamp; parsers pass it through to `EventMetadata`.
-fn dispatch_to_parsers(entry: &LogEntry, timestamp: Option<DateTime<Utc>>) -> Option<GameEvent> {
-    None.or_else(|| parsers::gre::try_parse(entry, timestamp))
+fn dispatch_to_parsers(entry: &LogEntry, timestamp: Option<DateTime<Utc>>) -> Vec<GameEvent> {
+    // GRE parser returns Vec<GameEvent> (may contain multiple batched GSMs).
+    let gre_events = parsers::gre::try_parse(entry, timestamp);
+    if !gre_events.is_empty() {
+        return gre_events;
+    }
+
+    // All other parsers return Option<GameEvent> (at most one event per entry).
+    let event = None
         .or_else(|| parsers::client_actions::try_parse(entry, timestamp))
         .or_else(|| parsers::match_state::try_parse(entry, timestamp))
         .or_else(|| parsers::session::try_parse(entry, timestamp))
@@ -248,7 +263,9 @@ fn dispatch_to_parsers(entry: &LogEntry, timestamp: Option<DateTime<Utc>>) -> Op
         .or_else(|| parsers::event_lifecycle::try_parse(entry, timestamp))
         .or_else(|| parsers::rank::try_parse(entry, timestamp))
         .or_else(|| parsers::collection::try_parse(entry, timestamp))
-        .or_else(|| parsers::inventory::try_parse(entry, timestamp))
+        .or_else(|| parsers::inventory::try_parse(entry, timestamp));
+
+    event.into_iter().collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -392,9 +409,9 @@ mod tests {
             let body = format!("[UnityCrossThreadLogger]2/25/2026 12:00:00 PM\n{payload}");
             let entry = unity_entry(&body);
 
-            let result = router.route(&entry);
-            assert!(result.is_some());
-            assert!(matches!(result, Some(GameEvent::GameState(_))));
+            let results = router.route(&entry);
+            assert_eq!(results.len(), 1);
+            assert!(matches!(&results[0], GameEvent::GameState(_)));
             assert_eq!(router.stats().routed_count(), 1);
             assert_eq!(router.stats().unknown_count(), 0);
         }
@@ -417,9 +434,9 @@ mod tests {
             let body = format!("[UnityCrossThreadLogger]2/25/2026 12:00:00 PM\n{payload}");
             let entry = unity_entry(&body);
 
-            let result = router.route(&entry);
-            assert!(result.is_some());
-            assert!(matches!(result, Some(GameEvent::ClientAction(_))));
+            let results = router.route(&entry);
+            assert_eq!(results.len(), 1);
+            assert!(matches!(&results[0], GameEvent::ClientAction(_)));
         }
 
         #[test]
@@ -439,9 +456,9 @@ mod tests {
             let body = format!("[UnityCrossThreadLogger]2/25/2026 12:00:00 PM\n{payload}");
             let entry = unity_entry(&body);
 
-            let result = router.route(&entry);
-            assert!(result.is_some());
-            assert!(matches!(result, Some(GameEvent::MatchState(_))));
+            let results = router.route(&entry);
+            assert_eq!(results.len(), 1);
+            assert!(matches!(&results[0], GameEvent::MatchState(_)));
         }
 
         #[test]
@@ -453,9 +470,9 @@ mod tests {
                          Token:sometoken";
             let entry = unity_entry(body);
 
-            let result = router.route(&entry);
-            assert!(result.is_some());
-            assert!(matches!(result, Some(GameEvent::Session(_))));
+            let results = router.route(&entry);
+            assert_eq!(results.len(), 1);
+            assert!(matches!(&results[0], GameEvent::Session(_)));
         }
 
         #[test]
@@ -473,9 +490,9 @@ mod tests {
             );
             let entry = unity_entry(&body);
 
-            let result = router.route(&entry);
-            assert!(result.is_some());
-            assert!(matches!(result, Some(GameEvent::Rank(_))));
+            let results = router.route(&entry);
+            assert_eq!(results.len(), 1);
+            assert!(matches!(&results[0], GameEvent::Rank(_)));
         }
 
         #[test]
@@ -486,9 +503,9 @@ mod tests {
                          \"request\":\"{\\\"EventName\\\":\\\"PremierDraft_MKM\\\"}\"}";
             let entry = unity_entry(body);
 
-            let result = router.route(&entry);
-            assert!(result.is_some());
-            assert!(matches!(result, Some(GameEvent::EventLifecycle(_))));
+            let results = router.route(&entry);
+            assert_eq!(results.len(), 1);
+            assert!(matches!(&results[0], GameEvent::EventLifecycle(_)));
         }
 
         #[test]
@@ -505,9 +522,9 @@ mod tests {
             );
             let entry = unity_entry(&body);
 
-            let result = router.route(&entry);
-            assert!(result.is_some());
-            assert!(matches!(result, Some(GameEvent::DraftComplete(_))));
+            let results = router.route(&entry);
+            assert_eq!(results.len(), 1);
+            assert!(matches!(&results[0], GameEvent::DraftComplete(_)));
         }
 
         #[test]
@@ -523,9 +540,9 @@ mod tests {
             let body = format!("[UnityCrossThreadLogger]2/25/2026 12:00:00 PM\n{payload}",);
             let entry = unity_entry(&body);
 
-            let result = router.route(&entry);
-            assert!(result.is_some());
-            assert!(matches!(result, Some(GameEvent::DraftBot(_))));
+            let results = router.route(&entry);
+            assert_eq!(results.len(), 1);
+            assert!(matches!(&results[0], GameEvent::DraftBot(_)));
         }
 
         #[test]
@@ -540,9 +557,9 @@ mod tests {
             let body = format!("[UnityCrossThreadLogger]Draft.Notify\n{payload}",);
             let entry = unity_entry(&body);
 
-            let result = router.route(&entry);
-            assert!(result.is_some());
-            assert!(matches!(result, Some(GameEvent::DraftHuman(_))));
+            let results = router.route(&entry);
+            assert_eq!(results.len(), 1);
+            assert!(matches!(&results[0], GameEvent::DraftHuman(_)));
         }
 
         #[test]
@@ -558,10 +575,10 @@ mod tests {
             );
             let entry = unity_entry(&body);
 
-            let result = router.route(&entry);
-            assert!(result.is_some());
+            let results = router.route(&entry);
+            assert_eq!(results.len(), 1);
             // StartHook with PlayerCards goes to Collection (tried before Inventory).
-            assert!(matches!(result, Some(GameEvent::Collection(_))));
+            assert!(matches!(&results[0], GameEvent::Collection(_)));
         }
 
         #[test]
@@ -576,10 +593,10 @@ mod tests {
             );
             let entry = unity_entry(&body);
 
-            let result = router.route(&entry);
-            assert!(result.is_some());
+            let results = router.route(&entry);
+            assert_eq!(results.len(), 1);
             // StartHook with InventoryInfo but no PlayerCards goes to Inventory.
-            assert!(matches!(result, Some(GameEvent::Inventory(_))));
+            assert!(matches!(&results[0], GameEvent::Inventory(_)));
         }
     }
 
@@ -589,14 +606,14 @@ mod tests {
         use super::*;
 
         #[test]
-        fn test_route_unknown_entry_returns_none() {
+        fn test_route_unknown_entry_returns_empty() {
             let router = Router::new();
             let body = "[UnityCrossThreadLogger]2/25/2026 12:00:00 PM\n\
                          some unrecognized content here";
             let entry = unity_entry(body);
 
-            let result = router.route(&entry);
-            assert!(result.is_none());
+            let results = router.route(&entry);
+            assert!(results.is_empty());
         }
 
         #[test]
@@ -626,14 +643,14 @@ mod tests {
         }
 
         #[test]
-        fn test_route_empty_body_after_header_returns_none() {
+        fn test_route_empty_body_after_header_returns_empty() {
             let router = Router::new();
             let body = "[UnityCrossThreadLogger]";
             let entry = unity_entry(body);
 
-            let result = router.route(&entry);
+            let results = router.route(&entry);
             // No timestamp -> passes None, but no parser matches.
-            assert!(result.is_none());
+            assert!(results.is_empty());
             assert_eq!(router.stats().timestamp_failure_count(), 1);
             assert_eq!(router.stats().unknown_count(), 1);
         }
@@ -644,9 +661,9 @@ mod tests {
             let body = "[UnityCrossThreadLogger]just some text without a timestamp";
             let entry = unity_entry(body);
 
-            let result = router.route(&entry);
+            let results = router.route(&entry);
             // No parseable timestamp and no parser claims this entry.
-            assert!(result.is_none());
+            assert!(results.is_empty());
             assert_eq!(router.stats().timestamp_failure_count(), 1);
             assert_eq!(router.stats().unknown_count(), 1);
         }
@@ -661,10 +678,10 @@ mod tests {
                          Token:token";
             let entry = unity_entry(body);
 
-            let result = router.route(&entry);
-            assert!(result.is_some());
+            let results = router.route(&entry);
+            assert_eq!(results.len(), 1);
             // Session routed even without a timestamp in header.
-            assert!(matches!(result, Some(GameEvent::Session(_))));
+            assert!(matches!(&results[0], GameEvent::Session(_)));
             assert_eq!(router.stats().timestamp_failure_count(), 1);
             assert_eq!(router.stats().routed_count(), 1);
         }
@@ -680,14 +697,12 @@ mod tests {
                          Token:token";
             let entry = unity_entry(body);
 
-            let result = router.route(&entry);
-            assert!(result.is_some());
-            if let Some(event) = &result {
-                assert!(
-                    event.metadata().timestamp().is_none(),
-                    "entries without parseable timestamps should have None timestamp"
-                );
-            }
+            let results = router.route(&entry);
+            assert_eq!(results.len(), 1);
+            assert!(
+                results[0].metadata().timestamp().is_none(),
+                "entries without parseable timestamps should have None timestamp"
+            );
         }
 
         #[test]
@@ -708,14 +723,12 @@ mod tests {
             let body = format!("[UnityCrossThreadLogger]2/25/2026 12:00:00 PM\n{payload}");
             let entry = unity_entry(&body);
 
-            let result = router.route(&entry);
-            assert!(result.is_some());
-            if let Some(event) = &result {
-                assert!(
-                    event.metadata().timestamp().is_some(),
-                    "entries with parseable timestamps should have Some timestamp"
-                );
-            }
+            let results = router.route(&entry);
+            assert_eq!(results.len(), 1);
+            assert!(
+                results[0].metadata().timestamp().is_some(),
+                "entries with parseable timestamps should have Some timestamp"
+            );
         }
     }
 
@@ -814,9 +827,9 @@ mod tests {
             let body = format!("[Client GRE]2/25/2026 12:00:00 PM\n{payload}");
             let entry = gre_entry(&body);
 
-            let result = router.route(&entry);
-            assert!(result.is_some());
-            assert!(matches!(result, Some(GameEvent::GameState(_))));
+            let results = router.route(&entry);
+            assert_eq!(results.len(), 1);
+            assert!(matches!(&results[0], GameEvent::GameState(_)));
         }
     }
 }
