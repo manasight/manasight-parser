@@ -3,10 +3,15 @@
 //! Feeds log entries through individual `try_parse` functions with per-parser
 //! attribution. Detects panics, double claims, and timestamp extraction failures.
 //!
+//! After processing, results are compared against `smoke-baseline.json` with
+//! ratchet semantics: regressions fail, improvements pass. Set `SMOKE_BLESS=1`
+//! to overwrite the baseline instead of comparing.
+//!
 //! Gated on the `MANASIGHT_TEST_LOGS` environment variable.
 //!
 //! ```bash
 //! MANASIGHT_TEST_LOGS=/path/to/logs cargo test smoke_parsers -- --nocapture
+//! SMOKE_BLESS=1 MANASIGHT_TEST_LOGS=/path/to/logs cargo test smoke_parsers -- --nocapture
 //! ```
 
 mod smoke_common;
@@ -19,7 +24,10 @@ use manasight_parser::events::GameEvent;
 use manasight_parser::log::entry::LineBuffer;
 use manasight_parser::log::timestamp::parse_log_timestamp;
 
-use smoke_common::{all_parsers, event_type_name, NamedParser, ParserStats};
+use smoke_common::{
+    all_parsers, compare_against_baseline, event_type_name, is_bless_mode, read_baseline,
+    write_baseline, Baseline, BaselineFile, BaselineMeta, NamedParser, ParserStats,
+};
 
 // ---------------------------------------------------------------------------
 // Types
@@ -55,6 +63,32 @@ struct FileReport {
     gsm_diff_deleted_present: usize,
     /// Total `diff_deleted_instance_ids` count across all GSM events.
     gsm_diff_deleted_total: usize,
+}
+
+impl FileReport {
+    /// Converts this report into a `BaselineFile` for ratchet comparison.
+    fn to_baseline_file(&self) -> BaselineFile {
+        let parsers: std::collections::BTreeMap<String, u64> = self
+            .parser_stats
+            .iter()
+            .map(|(name, stats)| ((*name).to_string(), stats.claimed as u64))
+            .collect();
+
+        let event_types: std::collections::BTreeMap<String, u64> = self
+            .event_type_counts
+            .iter()
+            .map(|(name, count)| ((*name).to_string(), *count as u64))
+            .collect();
+
+        BaselineFile {
+            total_entries: self.total_entries as u64,
+            parsers,
+            event_types,
+            unclaimed: self.unclaimed as u64,
+            double_claims: self.double_claims as u64,
+            timestamp_failures: self.timestamp_failures as u64,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -153,7 +187,7 @@ fn try_extract_timestamp(body: &str) -> Option<chrono::DateTime<chrono::Utc>> {
     }
 
     // Try progressively shorter prefixes for lines with timestamp + content.
-    // MTGA timestamps are typically 18–25 characters.
+    // MTGA timestamps are typically 18-25 characters.
     let max_len = content.len().min(30);
     for len in (15..=max_len).rev() {
         if content.is_char_boundary(len) {
@@ -177,7 +211,7 @@ fn try_extract_timestamp(body: &str) -> Option<chrono::DateTime<chrono::Utc>> {
 ///
 /// `<== StartHook` responses contain both `InventoryInfo` and `PlayerCards`,
 /// so the `inventory` and `collection` parsers legitimately claim the same
-/// entry — each extracting different data from the shared response.
+/// entry -- each extracting different data from the shared response.
 fn is_known_overlap(claimants: &[&str]) -> bool {
     claimants.len() == 2 && claimants.contains(&"inventory") && claimants.contains(&"collection")
 }
@@ -331,7 +365,7 @@ fn format_report(reports: &[FileReport]) -> String {
         if report.read_error {
             let _ = writeln!(
                 out,
-                "File: {} — READ ERROR (unreadable file)",
+                "File: {} -- READ ERROR (unreadable file)",
                 report.filename
             );
             let _ = writeln!(out);
@@ -434,6 +468,52 @@ fn format_report(reports: &[FileReport]) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// Baseline conversion
+// ---------------------------------------------------------------------------
+
+/// Converts file reports into a map suitable for ratchet comparison
+/// or baseline generation.
+fn reports_to_baseline_files(
+    reports: &[FileReport],
+) -> std::collections::BTreeMap<String, BaselineFile> {
+    reports
+        .iter()
+        .filter(|r| !r.read_error)
+        .map(|r| (r.filename.clone(), r.to_baseline_file()))
+        .collect()
+}
+
+/// Builds a full `Baseline` from actual results for bless mode.
+fn build_baseline(actual: &std::collections::BTreeMap<String, BaselineFile>) -> Baseline {
+    // Get current git commit hash for metadata, falling back gracefully.
+    let commit = std::process::Command::new("git")
+        .args(["rev-parse", "--short", "HEAD"])
+        .output()
+        .ok()
+        .and_then(|o| {
+            if o.status.success() {
+                String::from_utf8(o.stdout)
+                    .ok()
+                    .map(|s| s.trim().to_string())
+            } else {
+                None
+            }
+        })
+        .unwrap_or_else(|| "unknown".to_string());
+
+    Baseline {
+        meta: BaselineMeta {
+            description: "Smoke test baseline -- per-file, per-parser event counts from Level 1 \
+                          (parser-only) smoke tests."
+                .to_string(),
+            generated_from_commit: commit,
+            corpus_tag: "smoke-data-v1".to_string(),
+        },
+        files: actual.clone(),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Test entry point
 // ---------------------------------------------------------------------------
 
@@ -467,14 +547,48 @@ fn smoke_test_real_logs() {
 
     assert_eq!(
         read_errors, 0,
-        "unreadable log files detected \u{2014} see report above"
+        "unreadable log files detected -- see report above"
     );
     assert_eq!(
         total_panics, 0,
-        "parser panics detected \u{2014} see report above"
+        "parser panics detected -- see report above"
     );
     assert_eq!(
         total_double_claims, 0,
-        "double claims detected \u{2014} see report above"
+        "double claims detected -- see report above"
     );
+
+    // --- Ratchet / Bless ---
+    let actual_files = reports_to_baseline_files(&reports);
+
+    if is_bless_mode() {
+        let baseline = build_baseline(&actual_files);
+        let write_result = write_baseline(&baseline);
+        assert!(
+            write_result.is_ok(),
+            "failed to write baseline in bless mode: {}",
+            write_result.err().unwrap_or_default(),
+        );
+        let msg = format!(
+            "\nBless mode: wrote updated baseline with {} file(s) to smoke-baseline.json\n",
+            actual_files.len(),
+        );
+        let _ = std::io::Write::write_all(&mut std::io::stdout(), msg.as_bytes());
+    } else if let Some(baseline) = read_baseline() {
+        let ratchet = compare_against_baseline(&baseline, &actual_files);
+        let ratchet_report = ratchet.format_report();
+        let _ = std::io::Write::write_all(&mut std::io::stdout(), ratchet_report.as_bytes());
+
+        let regressions = ratchet.regressions();
+        assert!(
+            regressions.is_empty(),
+            "ratchet regressions detected ({} regression(s)) -- see report above. \
+             Run with SMOKE_BLESS=1 to update the baseline if the changes are intentional.",
+            regressions.len(),
+        );
+    } else {
+        let msg = "\nNo smoke-baseline.json found -- skipping ratchet comparison.\n\
+                    Run with SMOKE_BLESS=1 to generate the initial baseline.\n";
+        let _ = std::io::Write::write_all(&mut std::io::stdout(), msg.as_bytes());
+    }
 }
