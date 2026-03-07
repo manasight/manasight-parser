@@ -3,14 +3,24 @@
 //! All smoke tests are gated on the `MANASIGHT_TEST_LOGS` environment variable.
 //! When **set**, it points to a directory of `.log` files that are processed.
 //! When **unset**, the tests return early (pass) with a skip message.
+//!
+//! ## Ratchet & Bless
+//!
+//! After running smoke tests, results are compared against `smoke-baseline.json`
+//! using ratchet semantics: regressions (decreased counts) fail, improvements
+//! (increased counts) pass. Set `SMOKE_BLESS=1` to overwrite the baseline
+//! instead of comparing.
 
 // Each integration test file is its own crate and only uses a subset of these
 // shared helpers, so unused items produce warnings. This is expected.
 #![allow(dead_code)]
 
+use std::collections::HashMap;
+use std::fmt::Write as FmtWrite;
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 
 use manasight_parser::events::GameEvent;
 use manasight_parser::log::entry::{LineBuffer, LogEntry};
@@ -210,4 +220,245 @@ pub fn assert_logs_dir(logs_dir: &Path) -> Vec<PathBuf> {
     );
 
     log_files
+}
+
+// ---------------------------------------------------------------------------
+// Baseline types (serde)
+// ---------------------------------------------------------------------------
+
+/// Top-level baseline JSON structure.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Baseline {
+    #[serde(rename = "_meta")]
+    pub meta: BaselineMeta,
+    pub files: HashMap<String, BaselineFile>,
+}
+
+/// Metadata block in the baseline JSON.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BaselineMeta {
+    pub description: String,
+    pub generated_from_commit: String,
+    pub corpus_tag: String,
+}
+
+/// Per-file data in the baseline JSON.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BaselineFile {
+    pub total_entries: u64,
+    pub parsers: HashMap<String, u64>,
+    pub event_types: HashMap<String, u64>,
+    pub unclaimed: u64,
+    pub double_claims: u64,
+    pub timestamp_failures: u64,
+}
+
+/// Path to the baseline JSON file relative to the crate root.
+const BASELINE_PATH: &str = "smoke-baseline.json";
+
+/// Environment variable to enable bless mode.
+const BLESS_ENV_VAR: &str = "SMOKE_BLESS";
+
+// ---------------------------------------------------------------------------
+// Baseline I/O
+// ---------------------------------------------------------------------------
+
+/// Reads the committed `smoke-baseline.json` from the crate root.
+///
+/// Returns `None` if the file does not exist or cannot be parsed.
+pub fn read_baseline() -> Option<Baseline> {
+    let content = std::fs::read_to_string(BASELINE_PATH).ok()?;
+    serde_json::from_str(&content).ok()
+}
+
+/// Writes the baseline JSON to the crate root.
+///
+/// Used in bless mode to update the committed baseline.
+/// Returns an error message on failure.
+pub fn write_baseline(baseline: &Baseline) -> Result<(), String> {
+    let json =
+        serde_json::to_string_pretty(baseline).map_err(|e| format!("serialize error: {e}"))?;
+    // Ensure trailing newline for POSIX compliance.
+    let content = format!("{json}\n");
+    std::fs::write(BASELINE_PATH, content)
+        .map_err(|e| format!("failed to write {BASELINE_PATH}: {e}"))?;
+    Ok(())
+}
+
+/// Returns `true` if `SMOKE_BLESS=1` is set in the environment.
+pub fn is_bless_mode() -> bool {
+    std::env::var(BLESS_ENV_VAR).ok().is_some_and(|v| v == "1")
+}
+
+// ---------------------------------------------------------------------------
+// Ratchet comparison
+// ---------------------------------------------------------------------------
+
+/// A single ratchet difference for one (file, parser/metric) pair.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RatchetDiff {
+    pub filename: String,
+    pub metric: String,
+    pub baseline_value: u64,
+    pub actual_value: u64,
+}
+
+impl RatchetDiff {
+    /// Returns `true` if this diff is a regression (count decreased).
+    pub fn is_regression(&self) -> bool {
+        self.actual_value < self.baseline_value
+    }
+
+    /// Returns `true` if this diff is an improvement (count increased).
+    pub fn is_improvement(&self) -> bool {
+        self.actual_value > self.baseline_value
+    }
+}
+
+/// Result of comparing actual results against the baseline.
+#[derive(Debug, Clone)]
+pub struct RatchetResult {
+    pub diffs: Vec<RatchetDiff>,
+}
+
+impl RatchetResult {
+    /// Returns only the regressions (counts that decreased).
+    pub fn regressions(&self) -> Vec<&RatchetDiff> {
+        self.diffs.iter().filter(|d| d.is_regression()).collect()
+    }
+
+    /// Returns only the improvements (counts that increased).
+    pub fn improvements(&self) -> Vec<&RatchetDiff> {
+        self.diffs.iter().filter(|d| d.is_improvement()).collect()
+    }
+
+    /// Returns `true` if there are no regressions.
+    pub fn is_pass(&self) -> bool {
+        self.regressions().is_empty()
+    }
+
+    /// Formats the ratchet result into a human-readable report section.
+    pub fn format_report(&self) -> String {
+        let mut out = String::new();
+        let regressions = self.regressions();
+        let improvements = self.improvements();
+
+        if regressions.is_empty() && improvements.is_empty() {
+            let _ = writeln!(out, "Ratchet: all counts match baseline.");
+            return out;
+        }
+
+        if !improvements.is_empty() {
+            let _ = writeln!(out, "Ratchet improvements ({}):", improvements.len());
+            for diff in &improvements {
+                let _ = writeln!(
+                    out,
+                    "  [+] {}/{}: {} -> {} (+{})",
+                    diff.filename,
+                    diff.metric,
+                    diff.baseline_value,
+                    diff.actual_value,
+                    diff.actual_value - diff.baseline_value,
+                );
+            }
+        }
+
+        if !regressions.is_empty() {
+            let _ = writeln!(out, "Ratchet REGRESSIONS ({}):", regressions.len());
+            for diff in &regressions {
+                let _ = writeln!(
+                    out,
+                    "  [-] {}/{}: {} -> {} (-{})",
+                    diff.filename,
+                    diff.metric,
+                    diff.baseline_value,
+                    diff.actual_value,
+                    diff.baseline_value - diff.actual_value,
+                );
+            }
+        }
+
+        out
+    }
+}
+
+/// Compares actual smoke test results against the baseline.
+///
+/// Only compares files that appear in both the baseline and actual results.
+/// Checks per-parser claimed counts and per-event-type counts.
+pub fn compare_against_baseline(
+    baseline: &Baseline,
+    actual: &HashMap<String, BaselineFile>,
+) -> RatchetResult {
+    let mut diffs = Vec::new();
+
+    for (filename, baseline_file) in &baseline.files {
+        let Some(actual_file) = actual.get(filename) else {
+            // File missing from actual results — skip (may not be in corpus).
+            continue;
+        };
+
+        // Compare per-parser counts.
+        for (parser_name, &baseline_count) in &baseline_file.parsers {
+            let actual_count = actual_file.parsers.get(parser_name).copied().unwrap_or(0);
+            if actual_count != baseline_count {
+                diffs.push(RatchetDiff {
+                    filename: filename.clone(),
+                    metric: format!("parser/{parser_name}"),
+                    baseline_value: baseline_count,
+                    actual_value: actual_count,
+                });
+            }
+        }
+
+        // Compare per-event-type counts.
+        for (event_type, &baseline_count) in &baseline_file.event_types {
+            let actual_count = actual_file
+                .event_types
+                .get(event_type)
+                .copied()
+                .unwrap_or(0);
+            if actual_count != baseline_count {
+                diffs.push(RatchetDiff {
+                    filename: filename.clone(),
+                    metric: format!("event_type/{event_type}"),
+                    baseline_value: baseline_count,
+                    actual_value: actual_count,
+                });
+            }
+        }
+
+        // Check for new event types in actual that were not in baseline.
+        for (event_type, &actual_count) in &actual_file.event_types {
+            if !baseline_file.event_types.contains_key(event_type) && actual_count > 0 {
+                diffs.push(RatchetDiff {
+                    filename: filename.clone(),
+                    metric: format!("event_type/{event_type}"),
+                    baseline_value: 0,
+                    actual_value: actual_count,
+                });
+            }
+        }
+
+        // Check for new parsers in actual that were not in baseline.
+        for (parser_name, &actual_count) in &actual_file.parsers {
+            if !baseline_file.parsers.contains_key(parser_name) && actual_count > 0 {
+                diffs.push(RatchetDiff {
+                    filename: filename.clone(),
+                    metric: format!("parser/{parser_name}"),
+                    baseline_value: 0,
+                    actual_value: actual_count,
+                });
+            }
+        }
+    }
+
+    // Sort diffs for deterministic output.
+    diffs.sort_by(|a, b| {
+        a.filename
+            .cmp(&b.filename)
+            .then_with(|| a.metric.cmp(&b.metric))
+    });
+
+    RatchetResult { diffs }
 }
