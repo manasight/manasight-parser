@@ -1,75 +1,263 @@
 name: Smoke Test
 
 on:
-  workflow_dispatch:
-    inputs:
-      logs_url:
-        description: "URL to download test log archive (tar.gz). Overrides MANASIGHT_TEST_LOGS_URL secret."
-        required: false
-        type: string
+  # Run after CI passes on main (ensures lint/test pass before smoke tests).
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
 
+  # Weekly on Sundays at 06:00 UTC.
   schedule:
-    # Weekly on Sundays at 06:00 UTC (runs only if logs are configured).
     - cron: "0 6 * * 0"
+
+  # Manual trigger for ad-hoc runs.
+  workflow_dispatch:
+
+# Only one smoke test per ref at a time.
+concurrency:
+  group: smoke-test-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   smoke-test:
     name: Real-log smoke test
     runs-on: ubuntu-latest
 
+    # Skip if the triggering CI workflow failed (workflow_run trigger).
+    if: >-
+      github.event_name != 'workflow_run' ||
+      github.event.workflow_run.conclusion == 'success'
+
+    # Needed for committing baseline updates back to main.
+    permissions:
+      contents: write
+      pull-requests: write
+
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@v1
-
-      - name: Resolve log source
-        id: resolve-url
+      # Detect whether the TEST_DATA_TOKEN secret is available.
+      # Fork PRs and repos without the secret will skip gracefully.
+      - name: Check secret availability
+        id: secrets-check
         env:
-          INPUT_LOGS_URL: ${{ inputs.logs_url }}
-          SECRET_LOGS_URL: ${{ secrets.MANASIGHT_TEST_LOGS_URL }}
+          HAS_TOKEN: ${{ secrets.TEST_DATA_TOKEN != '' }}
         run: |
-          # Determine which URL to use (input takes precedence over secret).
-          # Compute a stable cache key from the URL so that a new URL gets a
-          # fresh cache rather than reusing a hit from a previous URL.
-          URL="${INPUT_LOGS_URL:-$SECRET_LOGS_URL}"
-          if [ -z "$URL" ]; then
+          if [ "$HAS_TOKEN" != "true" ]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "No log source configured — skipping smoke test"
+            echo "::notice::TEST_DATA_TOKEN not available — skipping smoke test (expected for fork PRs)"
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
-            URL_HASH="$(echo -n "$URL" | sha256sum | cut -c1-16)"
-            echo "cache_key=smoke-test-logs-v1-${URL_HASH}" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Cache test logs
-        if: steps.resolve-url.outputs.skip == 'false'
-        id: cache-logs
+      - name: Install Rust toolchain
+        if: steps.secrets-check.outputs.skip == 'false'
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      # Cache the downloaded corpus tarball between runs.
+      # The key is paired with the release tag (smoke-data-v1). If the corpus
+      # is updated, bump both the release tag and this cache key together.
+      - name: Cache corpus tarball
+        if: steps.secrets-check.outputs.skip == 'false'
+        id: cache-corpus
         uses: actions/cache@v4
         with:
-          path: /tmp/test-logs
-          key: ${{ steps.resolve-url.outputs.cache_key }}
+          path: /tmp/smoke-corpus.tar.gz
+          key: smoke-corpus-v1
 
-      - name: Download test logs
-        if: steps.resolve-url.outputs.skip == 'false' && steps.cache-logs.outputs.cache-hit != 'true'
+      # Download corpus from manasight-test-data GitHub Release.
+      - name: Download corpus
+        if: steps.secrets-check.outputs.skip == 'false' && steps.cache-corpus.outputs.cache-hit != 'true'
         env:
-          LOGS_URL: ${{ inputs.logs_url || secrets.MANASIGHT_TEST_LOGS_URL }}
+          GH_TOKEN: ${{ secrets.TEST_DATA_TOKEN }}
+        run: |
+          gh release download smoke-data-v1 \
+            --repo manasight/manasight-test-data \
+            --pattern "*.tar.gz" \
+            --output /tmp/smoke-corpus.tar.gz
+
+      # Extract corpus to a temp directory.
+      - name: Extract corpus
+        if: steps.secrets-check.outputs.skip == 'false'
         run: |
           mkdir -p /tmp/test-logs
-          curl -fsSL "$LOGS_URL" | tar -xz -C /tmp/test-logs
-          echo "Downloaded logs:"
+          tar -xzf /tmp/smoke-corpus.tar.gz -C /tmp/test-logs
+          echo "Corpus files:"
           ls -lh /tmp/test-logs/
 
-      - name: Run smoke test
-        if: steps.resolve-url.outputs.skip == 'false'
+      # Run smoke tests with ratchet comparison against baseline.
+      - name: Run smoke tests
+        if: steps.secrets-check.outputs.skip == 'false'
+        id: smoke
         env:
           MANASIGHT_TEST_LOGS: /tmp/test-logs
-        run: cargo test --all-features smoke_test_real_logs -- --nocapture 2>&1 | tee /tmp/smoke-test-report.txt
+        run: |
+          set +e
+          cargo test --all-features smoke_test_real_logs -- --nocapture 2>&1 | tee /tmp/smoke-output.txt
+          SMOKE_EXIT=$?
+          set -e
 
+          echo "exit_code=$SMOKE_EXIT" >> "$GITHUB_OUTPUT"
+
+          # Parse ratchet output for job summary.
+          # Extract everything after "Ratchet" line for the summary.
+          if grep -q "Ratchet" /tmp/smoke-output.txt; then
+            echo "has_ratchet=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_ratchet=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          exit $SMOKE_EXIT
+
+      # Write job summary with ratchet results.
+      - name: Write job summary
+        if: always() && steps.secrets-check.outputs.skip == 'false' && steps.smoke.outcome != 'skipped'
+        run: |
+          {
+            echo "## Smoke Test Results"
+            echo ""
+
+            if [ "${{ steps.smoke.outcome }}" = "success" ]; then
+              echo "**Status:** PASS"
+            else
+              echo "**Status:** FAIL"
+            fi
+            echo ""
+
+            # Build a comparison table from the smoke output.
+            echo "### Per-File Summary"
+            echo ""
+            echo "| File | Entries | Claimed | Unclaimed | Ratchet |"
+            echo "|------|---------|---------|-----------|---------|"
+
+            # Parse each file's stats from the smoke output using POSIX awk
+            # to avoid fd-sharing issues with nested read loops.
+            # Note: uses only POSIX awk features (no gawk-specific match()).
+            awk '
+              /^File: .+ \([0-9]+ entries\)/ {
+                # Strip "File: " prefix and " (NNN entries)" suffix.
+                s = $0
+                sub(/^File: /, "", s)
+                sub(/ \([0-9]+ entries\)$/, "", s)
+                fname = s
+                # Extract entry count from between parens.
+                s = $0
+                sub(/.*\(/, "", s)
+                sub(/ entries\).*/, "", s)
+                entries = s + 0
+                unclaimed = 0
+                in_file = 1
+                next
+              }
+              in_file && /unclaimed:/ {
+                # Extract the unclaimed number.
+                s = $0
+                sub(/.*unclaimed: */, "", s)
+                sub(/ .*/, "", s)
+                unclaimed = s + 0
+                claimed = entries - unclaimed
+                pct = (entries > 0) ? int(claimed * 100 / entries) : 0
+                printf "| `%s` | %d | %d (%d%%) | %d | -- |\n", fname, entries, claimed, pct, unclaimed
+                in_file = 0
+              }
+              /^===/ { in_file = 0 }
+            ' /tmp/smoke-output.txt
+
+            echo ""
+
+            # Include ratchet report section.
+            if [ "${{ steps.smoke.outputs.has_ratchet }}" = "true" ]; then
+              echo "### Ratchet Comparison"
+              echo ""
+              echo '```'
+              sed -n '/^Ratchet/,/^$/p' /tmp/smoke-output.txt
+              echo '```'
+            else
+              echo "### Ratchet Comparison"
+              echo ""
+              echo "_No baseline comparison performed._"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Upload full smoke test output as artifact.
       - name: Upload report
-        if: always() && steps.resolve-url.outputs.skip == 'false'
+        if: always() && steps.secrets-check.outputs.skip == 'false' && steps.smoke.outcome != 'skipped'
         uses: actions/upload-artifact@v4
         with:
           name: smoke-test-report
-          path: /tmp/smoke-test-report.txt
+          path: /tmp/smoke-output.txt
           retention-days: 30
+
+      # Auto-update baseline when improvements are detected on main.
+      - name: Check for baseline improvements
+        if: >-
+          steps.smoke.outcome == 'success' &&
+          steps.smoke.outputs.has_ratchet == 'true' &&
+          github.ref == 'refs/heads/main'
+        id: baseline-check
+        run: |
+          if grep -q '\[+\]' /tmp/smoke-output.txt; then
+            echo "has_improvements=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_improvements=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Update baseline and open PR
+        if: >-
+          steps.baseline-check.outcome == 'success' &&
+          steps.baseline-check.outputs.has_improvements == 'true'
+        env:
+          MANASIGHT_TEST_LOGS: /tmp/test-logs
+          SMOKE_BLESS: "1"
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Re-run in bless mode to write updated baseline.
+          if ! cargo test --all-features smoke_test_real_logs -- --nocapture 2>&1; then
+            echo "::warning::Bless mode run exited non-zero — baseline may not have been updated"
+          fi
+
+          # Check if baseline actually changed.
+          if git diff --quiet smoke-baseline.json; then
+            echo "Baseline unchanged after bless — nothing to do."
+            exit 0
+          fi
+
+          # Configure git identity for the commit (checkout@v4 does not set these).
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          BRANCH="auto/update-smoke-baseline-$(date +%Y%m%d-%H%M%S)"
+          git checkout -b "$BRANCH"
+          git add smoke-baseline.json
+          git commit -m "chore: auto-update smoke-baseline.json
+
+          Smoke test detected improved parser counts on main.
+          This baseline update ratchets forward to the new counts.
+
+          Co-Authored-By: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>"
+
+          git push -u origin "$BRANCH"
+
+          gh pr create \
+            --base main \
+            --title "chore: auto-update smoke test baseline" \
+            --body "$(cat <<'EOF'
+          ## Summary
+          Smoke test CI detected improved parser counts on main.
+          This PR updates `smoke-baseline.json` to ratchet forward to the new counts.
+
+          Auto-generated by the smoke test workflow.
+          EOF
+          )"
+
+      # Summary for skipped runs.
+      - name: Write skip summary
+        if: steps.secrets-check.outputs.skip == 'true'
+        run: |
+          {
+            echo "## Smoke Test — Skipped"
+            echo ""
+            echo "TEST_DATA_TOKEN secret is not available."
+            echo "This is expected for fork PRs. Smoke tests require access to the private test corpus."
+          } >> "$GITHUB_STEP_SUMMARY"
