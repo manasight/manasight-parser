@@ -15,7 +15,7 @@
 // shared helpers, so unused items produce warnings. This is expected.
 #![allow(dead_code)]
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::fmt::Write as FmtWrite;
 use std::path::{Path, PathBuf};
 
@@ -227,11 +227,14 @@ pub fn assert_logs_dir(logs_dir: &Path) -> Vec<PathBuf> {
 // ---------------------------------------------------------------------------
 
 /// Top-level baseline JSON structure.
+///
+/// Uses `BTreeMap` for deterministic (sorted-key) JSON serialization,
+/// so every bless run produces identical output for the same data.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Baseline {
     #[serde(rename = "_meta")]
     pub meta: BaselineMeta,
-    pub files: HashMap<String, BaselineFile>,
+    pub files: BTreeMap<String, BaselineFile>,
 }
 
 /// Metadata block in the baseline JSON.
@@ -243,11 +246,13 @@ pub struct BaselineMeta {
 }
 
 /// Per-file data in the baseline JSON.
+///
+/// Uses `BTreeMap` for deterministic (sorted-key) JSON serialization.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BaselineFile {
     pub total_entries: u64,
-    pub parsers: HashMap<String, u64>,
-    pub event_types: HashMap<String, u64>,
+    pub parsers: BTreeMap<String, u64>,
+    pub event_types: BTreeMap<String, u64>,
     pub unclaimed: u64,
     pub double_claims: u64,
     pub timestamp_failures: u64,
@@ -388,7 +393,7 @@ impl RatchetResult {
 /// Checks per-parser claimed counts and per-event-type counts.
 pub fn compare_against_baseline(
     baseline: &Baseline,
-    actual: &HashMap<String, BaselineFile>,
+    actual: &BTreeMap<String, BaselineFile>,
 ) -> RatchetResult {
     let mut diffs = Vec::new();
 

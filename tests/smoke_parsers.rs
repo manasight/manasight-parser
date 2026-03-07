@@ -68,13 +68,13 @@ struct FileReport {
 impl FileReport {
     /// Converts this report into a `BaselineFile` for ratchet comparison.
     fn to_baseline_file(&self) -> BaselineFile {
-        let parsers: HashMap<String, u64> = self
+        let parsers: std::collections::BTreeMap<String, u64> = self
             .parser_stats
             .iter()
             .map(|(name, stats)| ((*name).to_string(), stats.claimed as u64))
             .collect();
 
-        let event_types: HashMap<String, u64> = self
+        let event_types: std::collections::BTreeMap<String, u64> = self
             .event_type_counts
             .iter()
             .map(|(name, count)| ((*name).to_string(), *count as u64))
@@ -473,7 +473,9 @@ fn format_report(reports: &[FileReport]) -> String {
 
 /// Converts file reports into a map suitable for ratchet comparison
 /// or baseline generation.
-fn reports_to_baseline_files(reports: &[FileReport]) -> HashMap<String, BaselineFile> {
+fn reports_to_baseline_files(
+    reports: &[FileReport],
+) -> std::collections::BTreeMap<String, BaselineFile> {
     reports
         .iter()
         .filter(|r| !r.read_error)
@@ -482,7 +484,7 @@ fn reports_to_baseline_files(reports: &[FileReport]) -> HashMap<String, Baseline
 }
 
 /// Builds a full `Baseline` from actual results for bless mode.
-fn build_baseline(actual: &HashMap<String, BaselineFile>) -> Baseline {
+fn build_baseline(actual: &std::collections::BTreeMap<String, BaselineFile>) -> Baseline {
     // Get current git commit hash for metadata, falling back gracefully.
     let commit = std::process::Command::new("git")
         .args(["rev-parse", "--short", "HEAD"])
@@ -499,11 +501,6 @@ fn build_baseline(actual: &HashMap<String, BaselineFile>) -> Baseline {
         })
         .unwrap_or_else(|| "unknown".to_string());
 
-    // Produce deterministic output: sort files by key using a BTreeMap.
-    let sorted_files: std::collections::BTreeMap<String, BaselineFile> =
-        actual.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-    let files: HashMap<String, BaselineFile> = sorted_files.into_iter().collect();
-
     Baseline {
         meta: BaselineMeta {
             description: "Smoke test baseline -- per-file, per-parser event counts from Level 1 \
@@ -512,7 +509,7 @@ fn build_baseline(actual: &HashMap<String, BaselineFile>) -> Baseline {
             generated_from_commit: commit,
             corpus_tag: "smoke-data-v1".to_string(),
         },
-        files,
+        files: actual.clone(),
     }
 }
 

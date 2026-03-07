@@ -9,7 +9,7 @@
 
 mod smoke_common;
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use smoke_common::{compare_against_baseline, Baseline, BaselineFile, BaselineMeta};
 
@@ -18,15 +18,15 @@ use smoke_common::{compare_against_baseline, Baseline, BaselineFile, BaselineMet
 // ---------------------------------------------------------------------------
 
 /// Creates a baseline with a single file entry.
-fn make_baseline(filename: &str, parsers: HashMap<String, u64>) -> Baseline {
-    let event_types = HashMap::new();
+fn make_baseline(filename: &str, parsers: BTreeMap<String, u64>) -> Baseline {
+    let event_types = BTreeMap::new();
     Baseline {
         meta: BaselineMeta {
             description: "test baseline".to_string(),
             generated_from_commit: "abc1234".to_string(),
             corpus_tag: "test-v1".to_string(),
         },
-        files: HashMap::from([(
+        files: BTreeMap::from([(
             filename.to_string(),
             BaselineFile {
                 total_entries: 100,
@@ -41,11 +41,11 @@ fn make_baseline(filename: &str, parsers: HashMap<String, u64>) -> Baseline {
 }
 
 /// Creates an actual file entry with parser counts.
-fn make_actual_file(parsers: HashMap<String, u64>) -> BaselineFile {
+fn make_actual_file(parsers: BTreeMap<String, u64>) -> BaselineFile {
     BaselineFile {
         total_entries: 100,
         parsers,
-        event_types: HashMap::new(),
+        event_types: BTreeMap::new(),
         unclaimed: 10,
         double_claims: 0,
         timestamp_failures: 5,
@@ -58,9 +58,9 @@ fn make_actual_file(parsers: HashMap<String, u64>) -> BaselineFile {
 
 #[test]
 fn test_ratchet_exact_match_produces_no_diffs() {
-    let parsers = HashMap::from([("session".to_string(), 5_u64), ("gre".to_string(), 100)]);
+    let parsers = BTreeMap::from([("session".to_string(), 5_u64), ("gre".to_string(), 100)]);
     let baseline = make_baseline("test.log", parsers.clone());
-    let actual = HashMap::from([("test.log".to_string(), make_actual_file(parsers))]);
+    let actual = BTreeMap::from([("test.log".to_string(), make_actual_file(parsers))]);
 
     let result = compare_against_baseline(&baseline, &actual);
     assert!(result.diffs.is_empty(), "expected no diffs for exact match");
@@ -74,13 +74,13 @@ fn test_ratchet_exact_match_produces_no_diffs() {
 #[test]
 fn test_ratchet_improvement_detected_and_passes() {
     let baseline_parsers =
-        HashMap::from([("session".to_string(), 5_u64), ("gre".to_string(), 100)]);
-    let actual_parsers = HashMap::from([
+        BTreeMap::from([("session".to_string(), 5_u64), ("gre".to_string(), 100)]);
+    let actual_parsers = BTreeMap::from([
         ("session".to_string(), 5_u64),
         ("gre".to_string(), 110), // improved
     ]);
     let baseline = make_baseline("test.log", baseline_parsers);
-    let actual = HashMap::from([("test.log".to_string(), make_actual_file(actual_parsers))]);
+    let actual = BTreeMap::from([("test.log".to_string(), make_actual_file(actual_parsers))]);
 
     let result = compare_against_baseline(&baseline, &actual);
     assert!(result.is_pass(), "improvements should pass");
@@ -100,13 +100,13 @@ fn test_ratchet_improvement_detected_and_passes() {
 #[test]
 fn test_ratchet_regression_detected_and_fails() {
     let baseline_parsers =
-        HashMap::from([("session".to_string(), 5_u64), ("gre".to_string(), 100)]);
-    let actual_parsers = HashMap::from([
+        BTreeMap::from([("session".to_string(), 5_u64), ("gre".to_string(), 100)]);
+    let actual_parsers = BTreeMap::from([
         ("session".to_string(), 5_u64),
         ("gre".to_string(), 90), // regression
     ]);
     let baseline = make_baseline("test.log", baseline_parsers);
-    let actual = HashMap::from([("test.log".to_string(), make_actual_file(actual_parsers))]);
+    let actual = BTreeMap::from([("test.log".to_string(), make_actual_file(actual_parsers))]);
 
     let result = compare_against_baseline(&baseline, &actual);
     assert!(!result.is_pass(), "regressions should fail");
@@ -120,18 +120,18 @@ fn test_ratchet_regression_detected_and_fails() {
 
 #[test]
 fn test_ratchet_mixed_improvement_and_regression() {
-    let baseline_parsers = HashMap::from([
+    let baseline_parsers = BTreeMap::from([
         ("session".to_string(), 5_u64),
         ("gre".to_string(), 100),
         ("client_actions".to_string(), 50),
     ]);
-    let actual_parsers = HashMap::from([
+    let actual_parsers = BTreeMap::from([
         ("session".to_string(), 5_u64),
         ("gre".to_string(), 110),           // improvement
         ("client_actions".to_string(), 40), // regression
     ]);
     let baseline = make_baseline("test.log", baseline_parsers);
-    let actual = HashMap::from([("test.log".to_string(), make_actual_file(actual_parsers))]);
+    let actual = BTreeMap::from([("test.log".to_string(), make_actual_file(actual_parsers))]);
 
     let result = compare_against_baseline(&baseline, &actual);
     assert!(!result.is_pass(), "regression should cause failure");
@@ -145,13 +145,13 @@ fn test_ratchet_mixed_improvement_and_regression() {
 
 #[test]
 fn test_ratchet_new_parser_in_actual_is_improvement() {
-    let baseline_parsers = HashMap::from([("session".to_string(), 5_u64)]);
-    let actual_parsers = HashMap::from([
+    let baseline_parsers = BTreeMap::from([("session".to_string(), 5_u64)]);
+    let actual_parsers = BTreeMap::from([
         ("session".to_string(), 5_u64),
         ("draft_bot".to_string(), 10), // new parser not in baseline
     ]);
     let baseline = make_baseline("test.log", baseline_parsers);
-    let actual = HashMap::from([("test.log".to_string(), make_actual_file(actual_parsers))]);
+    let actual = BTreeMap::from([("test.log".to_string(), make_actual_file(actual_parsers))]);
 
     let result = compare_against_baseline(&baseline, &actual);
     assert!(result.is_pass(), "new parser should be an improvement");
@@ -161,19 +161,19 @@ fn test_ratchet_new_parser_in_actual_is_improvement() {
 
 #[test]
 fn test_ratchet_new_event_type_in_actual_is_improvement() {
-    let baseline_parsers = HashMap::from([("session".to_string(), 5_u64)]);
+    let baseline_parsers = BTreeMap::from([("session".to_string(), 5_u64)]);
     let baseline = Baseline {
         meta: BaselineMeta {
             description: "test".to_string(),
             generated_from_commit: "abc1234".to_string(),
             corpus_tag: "test-v1".to_string(),
         },
-        files: HashMap::from([(
+        files: BTreeMap::from([(
             "test.log".to_string(),
             BaselineFile {
                 total_entries: 100,
                 parsers: baseline_parsers,
-                event_types: HashMap::from([("Session".to_string(), 5_u64)]),
+                event_types: BTreeMap::from([("Session".to_string(), 5_u64)]),
                 unclaimed: 10,
                 double_claims: 0,
                 timestamp_failures: 5,
@@ -182,8 +182,8 @@ fn test_ratchet_new_event_type_in_actual_is_improvement() {
     };
     let actual_file = BaselineFile {
         total_entries: 100,
-        parsers: HashMap::from([("session".to_string(), 5_u64)]),
-        event_types: HashMap::from([
+        parsers: BTreeMap::from([("session".to_string(), 5_u64)]),
+        event_types: BTreeMap::from([
             ("Session".to_string(), 5_u64),
             ("DraftBot".to_string(), 10), // new event type
         ]),
@@ -191,7 +191,7 @@ fn test_ratchet_new_event_type_in_actual_is_improvement() {
         double_claims: 0,
         timestamp_failures: 5,
     };
-    let actual = HashMap::from([("test.log".to_string(), actual_file)]);
+    let actual = BTreeMap::from([("test.log".to_string(), actual_file)]);
 
     let result = compare_against_baseline(&baseline, &actual);
     assert!(result.is_pass());
@@ -205,10 +205,10 @@ fn test_ratchet_new_event_type_in_actual_is_improvement() {
 
 #[test]
 fn test_ratchet_missing_actual_file_is_skipped() {
-    let baseline_parsers = HashMap::from([("session".to_string(), 5_u64)]);
+    let baseline_parsers = BTreeMap::from([("session".to_string(), 5_u64)]);
     let baseline = make_baseline("test.log", baseline_parsers);
     // Actual has no files matching the baseline.
-    let actual: HashMap<String, BaselineFile> = HashMap::new();
+    let actual: BTreeMap<String, BaselineFile> = BTreeMap::new();
 
     let result = compare_against_baseline(&baseline, &actual);
     assert!(result.diffs.is_empty(), "missing file should be skipped");
@@ -221,9 +221,9 @@ fn test_ratchet_missing_actual_file_is_skipped() {
 
 #[test]
 fn test_ratchet_report_exact_match() {
-    let parsers = HashMap::from([("session".to_string(), 5_u64)]);
+    let parsers = BTreeMap::from([("session".to_string(), 5_u64)]);
     let baseline = make_baseline("test.log", parsers.clone());
-    let actual = HashMap::from([("test.log".to_string(), make_actual_file(parsers))]);
+    let actual = BTreeMap::from([("test.log".to_string(), make_actual_file(parsers))]);
 
     let result = compare_against_baseline(&baseline, &actual);
     let report = result.format_report();
@@ -235,10 +235,10 @@ fn test_ratchet_report_exact_match() {
 
 #[test]
 fn test_ratchet_report_shows_improvements() {
-    let baseline_parsers = HashMap::from([("gre".to_string(), 100_u64)]);
-    let actual_parsers = HashMap::from([("gre".to_string(), 110_u64)]);
+    let baseline_parsers = BTreeMap::from([("gre".to_string(), 100_u64)]);
+    let actual_parsers = BTreeMap::from([("gre".to_string(), 110_u64)]);
     let baseline = make_baseline("test.log", baseline_parsers);
-    let actual = HashMap::from([("test.log".to_string(), make_actual_file(actual_parsers))]);
+    let actual = BTreeMap::from([("test.log".to_string(), make_actual_file(actual_parsers))]);
 
     let result = compare_against_baseline(&baseline, &actual);
     let report = result.format_report();
@@ -254,10 +254,10 @@ fn test_ratchet_report_shows_improvements() {
 
 #[test]
 fn test_ratchet_report_shows_regressions() {
-    let baseline_parsers = HashMap::from([("gre".to_string(), 100_u64)]);
-    let actual_parsers = HashMap::from([("gre".to_string(), 90_u64)]);
+    let baseline_parsers = BTreeMap::from([("gre".to_string(), 100_u64)]);
+    let actual_parsers = BTreeMap::from([("gre".to_string(), 90_u64)]);
     let baseline = make_baseline("test.log", baseline_parsers);
-    let actual = HashMap::from([("test.log".to_string(), make_actual_file(actual_parsers))]);
+    let actual = BTreeMap::from([("test.log".to_string(), make_actual_file(actual_parsers))]);
 
     let result = compare_against_baseline(&baseline, &actual);
     let report = result.format_report();
@@ -283,13 +283,13 @@ fn test_ratchet_multiple_files_tracked_independently() {
             generated_from_commit: "abc1234".to_string(),
             corpus_tag: "test-v1".to_string(),
         },
-        files: HashMap::from([
+        files: BTreeMap::from([
             (
                 "file_a.log".to_string(),
                 BaselineFile {
                     total_entries: 100,
-                    parsers: HashMap::from([("gre".to_string(), 50_u64)]),
-                    event_types: HashMap::new(),
+                    parsers: BTreeMap::from([("gre".to_string(), 50_u64)]),
+                    event_types: BTreeMap::new(),
                     unclaimed: 10,
                     double_claims: 0,
                     timestamp_failures: 5,
@@ -299,8 +299,8 @@ fn test_ratchet_multiple_files_tracked_independently() {
                 "file_b.log".to_string(),
                 BaselineFile {
                     total_entries: 200,
-                    parsers: HashMap::from([("gre".to_string(), 80_u64)]),
-                    event_types: HashMap::new(),
+                    parsers: BTreeMap::from([("gre".to_string(), 80_u64)]),
+                    event_types: BTreeMap::new(),
                     unclaimed: 20,
                     double_claims: 0,
                     timestamp_failures: 10,
@@ -309,13 +309,13 @@ fn test_ratchet_multiple_files_tracked_independently() {
         ]),
     };
 
-    let actual = HashMap::from([
+    let actual = BTreeMap::from([
         (
             "file_a.log".to_string(),
             BaselineFile {
                 total_entries: 100,
-                parsers: HashMap::from([("gre".to_string(), 55_u64)]), // improvement
-                event_types: HashMap::new(),
+                parsers: BTreeMap::from([("gre".to_string(), 55_u64)]), // improvement
+                event_types: BTreeMap::new(),
                 unclaimed: 10,
                 double_claims: 0,
                 timestamp_failures: 5,
@@ -325,8 +325,8 @@ fn test_ratchet_multiple_files_tracked_independently() {
             "file_b.log".to_string(),
             BaselineFile {
                 total_entries: 200,
-                parsers: HashMap::from([("gre".to_string(), 70_u64)]), // regression
-                event_types: HashMap::new(),
+                parsers: BTreeMap::from([("gre".to_string(), 70_u64)]), // regression
+                event_types: BTreeMap::new(),
                 unclaimed: 20,
                 double_claims: 0,
                 timestamp_failures: 10,
@@ -356,10 +356,10 @@ fn test_ratchet_multiple_files_tracked_independently() {
 
 #[test]
 fn test_ratchet_parser_count_to_zero_is_regression() {
-    let baseline_parsers = HashMap::from([("gre".to_string(), 100_u64)]);
-    let actual_parsers = HashMap::from([("gre".to_string(), 0_u64)]);
+    let baseline_parsers = BTreeMap::from([("gre".to_string(), 100_u64)]);
+    let actual_parsers = BTreeMap::from([("gre".to_string(), 0_u64)]);
     let baseline = make_baseline("test.log", baseline_parsers);
-    let actual = HashMap::from([("test.log".to_string(), make_actual_file(actual_parsers))]);
+    let actual = BTreeMap::from([("test.log".to_string(), make_actual_file(actual_parsers))]);
 
     let result = compare_against_baseline(&baseline, &actual);
     assert!(!result.is_pass());
@@ -379,13 +379,13 @@ fn test_ratchet_diffs_sorted_by_filename_then_metric() {
             generated_from_commit: "abc1234".to_string(),
             corpus_tag: "test-v1".to_string(),
         },
-        files: HashMap::from([
+        files: BTreeMap::from([
             (
                 "b_file.log".to_string(),
                 BaselineFile {
                     total_entries: 100,
-                    parsers: HashMap::from([("gre".to_string(), 10_u64)]),
-                    event_types: HashMap::new(),
+                    parsers: BTreeMap::from([("gre".to_string(), 10_u64)]),
+                    event_types: BTreeMap::new(),
                     unclaimed: 10,
                     double_claims: 0,
                     timestamp_failures: 5,
@@ -395,8 +395,8 @@ fn test_ratchet_diffs_sorted_by_filename_then_metric() {
                 "a_file.log".to_string(),
                 BaselineFile {
                     total_entries: 100,
-                    parsers: HashMap::from([("session".to_string(), 5_u64)]),
-                    event_types: HashMap::new(),
+                    parsers: BTreeMap::from([("session".to_string(), 5_u64)]),
+                    event_types: BTreeMap::new(),
                     unclaimed: 10,
                     double_claims: 0,
                     timestamp_failures: 5,
@@ -405,13 +405,13 @@ fn test_ratchet_diffs_sorted_by_filename_then_metric() {
         ]),
     };
 
-    let actual = HashMap::from([
+    let actual = BTreeMap::from([
         (
             "b_file.log".to_string(),
             BaselineFile {
                 total_entries: 100,
-                parsers: HashMap::from([("gre".to_string(), 15_u64)]),
-                event_types: HashMap::new(),
+                parsers: BTreeMap::from([("gre".to_string(), 15_u64)]),
+                event_types: BTreeMap::new(),
                 unclaimed: 10,
                 double_claims: 0,
                 timestamp_failures: 5,
@@ -421,8 +421,8 @@ fn test_ratchet_diffs_sorted_by_filename_then_metric() {
             "a_file.log".to_string(),
             BaselineFile {
                 total_entries: 100,
-                parsers: HashMap::from([("session".to_string(), 8_u64)]),
-                event_types: HashMap::new(),
+                parsers: BTreeMap::from([("session".to_string(), 8_u64)]),
+                event_types: BTreeMap::new(),
                 unclaimed: 10,
                 double_claims: 0,
                 timestamp_failures: 5,
