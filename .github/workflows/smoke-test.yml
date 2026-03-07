@@ -35,7 +35,7 @@ jobs:
       pull-requests: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       # Detect whether the TEST_DATA_TOKEN secret is available.
       # Fork PRs and repos without the secret will skip gracefully.
