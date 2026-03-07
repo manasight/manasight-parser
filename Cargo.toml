@@ -5,6 +5,10 @@ edition = "2021"
 description = "MTG Arena log file parser — reads Player.log and emits typed game events"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/manasight/manasight-parser"
+readme = "README.md"
+rust-version = "1.93.0"
+keywords = ["mtg-arena", "parser", "log", "magic-the-gathering"]
+categories = ["parser-implementations", "games"]
 
 [dependencies]
 base64 = "0.22"
