@@ -208,6 +208,10 @@ jobs:
             exit 0
           fi
 
+          # Configure git identity for the commit (checkout@v4 does not set these).
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
           BRANCH="auto/update-smoke-baseline-$(date +%Y%m%d-%H%M%S)"
           git checkout -b "$BRANCH"
           git add smoke-baseline.json
