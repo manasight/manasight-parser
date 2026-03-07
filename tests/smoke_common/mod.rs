@@ -26,10 +26,32 @@ const ENV_VAR: &str = "MANASIGHT_TEST_LOGS";
 // Types
 // ---------------------------------------------------------------------------
 
-/// A parser identified by name and its `try_parse` function pointer.
+/// Wrapper for parser function pointers with different return types.
+///
+/// Most parsers return `Option<GameEvent>` (single event per entry).
+/// The GRE parser returns `Vec<GameEvent>` (batched messages produce
+/// multiple events from one entry).
+pub enum ParserFunc {
+    /// A parser that returns at most one event per entry.
+    Single(fn(&LogEntry, Option<DateTime<Utc>>) -> Option<GameEvent>),
+    /// A parser that may return multiple events per entry.
+    Multi(fn(&LogEntry, Option<DateTime<Utc>>) -> Vec<GameEvent>),
+}
+
+impl ParserFunc {
+    /// Calls the parser and normalizes the result to a `Vec<GameEvent>`.
+    pub fn call(&self, entry: &LogEntry, ts: Option<DateTime<Utc>>) -> Vec<GameEvent> {
+        match self {
+            Self::Single(f) => f(entry, ts).into_iter().collect(),
+            Self::Multi(f) => f(entry, ts),
+        }
+    }
+}
+
+/// A parser identified by name and its `try_parse` function.
 pub struct NamedParser {
     pub name: &'static str,
-    pub func: fn(&LogEntry, Option<DateTime<Utc>>) -> Option<GameEvent>,
+    pub func: ParserFunc,
 }
 
 /// Per-parser statistics accumulated while processing a single log file.
@@ -50,47 +72,47 @@ pub fn all_parsers() -> Vec<NamedParser> {
     vec![
         NamedParser {
             name: "session",
-            func: parsers::session::try_parse,
+            func: ParserFunc::Single(parsers::session::try_parse),
         },
         NamedParser {
             name: "match_state",
-            func: parsers::match_state::try_parse,
+            func: ParserFunc::Single(parsers::match_state::try_parse),
         },
         NamedParser {
             name: "gre",
-            func: parsers::gre::try_parse,
+            func: ParserFunc::Multi(parsers::gre::try_parse),
         },
         NamedParser {
             name: "client_actions",
-            func: parsers::client_actions::try_parse,
+            func: ParserFunc::Single(parsers::client_actions::try_parse),
         },
         NamedParser {
             name: "draft_bot",
-            func: parsers::draft::bot::try_parse,
+            func: ParserFunc::Single(parsers::draft::bot::try_parse),
         },
         NamedParser {
             name: "draft_human",
-            func: parsers::draft::human::try_parse,
+            func: ParserFunc::Single(parsers::draft::human::try_parse),
         },
         NamedParser {
             name: "draft_complete",
-            func: parsers::draft::complete::try_parse,
+            func: ParserFunc::Single(parsers::draft::complete::try_parse),
         },
         NamedParser {
             name: "inventory",
-            func: parsers::inventory::try_parse,
+            func: ParserFunc::Single(parsers::inventory::try_parse),
         },
         NamedParser {
             name: "collection",
-            func: parsers::collection::try_parse,
+            func: ParserFunc::Single(parsers::collection::try_parse),
         },
         NamedParser {
             name: "rank",
-            func: parsers::rank::try_parse,
+            func: ParserFunc::Single(parsers::rank::try_parse),
         },
         NamedParser {
             name: "event_lifecycle",
-            func: parsers::event_lifecycle::try_parse,
+            func: ParserFunc::Single(parsers::event_lifecycle::try_parse),
         },
     ]
 }

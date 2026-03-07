@@ -122,8 +122,8 @@ mod tests {
             let body = connect_resp_body();
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(!result.is_empty());
+            let event = &result[0];
             let payload = game_state_payload(event);
 
             let deck_cards = payload["deck_cards"].as_array();
@@ -142,8 +142,8 @@ mod tests {
             let body = connect_resp_body();
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(!result.is_empty());
+            let event = &result[0];
             let payload = game_state_payload(event);
 
             let sideboard = payload["sideboard_cards"].as_array();
@@ -160,8 +160,8 @@ mod tests {
             let body = minimal_connect_resp_body();
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(!result.is_empty());
+            let event = &result[0];
             let payload = game_state_payload(event);
 
             let sideboard = payload["sideboard_cards"].as_array();
@@ -175,8 +175,8 @@ mod tests {
             let body = minimal_connect_resp_body();
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(!result.is_empty());
+            let event = &result[0];
             let payload = game_state_payload(event);
 
             let deck_cards = payload["deck_cards"].as_array();
@@ -198,8 +198,8 @@ mod tests {
             let body = connect_resp_body();
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(!result.is_empty());
+            let event = &result[0];
             let payload = game_state_payload(event);
 
             let seat_ids = payload["system_seat_ids"].as_array();
@@ -215,8 +215,8 @@ mod tests {
             let body = flat_connect_resp_body();
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(!result.is_empty());
+            let event = &result[0];
             let payload = game_state_payload(event);
 
             let seat_ids = payload["system_seat_ids"].as_array();
@@ -236,8 +236,8 @@ mod tests {
             let body = connect_resp_body();
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(!result.is_empty());
+            let event = &result[0];
             let payload = game_state_payload(event);
 
             assert!(payload["settings"].is_object());
@@ -252,8 +252,8 @@ mod tests {
             let body = connect_resp_body();
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(!result.is_empty());
+            let event = &result[0];
             let payload = game_state_payload(event);
 
             assert_eq!(
@@ -267,8 +267,8 @@ mod tests {
             let body = minimal_connect_resp_body();
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(!result.is_empty());
+            let event = &result[0];
             let payload = game_state_payload(event);
 
             assert!(payload["settings"].is_object());
@@ -283,8 +283,8 @@ mod tests {
             let body = connect_resp_body();
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(!result.is_empty());
+            let event = &result[0];
             let payload = game_state_payload(event);
             assert_eq!(payload["msg_id"], 1);
         }
@@ -294,8 +294,8 @@ mod tests {
             let body = connect_resp_body();
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(!result.is_empty());
+            let event = &result[0];
             let payload = game_state_payload(event);
             assert_eq!(payload["game_state_id"], 0);
         }
@@ -324,8 +324,8 @@ mod tests {
             );
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(!result.is_empty());
+            let event = &result[0];
             let payload = game_state_payload(event);
             // Deck cards should be empty when deckMessage is missing.
             let deck_cards = payload["deck_cards"].as_array();
@@ -351,8 +351,8 @@ mod tests {
             );
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(!result.is_empty());
+            let event = &result[0];
             let payload = game_state_payload(event);
             // Should still parse but with empty deck/sideboard.
             let deck_cards = payload["deck_cards"].as_array();
@@ -384,8 +384,8 @@ mod tests {
             );
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(!result.is_empty());
+            let event = &result[0];
             let payload = game_state_payload(event);
             let deck_cards = payload["deck_cards"].as_array();
             assert!(deck_cards.is_some());
@@ -414,8 +414,8 @@ mod tests {
             );
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(!result.is_empty());
+            let event = &result[0];
             let payload = game_state_payload(event);
             let seat_ids = payload["system_seat_ids"].as_array();
             assert!(seat_ids.is_some());
@@ -449,8 +449,8 @@ mod tests {
             );
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(!result.is_empty());
+            let event = &result[0];
             let payload = game_state_payload(event);
             // ConnectResp has priority over GameStateMessage.
             assert_eq!(payload["type"], "connect_resp");
@@ -483,8 +483,8 @@ mod tests {
             );
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(!result.is_empty());
+            let event = &result[0];
             let payload = game_state_payload(event);
             assert_eq!(payload["type"], "connect_resp");
         }

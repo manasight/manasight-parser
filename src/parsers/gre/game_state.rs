@@ -381,7 +381,7 @@ mod tests {
             let body = game_state_message_body();
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
-            assert!(result.is_some());
+            assert!(!result.is_empty());
         }
 
         #[test]
@@ -389,8 +389,8 @@ mod tests {
             let body = game_state_message_body();
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(!result.is_empty());
+            let event = &result[0];
             assert!(matches!(event, GameEvent::GameState(_)));
         }
 
@@ -399,8 +399,8 @@ mod tests {
             let body = game_state_message_body();
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(!result.is_empty());
+            let event = &result[0];
             let payload = game_state_payload(event);
             assert_eq!(payload["type"], "game_state_message");
         }
@@ -410,8 +410,8 @@ mod tests {
             let body = game_state_message_body();
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(!result.is_empty());
+            let event = &result[0];
             let payload = game_state_payload(event);
             assert_eq!(payload["msg_id"], 5);
         }
@@ -421,8 +421,8 @@ mod tests {
             let body = game_state_message_body();
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(!result.is_empty());
+            let event = &result[0];
             let payload = game_state_payload(event);
             assert_eq!(payload["game_state_id"], 42);
         }
@@ -432,8 +432,8 @@ mod tests {
             let body = game_state_message_body();
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(!result.is_empty());
+            let event = &result[0];
             assert_eq!(event.metadata().raw_bytes(), body.as_bytes());
         }
 
@@ -443,8 +443,8 @@ mod tests {
             let entry = unity_entry(&body);
             let ts = Some(test_timestamp());
             let result = try_parse(&entry, ts);
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(!result.is_empty());
+            let event = &result[0];
             assert_eq!(event.metadata().timestamp(), ts);
         }
     }
@@ -459,8 +459,8 @@ mod tests {
             let body = game_state_message_body();
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(!result.is_empty());
+            let event = &result[0];
             let payload = game_state_payload(event);
 
             let zones = payload["zones"].as_array();
@@ -474,8 +474,8 @@ mod tests {
             let body = game_state_message_body();
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(!result.is_empty());
+            let event = &result[0];
             let payload = game_state_payload(event);
 
             let zones = payload["zones"]
@@ -500,8 +500,8 @@ mod tests {
             let body = game_state_message_body();
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(!result.is_empty());
+            let event = &result[0];
             let payload = game_state_payload(event);
 
             let zones = payload["zones"]
@@ -521,8 +521,8 @@ mod tests {
             let body = game_state_message_body();
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(!result.is_empty());
+            let event = &result[0];
             let payload = game_state_payload(event);
 
             let zones = payload["zones"]
@@ -542,8 +542,8 @@ mod tests {
             let body = game_state_message_body();
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(!result.is_empty());
+            let event = &result[0];
             let payload = game_state_payload(event);
 
             let zones = payload["zones"]
@@ -562,8 +562,8 @@ mod tests {
             let body = game_state_message_body();
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(!result.is_empty());
+            let event = &result[0];
             let payload = game_state_payload(event);
 
             let zones = payload["zones"]
@@ -582,8 +582,8 @@ mod tests {
             let body = game_state_message_body();
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(!result.is_empty());
+            let event = &result[0];
             let payload = game_state_payload(event);
 
             let zones = payload["zones"]
@@ -603,8 +603,8 @@ mod tests {
             let body = empty_game_state_message_body();
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(!result.is_empty());
+            let event = &result[0];
             let payload = game_state_payload(event);
 
             let zones = payload["zones"].as_array();
@@ -618,8 +618,8 @@ mod tests {
             let body = minimal_game_state_message_body();
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(!result.is_empty());
+            let event = &result[0];
             let payload = game_state_payload(event);
 
             let zones = payload["zones"]
@@ -644,8 +644,8 @@ mod tests {
             let body = game_state_message_body();
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(!result.is_empty());
+            let event = &result[0];
             let payload = game_state_payload(event);
 
             let objects = payload["game_objects"].as_array();
@@ -659,8 +659,8 @@ mod tests {
             let body = game_state_message_body();
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(!result.is_empty());
+            let event = &result[0];
             let payload = game_state_payload(event);
 
             let objects = payload["game_objects"]
@@ -681,8 +681,8 @@ mod tests {
             let body = game_state_message_body();
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(!result.is_empty());
+            let event = &result[0];
             let payload = game_state_payload(event);
 
             let objects = payload["game_objects"]
@@ -701,8 +701,8 @@ mod tests {
             let body = game_state_message_body();
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(!result.is_empty());
+            let event = &result[0];
             let payload = game_state_payload(event);
 
             let objects = payload["game_objects"]
@@ -722,8 +722,8 @@ mod tests {
             let body = game_state_message_body();
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(!result.is_empty());
+            let event = &result[0];
             let payload = game_state_payload(event);
 
             let objects = payload["game_objects"]
@@ -742,8 +742,8 @@ mod tests {
             let body = game_state_message_body();
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(!result.is_empty());
+            let event = &result[0];
             let payload = game_state_payload(event);
 
             let objects = payload["game_objects"]
@@ -759,8 +759,8 @@ mod tests {
             let body = game_state_message_body();
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(!result.is_empty());
+            let event = &result[0];
             let payload = game_state_payload(event);
 
             let objects = payload["game_objects"]
@@ -784,8 +784,8 @@ mod tests {
             let body = game_state_message_body();
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(!result.is_empty());
+            let event = &result[0];
             let payload = game_state_payload(event);
 
             let objects = payload["game_objects"]
@@ -805,8 +805,8 @@ mod tests {
             let body = empty_game_state_message_body();
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(!result.is_empty());
+            let event = &result[0];
             let payload = game_state_payload(event);
 
             let objects = payload["game_objects"].as_array();
@@ -820,8 +820,8 @@ mod tests {
             let body = game_state_message_body();
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(!result.is_empty());
+            let event = &result[0];
             let payload = game_state_payload(event);
 
             let objects = payload["game_objects"]
@@ -836,8 +836,8 @@ mod tests {
             let body = flat_game_state_message_body();
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(!result.is_empty());
+            let event = &result[0];
             let payload = game_state_payload(event);
 
             let objects = payload["game_objects"]
@@ -864,8 +864,8 @@ mod tests {
             let body = game_state_message_body();
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(!result.is_empty());
+            let event = &result[0];
             let payload = game_state_payload(event);
 
             assert!(payload["game_info"].is_object());
@@ -876,8 +876,8 @@ mod tests {
             let body = game_state_message_body();
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(!result.is_empty());
+            let event = &result[0];
             let payload = game_state_payload(event);
 
             assert_eq!(payload["game_info"]["matchID"], "match-id-12345");
@@ -888,8 +888,8 @@ mod tests {
             let body = game_state_message_body();
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(!result.is_empty());
+            let event = &result[0];
             let payload = game_state_payload(event);
 
             assert_eq!(payload["game_info"]["stage"], "GameStage_Play");
@@ -900,8 +900,8 @@ mod tests {
             let body = game_state_message_body();
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(!result.is_empty());
+            let event = &result[0];
             let payload = game_state_payload(event);
 
             assert_eq!(payload["game_info"]["mulliganType"], "MulliganType_London");
@@ -912,8 +912,8 @@ mod tests {
             let body = empty_game_state_message_body();
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(!result.is_empty());
+            let event = &result[0];
             let payload = game_state_payload(event);
 
             assert!(payload["game_info"].is_null());
@@ -930,7 +930,7 @@ mod tests {
             let body = queued_game_state_message_body();
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
-            assert!(result.is_some());
+            assert!(!result.is_empty());
         }
 
         #[test]
@@ -938,8 +938,8 @@ mod tests {
             let body = queued_game_state_message_body();
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(!result.is_empty());
+            let event = &result[0];
             let payload = game_state_payload(event);
             assert_eq!(payload["type"], "queued_game_state_message");
         }
@@ -949,8 +949,8 @@ mod tests {
             let body = queued_game_state_message_body();
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(!result.is_empty());
+            let event = &result[0];
             let payload = game_state_payload(event);
             assert_eq!(payload["msg_id"], 7);
         }
@@ -960,8 +960,8 @@ mod tests {
             let body = queued_game_state_message_body();
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(!result.is_empty());
+            let event = &result[0];
             let payload = game_state_payload(event);
 
             let zones = payload["zones"]
@@ -980,8 +980,8 @@ mod tests {
             let body = queued_game_state_message_body();
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(!result.is_empty());
+            let event = &result[0];
             let payload = game_state_payload(event);
 
             let objects = payload["game_objects"]
@@ -1000,8 +1000,8 @@ mod tests {
             let body = queued_game_state_message_body();
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(!result.is_empty());
+            let event = &result[0];
             assert_eq!(event.metadata().raw_bytes(), body.as_bytes());
         }
     }
@@ -1037,8 +1037,8 @@ mod tests {
             );
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(!result.is_empty());
+            let event = &result[0];
             let payload = game_state_payload(event);
 
             let zones = payload["zones"]
@@ -1076,8 +1076,8 @@ mod tests {
             );
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(!result.is_empty());
+            let event = &result[0];
             let payload = game_state_payload(event);
 
             let objects = payload["game_objects"]
@@ -1121,8 +1121,8 @@ mod tests {
             );
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(!result.is_empty());
+            let event = &result[0];
             let payload = game_state_payload(event);
 
             // Should parse with empty zones and objects.
@@ -1158,8 +1158,8 @@ mod tests {
             );
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(!result.is_empty());
+            let event = &result[0];
             let payload = game_state_payload(event);
             assert_eq!(payload["type"], "game_state_message");
         }
@@ -1200,8 +1200,8 @@ mod tests {
             );
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(!result.is_empty());
+            let event = &result[0];
             let payload = game_state_payload(event);
 
             // Zone without zoneId should be skipped.
@@ -1247,8 +1247,8 @@ mod tests {
             );
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(!result.is_empty());
+            let event = &result[0];
             let payload = game_state_payload(event);
 
             // Object without instanceId should be skipped.
@@ -1363,7 +1363,10 @@ mod tests {
         fn test_timers_present_is_array() {
             let body = game_state_with_timers_body();
             let entry = unity_entry(&body);
-            let event = try_parse(&entry, Some(test_timestamp())).unwrap_or_else(|| unreachable!());
+            let event = try_parse(&entry, Some(test_timestamp()))
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(&event);
 
             assert!(payload["timers"].is_array());
@@ -1373,7 +1376,10 @@ mod tests {
         fn test_timers_count() {
             let body = game_state_with_timers_body();
             let entry = unity_entry(&body);
-            let event = try_parse(&entry, Some(test_timestamp())).unwrap_or_else(|| unreachable!());
+            let event = try_parse(&entry, Some(test_timestamp()))
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(&event);
 
             let timers = payload["timers"]
@@ -1386,7 +1392,10 @@ mod tests {
         fn test_timer_base_fields() {
             let body = game_state_with_timers_body();
             let entry = unity_entry(&body);
-            let event = try_parse(&entry, Some(test_timestamp())).unwrap_or_else(|| unreachable!());
+            let event = try_parse(&entry, Some(test_timestamp()))
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(&event);
 
             let timer = &payload["timers"][0];
@@ -1400,7 +1409,10 @@ mod tests {
         fn test_timer_optional_fields_present() {
             let body = game_state_with_timers_body();
             let entry = unity_entry(&body);
-            let event = try_parse(&entry, Some(test_timestamp())).unwrap_or_else(|| unreachable!());
+            let event = try_parse(&entry, Some(test_timestamp()))
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(&event);
 
             let timer = &payload["timers"][0];
@@ -1414,7 +1426,10 @@ mod tests {
         fn test_timer_optional_fields_absent() {
             let body = game_state_with_timers_body();
             let entry = unity_entry(&body);
-            let event = try_parse(&entry, Some(test_timestamp())).unwrap_or_else(|| unreachable!());
+            let event = try_parse(&entry, Some(test_timestamp()))
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(&event);
 
             let timer = &payload["timers"][1];
@@ -1428,7 +1443,10 @@ mod tests {
         fn test_missing_timers_returns_empty_array() {
             let body = game_state_message_body();
             let entry = unity_entry(&body);
-            let event = try_parse(&entry, Some(test_timestamp())).unwrap_or_else(|| unreachable!());
+            let event = try_parse(&entry, Some(test_timestamp()))
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(&event);
 
             let timers = payload["timers"]
@@ -1465,7 +1483,10 @@ mod tests {
         fn test_diff_deleted_instance_ids_present() {
             let body = game_state_with_diff_deleted_body();
             let entry = unity_entry(&body);
-            let event = try_parse(&entry, Some(test_timestamp())).unwrap_or_else(|| unreachable!());
+            let event = try_parse(&entry, Some(test_timestamp()))
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(&event);
 
             let ids = payload["diff_deleted_instance_ids"]
@@ -1495,7 +1516,10 @@ mod tests {
                 })
             );
             let entry = unity_entry(&body);
-            let event = try_parse(&entry, Some(test_timestamp())).unwrap_or_else(|| unreachable!());
+            let event = try_parse(&entry, Some(test_timestamp()))
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(&event);
 
             let ids = payload["diff_deleted_instance_ids"]
@@ -1508,7 +1532,10 @@ mod tests {
         fn test_diff_deleted_instance_ids_absent_returns_empty() {
             let body = game_state_message_body();
             let entry = unity_entry(&body);
-            let event = try_parse(&entry, Some(test_timestamp())).unwrap_or_else(|| unreachable!());
+            let event = try_parse(&entry, Some(test_timestamp()))
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(&event);
 
             let ids = payload["diff_deleted_instance_ids"]
@@ -1535,7 +1562,10 @@ mod tests {
                 })
             );
             let entry = unity_entry(&body);
-            let event = try_parse(&entry, Some(test_timestamp())).unwrap_or_else(|| unreachable!());
+            let event = try_parse(&entry, Some(test_timestamp()))
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| unreachable!());
             let payload = game_state_payload(&event);
 
             let ids = payload["diff_deleted_instance_ids"]
