@@ -56,6 +56,8 @@ jobs:
         uses: actions-rust-lang/setup-rust-toolchain@v1
 
       # Cache the downloaded corpus tarball between runs.
+      # The key is paired with the release tag (smoke-data-v1). If the corpus
+      # is updated, bump both the release tag and this cache key together.
       - name: Cache corpus tarball
         if: steps.secrets-check.outputs.skip == 'false'
         id: cache-corpus
@@ -129,20 +131,31 @@ jobs:
             echo "| File | Entries | Claimed | Unclaimed | Ratchet |"
             echo "|------|---------|---------|-----------|---------|"
 
-            # Parse each file's stats from the smoke output using awk to avoid
-            # fd-sharing issues with nested read loops.
+            # Parse each file's stats from the smoke output using POSIX awk
+            # to avoid fd-sharing issues with nested read loops.
+            # Note: uses only POSIX awk features (no gawk-specific match()).
             awk '
               /^File: .+ \([0-9]+ entries\)/ {
-                match($0, /^File: (.+) \(([0-9]+) entries\)/, m)
-                fname = m[1]
-                entries = m[2]
+                # Strip "File: " prefix and " (NNN entries)" suffix.
+                s = $0
+                sub(/^File: /, "", s)
+                sub(/ \([0-9]+ entries\)$/, "", s)
+                fname = s
+                # Extract entry count from between parens.
+                s = $0
+                sub(/.*\(/, "", s)
+                sub(/ entries\).*/, "", s)
+                entries = s + 0
                 unclaimed = 0
                 in_file = 1
                 next
               }
               in_file && /unclaimed:/ {
-                match($0, /unclaimed: +([0-9]+)/, m)
-                unclaimed = m[1]
+                # Extract the unclaimed number.
+                s = $0
+                sub(/.*unclaimed: */, "", s)
+                sub(/ .*/, "", s)
+                unclaimed = s + 0
                 claimed = entries - unclaimed
                 pct = (entries > 0) ? int(claimed * 100 / entries) : 0
                 printf "| `%s` | %d | %d (%d%%) | %d | -- |\n", fname, entries, claimed, pct, unclaimed
@@ -200,7 +213,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           # Re-run in bless mode to write updated baseline.
-          cargo test --all-features smoke_test_real_logs -- --nocapture 2>&1 || true
+          if ! cargo test --all-features smoke_test_real_logs -- --nocapture 2>&1; then
+            echo "::warning::Bless mode run exited non-zero — baseline may not have been updated"
+          fi
 
           # Check if baseline actually changed.
           if git diff --quiet smoke-baseline.json; then
