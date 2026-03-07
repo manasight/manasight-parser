@@ -1,0 +1,106 @@
+name: Claude PR Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened]
+
+jobs:
+  review:
+    if: ${{ !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write
+      actions: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Claude PR Review
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          allowed_tools: "Read,Grep,Glob,WebFetch,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*)"
+          prompt: |
+            You are a senior Rust engineer reviewing a pull request. Follow these instructions precisely.
+
+            ## Step 1: Gather Context
+
+            1. Read this repository's CLAUDE.md for project conventions and coding standards.
+            2. Run `gh pr diff ${{ github.event.pull_request.number }}` to get the full diff.
+            3. Run `gh pr view ${{ github.event.pull_request.number }}` to get the PR title, body, and metadata.
+            4. Read any changed files in full to understand the surrounding context.
+
+            ## Step 2: Review Standards
+
+            This repo is a **pure Rust library crate** (manasight-parser) for parsing MTG Arena log files. Apply these Rust-specific standards:
+
+            - **No `.unwrap()`, `.expect()`, `panic!()`, `todo!()`, `dbg!()`, or `println!()` in production code** (non-test code)
+            - **No `#[allow(clippy::...)]` lint suppressions** — the code should be fixed instead
+            - Clippy pedantic + restriction lints are enforced
+            - All public items must have `///` doc comments
+            - Each module must have a `//!` module-level doc comment
+            - Library crate must NOT depend on Tauri or desktop-specific crates
+            - Library crate must NOT start a Tokio runtime
+            - Internal code must use `::log` (e.g., `::log::info!()`) because `pub mod log` shadows the `log` crate
+            - `pub(crate)` utility functions belong in `src/util.rs` — no duplicated helpers across modules
+            - Test naming convention: `test_<function>_<scenario>_<expected>`
+            - 80% test coverage minimum; every code change should include new/updated tests
+            - Error handling must use proper Result types, not panics
+
+            ## Step 3: Categorize Findings
+
+            Bucket all findings under these category headers (use ### level). Omit any category that has no findings.
+
+            ### Bugs / Correctness
+            Actual bugs, logic errors, type errors, race conditions, incorrect behavior.
+
+            ### Code Quality
+            Readability, naming, structure, DRY violations, best practices.
+
+            ### Testing
+            Missing tests, test quality, coverage gaps, edge cases not covered.
+
+            ### Minor Nits
+            Style, formatting, trivial suggestions.
+
+            ## Step 4: Format Each Finding
+
+            For each finding, include:
+
+            - **Severity**: one of:
+              - CRITICAL — blocks merge, must fix before merging
+              - HIGH — should fix before merging
+              - MEDIUM — should consider fixing
+              - LOW — minor improvement, nice to have
+              - NIT — preference only, no action required
+            - **Confidence**: one of:
+              - HIGH — >90% certain this is a real issue
+              - MEDIUM — 70-90% certain
+              - LOW — 50-70% certain, worth flagging but uncertain
+            - Format the heading as: `**[SEVERITY] Description** (Confidence: X)`
+            - Include the file location as `path/to/file:line`
+            - Provide a brief description of the issue and a suggested fix
+
+            ## Step 5: Summary Table
+
+            End with a summary table of all findings:
+
+            ```
+            | # | Severity | Confidence | Category | Location | Finding |
+            |---|----------|------------|----------|----------|---------|
+            | 1 | ...      | ...        | ...      | ...      | ...     |
+            ```
+
+            ## Step 6: Overall Verdict
+
+            End with exactly one of these verdicts with a one-line rationale:
+
+            - **APPROVE** — No blocking issues found; the PR is ready to merge.
+            - **COMMENT** — Non-blocking suggestions only; the PR can merge as-is but could be improved.
+            - **REQUEST_CHANGES** — Blocking issues found that should be resolved before merging.
+
+            Format as: `**Verdict: APPROVE/COMMENT/REQUEST_CHANGES** — <one-line rationale>`
