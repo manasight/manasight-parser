@@ -15,6 +15,9 @@ Thumbs.db
 *.swp
 *.swo
 
+# Smoke test results (tracked via smoke-baseline.json, not committed)
+tests/smoke-results/
+
 # Claude Code — ignore symlinked workspace commands and runtime dirs
 .claude/commands/issue-to-merge.md
 .claude/commands/sequential-issues.md

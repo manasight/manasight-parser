@@ -1,0 +1,48 @@
+# Smoke test corpus manifest
+#
+# Describes the Player.log files used for smoke testing. The actual logs live
+# in a private GitHub release (manasight/manasight-test-data, tag smoke-data-v1)
+# to keep large binaries out of the parser repo. This manifest is committed so
+# that anyone can see what is tested and verify corpus integrity after download.
+#
+# Fields:
+#   filename       — name of the .log file inside the archive
+#   sha256         — hex-encoded SHA-256 hash of the file
+#   size_bytes     — file size in bytes
+#   date_captured  — date the play session was recorded (YYYY-MM-DD)
+
+[[files]]
+filename     = "session_2026-02-22_a.log"
+sha256       = "ec5579b89549ba09e1e7169fd512ea354535626ccd7188bd06e107bce1f635bb"
+size_bytes   = 31194170
+date_captured = "2026-02-22"
+
+[[files]]
+filename     = "session_2026-02-22_b.log"
+sha256       = "c760ae08d5d20b7089d41c81d0e60ff5079df9f8c99c14adfd849aadc8f3c52f"
+size_bytes   = 23726538
+date_captured = "2026-02-22"
+
+[[files]]
+filename     = "session_2026-02-23.log"
+sha256       = "bc0817fa05b5abca114d1484235b6f361eadc3aa4b1ee2a1631655a0e01c7a50"
+size_bytes   = 16111137
+date_captured = "2026-02-23"
+
+[[files]]
+filename     = "session_2026-03-05.log"
+sha256       = "8888f740dcce7a83cf3ac673ca03d9c4c872dbd253f707bf88659779164fe8fc"
+size_bytes   = 7553531
+date_captured = "2026-03-05"
+
+[[files]]
+filename     = "session_2026-03-06.log"
+sha256       = "b3f6dc688f5382d98e0afb199141e7b20b1856133a9f852a926a0a9a1fea4442"
+size_bytes   = 3276640
+date_captured = "2026-03-06"
+
+[[files]]
+filename     = "session_2026-03-06_b.log"
+sha256       = "418f8627ebf67d7be18e366fbe1229d7a9f4c774ce114eb1c449f70a58edee33"
+size_bytes   = 12048985
+date_captured = "2026-03-06"
