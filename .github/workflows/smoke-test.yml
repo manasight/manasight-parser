@@ -183,7 +183,7 @@ jobs:
       # Upload full smoke test output as artifact.
       - name: Upload report
         if: always() && steps.secrets-check.outputs.skip == 'false' && steps.smoke.outcome != 'skipped'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: smoke-test-report
           path: /tmp/smoke-output.txt
