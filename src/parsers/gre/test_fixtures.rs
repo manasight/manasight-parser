@@ -225,6 +225,167 @@ pub(super) fn flat_game_state_message_body() -> String {
     )
 }
 
+/// Helper: build a GRE event body with **multiple** `GameStateMessage`
+/// entries in a single `greToClientMessages` array (batched).
+///
+/// This simulates the real-world scenario where Arena batches multiple
+/// game state updates into one log entry (55% of GRE events in live data).
+pub(super) fn batched_game_state_messages_body() -> String {
+    format!(
+        "[UnityCrossThreadLogger]greToClientEvent\n{}",
+        serde_json::json!({
+            "greToClientEvent": {
+                "greToClientMessages": [
+                    {
+                        "type": "GREMessageType_GameStateMessage",
+                        "msgId": 10,
+                        "gameStateId": 100,
+                        "gameStateMessage": {
+                            "zones": [
+                                {"zoneId": 30, "type": "ZoneType_Hand",
+                                 "ownerSeatId": 1, "objectInstanceIds": [101, 102]}
+                            ],
+                            "gameObjects": [],
+                            "gameInfo": {"stage": "GameStage_Play"}
+                        }
+                    },
+                    {
+                        "type": "GREMessageType_GameStateMessage",
+                        "msgId": 11,
+                        "gameStateId": 101,
+                        "gameStateMessage": {
+                            "zones": [
+                                {"zoneId": 32, "type": "ZoneType_Battlefield",
+                                 "ownerSeatId": 0, "objectInstanceIds": [301]}
+                            ],
+                            "gameObjects": [],
+                            "gameInfo": {"stage": "GameStage_Play"}
+                        }
+                    },
+                    {
+                        "type": "GREMessageType_GameStateMessage",
+                        "msgId": 12,
+                        "gameStateId": 102,
+                        "gameStateMessage": {
+                            "zones": [],
+                            "gameObjects": [],
+                            "gameInfo": {"stage": "GameStage_Play"}
+                        }
+                    }
+                ]
+            }
+        })
+    )
+}
+
+/// Helper: build a GRE event body with multiple `QueuedGameStateMessage`
+/// entries in a single batch.
+pub(super) fn batched_queued_game_state_messages_body() -> String {
+    format!(
+        "[UnityCrossThreadLogger]greToClientEvent\n{}",
+        serde_json::json!({
+            "greToClientEvent": {
+                "greToClientMessages": [
+                    {
+                        "type": "GREMessageType_QueuedGameStateMessage",
+                        "msgId": 20,
+                        "gameStateId": 200,
+                        "gameStateMessage": {
+                            "zones": [],
+                            "gameObjects": [],
+                            "gameInfo": {"stage": "GameStage_Play"}
+                        }
+                    },
+                    {
+                        "type": "GREMessageType_QueuedGameStateMessage",
+                        "msgId": 21,
+                        "gameStateId": 201,
+                        "gameStateMessage": {
+                            "zones": [],
+                            "gameObjects": [],
+                            "gameInfo": {"stage": "GameStage_Play"}
+                        }
+                    }
+                ]
+            }
+        })
+    )
+}
+
+/// Helper: build a GRE event body with mixed GSM and QGSM in one batch.
+pub(super) fn mixed_gsm_qgsm_body() -> String {
+    format!(
+        "[UnityCrossThreadLogger]greToClientEvent\n{}",
+        serde_json::json!({
+            "greToClientEvent": {
+                "greToClientMessages": [
+                    {
+                        "type": "GREMessageType_GameStateMessage",
+                        "msgId": 30,
+                        "gameStateId": 300,
+                        "gameStateMessage": {
+                            "zones": [],
+                            "gameObjects": [],
+                            "gameInfo": {"stage": "GameStage_Play"}
+                        }
+                    },
+                    {
+                        "type": "GREMessageType_QueuedGameStateMessage",
+                        "msgId": 31,
+                        "gameStateId": 301,
+                        "gameStateMessage": {
+                            "zones": [],
+                            "gameObjects": [],
+                            "gameInfo": {"stage": "GameStage_Play"}
+                        }
+                    }
+                ]
+            }
+        })
+    )
+}
+
+/// Helper: build a batched GRE event where one GSM has `GameStage_GameOver`.
+pub(super) fn batched_gsm_with_game_over_body() -> String {
+    format!(
+        "[UnityCrossThreadLogger]greToClientEvent\n{}",
+        serde_json::json!({
+            "greToClientEvent": {
+                "greToClientMessages": [
+                    {
+                        "type": "GREMessageType_GameStateMessage",
+                        "msgId": 40,
+                        "gameStateId": 400,
+                        "gameStateMessage": {
+                            "zones": [],
+                            "gameObjects": [],
+                            "gameInfo": {"stage": "GameStage_Play"}
+                        }
+                    },
+                    {
+                        "type": "GREMessageType_GameStateMessage",
+                        "msgId": 41,
+                        "gameStateId": 401,
+                        "gameStateMessage": {
+                            "zones": [],
+                            "gameObjects": [],
+                            "gameInfo": {
+                                "stage": "GameStage_GameOver",
+                                "matchID": "match-456",
+                                "gameNumber": 1,
+                                "results": [
+                                    {"scope": "MatchScope_Game", "result": "ResultType_Draw",
+                                     "winningTeamId": 0}
+                                ]
+                            }
+                        }
+                    }
+                ]
+            }
+        })
+    )
+}
+
 /// Helper: build a `GameStateMessage` with an empty `gameStateMessage`
 /// (no zones, no objects, no game info).
 pub(super) fn empty_game_state_message_body() -> String {

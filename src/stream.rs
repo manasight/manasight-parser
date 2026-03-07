@@ -242,7 +242,7 @@ async fn run_router(
     bus: EventBus,
 ) {
     while let Some(entry) = entry_rx.recv().await {
-        if let Some(event) = router.route(&entry) {
+        for event in router.route(&entry) {
             bus.send(event);
         }
     }

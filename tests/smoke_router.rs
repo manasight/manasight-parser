@@ -50,7 +50,7 @@ fn process_file_router(path: &Path) -> Option<RouterFileReport> {
     let mut event_type_counts: HashMap<&'static str, usize> = HashMap::new();
 
     for entry in &entries {
-        if let Some(event) = router.route(entry) {
+        for event in router.route(entry) {
             *event_type_counts
                 .entry(event_type_name(&event))
                 .or_insert(0) += 1;

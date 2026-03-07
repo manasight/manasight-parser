@@ -143,8 +143,8 @@ mod tests {
             let body = game_state_message_with_turn_info_body();
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(!result.is_empty());
+            let event = &result[0];
             let payload = game_state_payload(event);
 
             assert!(payload["turn_info"].is_object());
@@ -155,8 +155,8 @@ mod tests {
             let body = game_state_message_with_turn_info_body();
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(!result.is_empty());
+            let event = &result[0];
             let payload = game_state_payload(event);
 
             assert_eq!(payload["turn_info"]["turn_number"], 3);
@@ -167,8 +167,8 @@ mod tests {
             let body = game_state_message_with_turn_info_body();
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(!result.is_empty());
+            let event = &result[0];
             let payload = game_state_payload(event);
 
             assert_eq!(payload["turn_info"]["phase"], "Phase_Main1");
@@ -179,8 +179,8 @@ mod tests {
             let body = game_state_message_with_turn_info_body();
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(!result.is_empty());
+            let event = &result[0];
             let payload = game_state_payload(event);
 
             assert_eq!(payload["turn_info"]["step"], "Step_Upkeep");
@@ -191,8 +191,8 @@ mod tests {
             let body = game_state_message_with_turn_info_body();
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(!result.is_empty());
+            let event = &result[0];
             let payload = game_state_payload(event);
 
             assert_eq!(payload["turn_info"]["active_player"], 1);
@@ -203,8 +203,8 @@ mod tests {
             let body = game_state_message_with_turn_info_body();
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(!result.is_empty());
+            let event = &result[0];
             let payload = game_state_payload(event);
 
             assert_eq!(payload["turn_info"]["decision_player"], 2);
@@ -215,8 +215,8 @@ mod tests {
             let body = game_state_message_body();
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(!result.is_empty());
+            let event = &result[0];
             let payload = game_state_payload(event);
 
             assert!(payload["turn_info"].is_null());
@@ -227,8 +227,8 @@ mod tests {
             let body = empty_game_state_message_body();
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(!result.is_empty());
+            let event = &result[0];
             let payload = game_state_payload(event);
 
             assert!(payload["turn_info"].is_null());
@@ -239,8 +239,8 @@ mod tests {
             let body = game_state_message_with_partial_turn_info_body();
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(!result.is_empty());
+            let event = &result[0];
             let payload = game_state_payload(event);
 
             let turn_info = &payload["turn_info"];

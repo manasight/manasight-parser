@@ -258,25 +258,25 @@ fn process_file(path: &Path, parsers: &[NamedParser]) -> FileReport {
 
         for (idx, parser) in parsers.iter().enumerate() {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                (parser.func)(entry, timestamp)
+                parser.func.call(entry, timestamp)
             }));
 
             match result {
-                Ok(Some(event)) => {
+                Ok(events) if !events.is_empty() => {
                     stats[idx].1.claimed += 1;
                     claimant_count += 1;
                     claimant_names.push(parser.name);
 
-                    // Track GSM field presence for GameState events.
-                    if let GameEvent::GameState(ref gs) = event {
-                        gsm_stats.track(gs.payload());
-                    }
+                    for event in &events {
+                        // Track GSM field presence for GameState events.
+                        if let GameEvent::GameState(ref gs) = event {
+                            gsm_stats.track(gs.payload());
+                        }
 
-                    *event_type_counts
-                        .entry(event_type_name(&event))
-                        .or_insert(0) += 1;
+                        *event_type_counts.entry(event_type_name(event)).or_insert(0) += 1;
+                    }
                 }
-                Ok(None) => {}
+                Ok(_) => {}
                 Err(_) => {
                     stats[idx].1.panics += 1;
                 }
