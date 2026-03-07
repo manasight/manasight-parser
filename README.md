@@ -2,6 +2,8 @@
 
 # manasight-parser
 
+**manasight-parser** is the log parsing engine behind [Manasight](https://manasight.gg), an MTG Arena companion app.
+
 MTG Arena log file parser — a Rust library crate that reads Arena's `Player.log` and emits typed game events via an async event bus.
 
 ## Architecture
