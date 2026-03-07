@@ -1,0 +1,183 @@
+{
+  "_meta": {
+    "description": "Smoke test baseline — per-file, per-parser event counts from Level 1 (parser-only) smoke tests.",
+    "generated_from_commit": "8a62b96",
+    "corpus_tag": "smoke-data-v1"
+  },
+  "files": {
+    "session_2026-02-22_a.log": {
+      "total_entries": 4913,
+      "parsers": {
+        "session": 6,
+        "match_state": 10,
+        "gre": 2617,
+        "client_actions": 2026,
+        "draft_bot": 0,
+        "draft_human": 0,
+        "draft_complete": 0,
+        "inventory": 7,
+        "collection": 0,
+        "rank": 7,
+        "event_lifecycle": 6
+      },
+      "event_types": {
+        "ClientAction": 2026,
+        "EventLifecycle": 6,
+        "GameResult": 10,
+        "GameState": 4381,
+        "Inventory": 7,
+        "MatchState": 10,
+        "Rank": 7,
+        "Session": 6
+      },
+      "unclaimed": 234,
+      "double_claims": 0,
+      "timestamp_failures": 163
+    },
+    "session_2026-02-22_b.log": {
+      "total_entries": 3995,
+      "parsers": {
+        "session": 5,
+        "match_state": 8,
+        "gre": 2172,
+        "client_actions": 1488,
+        "draft_bot": 0,
+        "draft_human": 116,
+        "draft_complete": 2,
+        "inventory": 5,
+        "collection": 0,
+        "rank": 5,
+        "event_lifecycle": 6
+      },
+      "event_types": {
+        "ClientAction": 1488,
+        "DraftComplete": 2,
+        "DraftHuman": 116,
+        "EventLifecycle": 6,
+        "GameResult": 8,
+        "GameState": 3478,
+        "Inventory": 5,
+        "MatchState": 8,
+        "Rank": 5,
+        "Session": 5
+      },
+      "unclaimed": 188,
+      "double_claims": 0,
+      "timestamp_failures": 213
+    },
+    "session_2026-02-23.log": {
+      "total_entries": 948,
+      "parsers": {
+        "session": 3,
+        "match_state": 4,
+        "gre": 375,
+        "client_actions": 425,
+        "draft_bot": 0,
+        "draft_human": 0,
+        "draft_complete": 0,
+        "inventory": 3,
+        "collection": 0,
+        "rank": 3,
+        "event_lifecycle": 4
+      },
+      "event_types": {
+        "ClientAction": 425,
+        "EventLifecycle": 4,
+        "GameResult": 4,
+        "GameState": 808,
+        "Inventory": 3,
+        "MatchState": 4,
+        "Rank": 3,
+        "Session": 3
+      },
+      "unclaimed": 131,
+      "double_claims": 0,
+      "timestamp_failures": 89
+    },
+    "session_2026-03-05.log": {
+      "total_entries": 771,
+      "parsers": {
+        "session": 2,
+        "match_state": 2,
+        "gre": 454,
+        "client_actions": 236,
+        "draft_bot": 0,
+        "draft_human": 0,
+        "draft_complete": 0,
+        "inventory": 2,
+        "collection": 0,
+        "rank": 2,
+        "event_lifecycle": 2
+      },
+      "event_types": {
+        "ClientAction": 236,
+        "EventLifecycle": 2,
+        "GameResult": 2,
+        "GameState": 674,
+        "Inventory": 2,
+        "MatchState": 2,
+        "Rank": 2,
+        "Session": 2
+      },
+      "unclaimed": 71,
+      "double_claims": 0,
+      "timestamp_failures": 48
+    },
+    "session_2026-03-06.log": {
+      "total_entries": 112,
+      "parsers": {
+        "session": 1,
+        "match_state": 0,
+        "gre": 0,
+        "client_actions": 0,
+        "draft_bot": 0,
+        "draft_human": 62,
+        "draft_complete": 2,
+        "inventory": 1,
+        "collection": 0,
+        "rank": 1,
+        "event_lifecycle": 1
+      },
+      "event_types": {
+        "DraftComplete": 2,
+        "DraftHuman": 62,
+        "EventLifecycle": 1,
+        "Inventory": 1,
+        "Rank": 1,
+        "Session": 1
+      },
+      "unclaimed": 44,
+      "double_claims": 0,
+      "timestamp_failures": 72
+    },
+    "session_2026-03-06_b.log": {
+      "total_entries": 2305,
+      "parsers": {
+        "session": 2,
+        "match_state": 2,
+        "gre": 1059,
+        "client_actions": 1157,
+        "draft_bot": 0,
+        "draft_human": 0,
+        "draft_complete": 0,
+        "inventory": 2,
+        "collection": 0,
+        "rank": 2,
+        "event_lifecycle": 1
+      },
+      "event_types": {
+        "ClientAction": 1157,
+        "EventLifecycle": 1,
+        "GameResult": 2,
+        "GameState": 1657,
+        "Inventory": 2,
+        "MatchState": 2,
+        "Rank": 2,
+        "Session": 2
+      },
+      "unclaimed": 80,
+      "double_claims": 0,
+      "timestamp_failures": 55
+    }
+  }
+}
