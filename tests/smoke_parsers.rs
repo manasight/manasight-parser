@@ -566,9 +566,11 @@ fn smoke_test_real_logs() {
 
     if is_bless_mode() {
         let baseline = build_baseline(&actual_files);
+        let write_result = write_baseline(&baseline);
         assert!(
-            write_baseline(&baseline).is_ok(),
-            "failed to write baseline in bless mode",
+            write_result.is_ok(),
+            "failed to write baseline in bless mode: {}",
+            write_result.err().unwrap_or_default(),
         );
         let msg = format!(
             "\nBless mode: wrote updated baseline with {} file(s) to smoke-baseline.json\n",

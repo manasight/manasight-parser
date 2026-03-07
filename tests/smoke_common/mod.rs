@@ -394,7 +394,7 @@ pub fn compare_against_baseline(
 
     for (filename, baseline_file) in &baseline.files {
         let Some(actual_file) = actual.get(filename) else {
-            // File missing from actual results — skip (may not be in corpus).
+            // File missing from actual results -- skip (may not be in corpus).
             continue;
         };
 
