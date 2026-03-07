@@ -313,7 +313,23 @@ fn extract_single_game_object(obj: &serde_json::Value) -> Option<serde_json::Val
     let power = extract_nested_value(obj.get("power"));
     let toughness = extract_nested_value(obj.get("toughness"));
 
-    Some(serde_json::json!({
+    // Combat state fields (optional — only present during combat).
+    let attack_state = obj
+        .get("attackState")
+        .and_then(serde_json::Value::as_str)
+        .map(String::from);
+    let block_state = obj
+        .get("blockState")
+        .and_then(serde_json::Value::as_str)
+        .map(String::from);
+    let block_info_attacker_ids: Vec<i64> = obj
+        .get("blockInfo")
+        .and_then(|bi| bi.get("attackerIds"))
+        .and_then(serde_json::Value::as_array)
+        .map(|arr| arr.iter().filter_map(serde_json::Value::as_i64).collect())
+        .unwrap_or_default();
+
+    let mut result = serde_json::json!({
         "instance_id": instance_id,
         "grp_id": grp_id,
         "object_type": object_type,
@@ -327,7 +343,20 @@ fn extract_single_game_object(obj: &serde_json::Value) -> Option<serde_json::Val
         "name": name,
         "power": power,
         "toughness": toughness,
-    }))
+    });
+
+    // Only include combat fields when present to keep non-combat payloads lean.
+    if let Some(ref state) = attack_state {
+        result["attack_state"] = serde_json::json!(state);
+    }
+    if let Some(ref state) = block_state {
+        result["block_state"] = serde_json::json!(state);
+    }
+    if !block_info_attacker_ids.is_empty() {
+        result["block_info"] = serde_json::json!({ "attacker_ids": block_info_attacker_ids });
+    }
+
+    Some(result)
 }
 
 // ---------------------------------------------------------------------------
@@ -1315,6 +1344,101 @@ mod tests {
                 "type": "GameObjectType_Card"
             });
             assert!(extract_single_game_object(&obj).is_none());
+        }
+
+        #[test]
+        fn test_extract_game_object_attack_state() {
+            let obj = serde_json::json!({
+                "instanceId": 200,
+                "grpId": 98546,
+                "type": "GameObjectType_Card",
+                "zoneId": 28,
+                "ownerSeatId": 1,
+                "controllerSeatId": 1,
+                "attackState": "AttackState_Attacking"
+            });
+            let result = extract_single_game_object(&obj);
+            assert!(result.is_some());
+            let o = result.unwrap_or_else(|| unreachable!());
+            assert_eq!(o["attack_state"], "AttackState_Attacking");
+        }
+
+        #[test]
+        fn test_extract_game_object_block_state() {
+            let obj = serde_json::json!({
+                "instanceId": 326,
+                "grpId": 98596,
+                "type": "GameObjectType_Token",
+                "zoneId": 28,
+                "ownerSeatId": 2,
+                "controllerSeatId": 2,
+                "blockState": "BlockState_Blocking"
+            });
+            let result = extract_single_game_object(&obj);
+            assert!(result.is_some());
+            let o = result.unwrap_or_else(|| unreachable!());
+            assert_eq!(o["block_state"], "BlockState_Blocking");
+        }
+
+        #[test]
+        fn test_extract_game_object_block_info_attacker_ids() {
+            let obj = serde_json::json!({
+                "instanceId": 326,
+                "grpId": 98596,
+                "type": "GameObjectType_Token",
+                "zoneId": 28,
+                "ownerSeatId": 2,
+                "controllerSeatId": 2,
+                "blockState": "BlockState_Blocking",
+                "blockInfo": {
+                    "attackerIds": [340, 341],
+                    "orderedAttackers": [{"instanceId": 340}, {"instanceId": 341}]
+                }
+            });
+            let result = extract_single_game_object(&obj);
+            assert!(result.is_some());
+            let o = result.unwrap_or_else(|| unreachable!());
+            assert_eq!(
+                o["block_info"]["attacker_ids"],
+                serde_json::json!([340, 341])
+            );
+        }
+
+        #[test]
+        fn test_extract_game_object_both_attack_and_block_state() {
+            let obj = serde_json::json!({
+                "instanceId": 340,
+                "grpId": 98418,
+                "type": "GameObjectType_Card",
+                "zoneId": 28,
+                "ownerSeatId": 1,
+                "controllerSeatId": 1,
+                "attackState": "AttackState_Attacking",
+                "blockState": "BlockState_Blocked"
+            });
+            let result = extract_single_game_object(&obj);
+            assert!(result.is_some());
+            let o = result.unwrap_or_else(|| unreachable!());
+            assert_eq!(o["attack_state"], "AttackState_Attacking");
+            assert_eq!(o["block_state"], "BlockState_Blocked");
+        }
+
+        #[test]
+        fn test_extract_game_object_no_combat_fields_omits_keys() {
+            let obj = serde_json::json!({
+                "instanceId": 101,
+                "grpId": 68398,
+                "type": "GameObjectType_Card",
+                "zoneId": 30,
+                "ownerSeatId": 1,
+                "controllerSeatId": 1
+            });
+            let result = extract_single_game_object(&obj);
+            assert!(result.is_some());
+            let o = result.unwrap_or_else(|| unreachable!());
+            assert!(o.get("attack_state").is_none());
+            assert!(o.get("block_state").is_none());
+            assert!(o.get("block_info").is_none());
         }
     }
 
