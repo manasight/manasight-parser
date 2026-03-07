@@ -129,33 +129,27 @@ jobs:
             echo "| File | Entries | Claimed | Unclaimed | Ratchet |"
             echo "|------|---------|---------|-----------|---------|"
 
-            # Parse each file's stats from the smoke output.
-            while IFS= read -r line; do
-              if [[ "$line" =~ ^File:\ (.+)\ \(([0-9]+)\ entries\) ]]; then
-                FNAME="${BASH_REMATCH[1]}"
-                ENTRIES="${BASH_REMATCH[2]}"
-                CLAIMED=0
-                UNCLAIMED=0
-
-                # Read ahead for unclaimed count.
-                while IFS= read -r detail; do
-                  if [[ "$detail" =~ unclaimed:\ +([0-9]+) ]]; then
-                    UNCLAIMED="${BASH_REMATCH[1]}"
-                    break
-                  fi
-                  if [[ "$detail" =~ ^File: ]] || [[ "$detail" =~ ^=== ]]; then
-                    break
-                  fi
-                done
-
-                CLAIMED=$((ENTRIES - UNCLAIMED))
-                PCT=0
-                if [ "$ENTRIES" -gt 0 ]; then
-                  PCT=$((CLAIMED * 100 / ENTRIES))
-                fi
-                echo "| \`$FNAME\` | $ENTRIES | $CLAIMED ($PCT%) | $UNCLAIMED | -- |"
-              fi
-            done < /tmp/smoke-output.txt
+            # Parse each file's stats from the smoke output using awk to avoid
+            # fd-sharing issues with nested read loops.
+            awk '
+              /^File: .+ \([0-9]+ entries\)/ {
+                match($0, /^File: (.+) \(([0-9]+) entries\)/, m)
+                fname = m[1]
+                entries = m[2]
+                unclaimed = 0
+                in_file = 1
+                next
+              }
+              in_file && /unclaimed:/ {
+                match($0, /unclaimed: +([0-9]+)/, m)
+                unclaimed = m[1]
+                claimed = entries - unclaimed
+                pct = (entries > 0) ? int(claimed * 100 / entries) : 0
+                printf "| `%s` | %d | %d (%d%%) | %d | -- |\n", fname, entries, claimed, pct, unclaimed
+                in_file = 0
+              }
+              /^===/ { in_file = 0 }
+            ' /tmp/smoke-output.txt
 
             echo ""
 
