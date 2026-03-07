@@ -33,6 +33,10 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo fmt --all
 ```
 
+## Licensing of Contributions
+
+By submitting a pull request, you agree that your contributions are licensed under the same terms as the project: [MIT](LICENSE-MIT) OR [Apache-2.0](LICENSE-APACHE), at the user's option.
+
 ## Code of Conduct
 
 This project follows the [Contributor Covenant Code of Conduct](CODE_OF_CONDUCT.md).
