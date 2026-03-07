@@ -59,14 +59,14 @@ cargo build
 
 ## 4. Coding Conventions
 
-**Rust conventions**: See `../manasight-docs/docs/conventions/rust.md` for full details.
+**Rust conventions**: See `CONVENTIONS.md` for full details.
 
 Critical build-breaker reminders (enforced by clippy deny lints):
 - **No** `.unwrap()`, `.expect()`, `panic!()`, `todo!()`, `dbg!()`, `println!()` in production code
 - **No** `#[allow(clippy::...)]` lint suppressions — fix the code instead
 
 ### Logging
-- Follow the Rust logging policy: `../manasight-docs/docs/conventions/rust-logging.md`
+- Follow the Rust logging policy in `CONVENTIONS.md`
 - **Library crate rule**: Must NOT initialize a logger — use `log` facade only
 - Internal code must use `::log` (e.g., `::log::info!()`) because `pub mod log` shadows the crate
 
@@ -99,12 +99,3 @@ cargo test module::               # All tests in module
 ### Coverage
 - `cargo tarpaulin --all-features --ignore-tests` — **80% minimum**
 - Test behavior, not implementation
-
----
-
-## 6. Architecture References
-
-- Feature spec: `../manasight-docs/docs/requirements/feature-specs/log-file-parser.md`
-- Crate splitting research: `../manasight-docs/docs/research/2026-02-23_crate-splitting-strategies.md`
-- System architecture: `../manasight-docs/docs/architecture/overview.md`
-- Coding standards: `../manasight-docs/docs/conventions/coding-standards.md`
