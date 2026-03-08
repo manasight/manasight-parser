@@ -1,25 +1,12 @@
 {
   "_meta": {
-    "description": "Smoke test baseline — per-file, per-parser event counts from Level 1 (parser-only) smoke tests.",
-    "generated_from_commit": "8a62b96",
-    "corpus_tag": "smoke-data-v1"
+    "corpus_tag": "smoke-data-v2",
+    "description": "Smoke test baseline -- per-file, per-parser event counts from Level 1 (parser-only) smoke tests.",
+    "generated_from_commit": "9f16d488f509ddcdececb27dae55f2c0d828ae70"
   },
   "files": {
     "session_2026-02-22_a.log": {
-      "total_entries": 4913,
-      "parsers": {
-        "session": 6,
-        "match_state": 10,
-        "gre": 2617,
-        "client_actions": 2026,
-        "draft_bot": 0,
-        "draft_human": 0,
-        "draft_complete": 0,
-        "inventory": 7,
-        "collection": 0,
-        "rank": 7,
-        "event_lifecycle": 6
-      },
+      "double_claims": 0,
       "event_types": {
         "ClientAction": 2026,
         "EventLifecycle": 6,
@@ -30,25 +17,25 @@
         "Rank": 7,
         "Session": 6
       },
-      "unclaimed": 234,
-      "double_claims": 0,
-      "timestamp_failures": 163
+      "parsers": {
+        "client_actions": 2026,
+        "collection": 0,
+        "draft_bot": 0,
+        "draft_complete": 0,
+        "draft_human": 0,
+        "event_lifecycle": 6,
+        "gre": 2617,
+        "inventory": 7,
+        "match_state": 10,
+        "rank": 7,
+        "session": 6
+      },
+      "timestamp_failures": 163,
+      "total_entries": 4913,
+      "unclaimed": 234
     },
     "session_2026-02-22_b.log": {
-      "total_entries": 3995,
-      "parsers": {
-        "session": 5,
-        "match_state": 8,
-        "gre": 2172,
-        "client_actions": 1488,
-        "draft_bot": 0,
-        "draft_human": 116,
-        "draft_complete": 2,
-        "inventory": 5,
-        "collection": 0,
-        "rank": 5,
-        "event_lifecycle": 6
-      },
+      "double_claims": 0,
       "event_types": {
         "ClientAction": 1488,
         "DraftComplete": 2,
@@ -61,25 +48,25 @@
         "Rank": 5,
         "Session": 5
       },
-      "unclaimed": 188,
-      "double_claims": 0,
-      "timestamp_failures": 213
+      "parsers": {
+        "client_actions": 1488,
+        "collection": 0,
+        "draft_bot": 0,
+        "draft_complete": 2,
+        "draft_human": 116,
+        "event_lifecycle": 6,
+        "gre": 2172,
+        "inventory": 5,
+        "match_state": 8,
+        "rank": 5,
+        "session": 5
+      },
+      "timestamp_failures": 213,
+      "total_entries": 3995,
+      "unclaimed": 188
     },
     "session_2026-02-23.log": {
-      "total_entries": 948,
-      "parsers": {
-        "session": 3,
-        "match_state": 4,
-        "gre": 375,
-        "client_actions": 425,
-        "draft_bot": 0,
-        "draft_human": 0,
-        "draft_complete": 0,
-        "inventory": 3,
-        "collection": 0,
-        "rank": 3,
-        "event_lifecycle": 4
-      },
+      "double_claims": 0,
       "event_types": {
         "ClientAction": 425,
         "EventLifecycle": 4,
@@ -90,25 +77,25 @@
         "Rank": 3,
         "Session": 3
       },
-      "unclaimed": 131,
-      "double_claims": 0,
-      "timestamp_failures": 89
+      "parsers": {
+        "client_actions": 425,
+        "collection": 0,
+        "draft_bot": 0,
+        "draft_complete": 0,
+        "draft_human": 0,
+        "event_lifecycle": 4,
+        "gre": 375,
+        "inventory": 3,
+        "match_state": 4,
+        "rank": 3,
+        "session": 3
+      },
+      "timestamp_failures": 89,
+      "total_entries": 948,
+      "unclaimed": 131
     },
     "session_2026-03-05.log": {
-      "total_entries": 771,
-      "parsers": {
-        "session": 2,
-        "match_state": 2,
-        "gre": 454,
-        "client_actions": 236,
-        "draft_bot": 0,
-        "draft_human": 0,
-        "draft_complete": 0,
-        "inventory": 2,
-        "collection": 0,
-        "rank": 2,
-        "event_lifecycle": 2
-      },
+      "double_claims": 0,
       "event_types": {
         "ClientAction": 236,
         "EventLifecycle": 2,
@@ -119,25 +106,25 @@
         "Rank": 2,
         "Session": 2
       },
-      "unclaimed": 71,
-      "double_claims": 0,
-      "timestamp_failures": 48
+      "parsers": {
+        "client_actions": 236,
+        "collection": 0,
+        "draft_bot": 0,
+        "draft_complete": 0,
+        "draft_human": 0,
+        "event_lifecycle": 2,
+        "gre": 454,
+        "inventory": 2,
+        "match_state": 2,
+        "rank": 2,
+        "session": 2
+      },
+      "timestamp_failures": 48,
+      "total_entries": 771,
+      "unclaimed": 71
     },
     "session_2026-03-06.log": {
-      "total_entries": 112,
-      "parsers": {
-        "session": 1,
-        "match_state": 0,
-        "gre": 0,
-        "client_actions": 0,
-        "draft_bot": 0,
-        "draft_human": 62,
-        "draft_complete": 2,
-        "inventory": 1,
-        "collection": 0,
-        "rank": 1,
-        "event_lifecycle": 1
-      },
+      "double_claims": 0,
       "event_types": {
         "DraftComplete": 2,
         "DraftHuman": 62,
@@ -146,25 +133,25 @@
         "Rank": 1,
         "Session": 1
       },
-      "unclaimed": 44,
-      "double_claims": 0,
-      "timestamp_failures": 72
+      "parsers": {
+        "client_actions": 0,
+        "collection": 0,
+        "draft_bot": 0,
+        "draft_complete": 2,
+        "draft_human": 62,
+        "event_lifecycle": 1,
+        "gre": 0,
+        "inventory": 1,
+        "match_state": 0,
+        "rank": 1,
+        "session": 1
+      },
+      "timestamp_failures": 72,
+      "total_entries": 112,
+      "unclaimed": 44
     },
     "session_2026-03-06_b.log": {
-      "total_entries": 2305,
-      "parsers": {
-        "session": 2,
-        "match_state": 2,
-        "gre": 1059,
-        "client_actions": 1157,
-        "draft_bot": 0,
-        "draft_human": 0,
-        "draft_complete": 0,
-        "inventory": 2,
-        "collection": 0,
-        "rank": 2,
-        "event_lifecycle": 1
-      },
+      "double_claims": 0,
       "event_types": {
         "ClientAction": 1157,
         "EventLifecycle": 1,
@@ -175,9 +162,51 @@
         "Rank": 2,
         "Session": 2
       },
-      "unclaimed": 80,
+      "parsers": {
+        "client_actions": 1157,
+        "collection": 0,
+        "draft_bot": 0,
+        "draft_complete": 0,
+        "draft_human": 0,
+        "event_lifecycle": 1,
+        "gre": 1059,
+        "inventory": 2,
+        "match_state": 2,
+        "rank": 2,
+        "session": 2
+      },
+      "timestamp_failures": 55,
+      "total_entries": 2305,
+      "unclaimed": 80
+    },
+    "session_2026-03-08_1103.log": {
       "double_claims": 0,
-      "timestamp_failures": 55
+      "event_types": {
+        "ClientAction": 254,
+        "EventLifecycle": 2,
+        "GameResult": 2,
+        "GameState": 307,
+        "Inventory": 3,
+        "MatchState": 2,
+        "Rank": 3,
+        "Session": 2
+      },
+      "parsers": {
+        "client_actions": 254,
+        "collection": 0,
+        "draft_bot": 0,
+        "draft_complete": 0,
+        "draft_human": 0,
+        "event_lifecycle": 2,
+        "gre": 97,
+        "inventory": 3,
+        "match_state": 2,
+        "rank": 3,
+        "session": 2
+      },
+      "timestamp_failures": 65,
+      "total_entries": 460,
+      "unclaimed": 97
     }
   }
 }
