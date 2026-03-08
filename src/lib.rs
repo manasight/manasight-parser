@@ -50,6 +50,6 @@ pub use event_bus::Subscriber;
 pub use events::{
     ClientActionEvent, CollectionEvent, DraftBotEvent, DraftCompleteEvent, DraftHumanEvent,
     EventLifecycleEvent, EventMetadata, GameEvent, GameResultEvent, GameStateEvent, InventoryEvent,
-    MatchStateEvent, PerformanceClass, RankEvent, SessionEvent,
+    LogFileRotatedEvent, MatchStateEvent, PerformanceClass, RankEvent, SessionEvent,
 };
 pub use stream::{MtgaEventStream, StreamError};

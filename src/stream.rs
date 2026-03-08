@@ -31,6 +31,7 @@
 use std::path::Path;
 
 use crate::event_bus::{EventBus, Subscriber};
+use crate::events::{GameEvent, LogFileRotatedEvent};
 use crate::log::tailer::{FileTailer, TailerError};
 use crate::router::Router;
 
@@ -101,8 +102,9 @@ impl MtgaEventStream {
 
         let (entry_tx, entry_rx) = tokio::sync::mpsc::channel(256);
 
-        // Spawn the tailer task.
-        let tailer_handle = tokio::spawn(run_tailer(tailer, entry_tx, shutdown_rx));
+        // Spawn the tailer task (with rotation → event bus).
+        let rotation_bus = bus.clone();
+        let tailer_handle = tokio::spawn(run_tailer(tailer, entry_tx, rotation_bus, shutdown_rx));
 
         // Spawn the routing task.
         let router_handle = tokio::spawn(run_router(entry_rx, router, bus));
@@ -199,14 +201,61 @@ impl std::fmt::Debug for MtgaEventStream {
 // Background tasks
 // ---------------------------------------------------------------------------
 
-/// Runs the file tailer, sending log entries to the routing channel.
+/// Runs the file tailer with rotation detection.
+///
+/// Polls the tailer at its configured interval, forwarding log entries to
+/// the routing channel. When file rotation is detected, emits a
+/// [`GameEvent::LogFileRotated`] event directly to the event bus so that
+/// downstream consumers can reset their state.
 async fn run_tailer(
     mut tailer: FileTailer,
     entry_tx: tokio::sync::mpsc::Sender<crate::log::entry::LogEntry>,
-    shutdown_rx: tokio::sync::watch::Receiver<bool>,
+    bus: EventBus,
+    mut shutdown: tokio::sync::watch::Receiver<bool>,
 ) {
-    if let Err(e) = tailer.run(entry_tx, shutdown_rx).await {
-        ::log::error!("tailer error: {e}");
+    let mut interval =
+        tokio::time::interval(std::time::Duration::from_millis(tailer.poll_interval_ms()));
+    // First tick completes immediately.
+    interval.tick().await;
+
+    loop {
+        tokio::select! {
+            _ = interval.tick() => {
+                match tailer.poll().await {
+                    Ok(entries) => {
+                        // Check for rotation before sending entries.
+                        if let Some(rotation) = tailer.take_rotation() {
+                            let event = GameEvent::LogFileRotated(
+                                LogFileRotatedEvent::for_rotation(
+                                    rotation.detected_at(),
+                                    rotation.previous_file_size(),
+                                ),
+                            );
+                            bus.send(event);
+                        }
+
+                        for entry in entries {
+                            if entry_tx.send(entry).await.is_err() {
+                                ::log::info!("entry channel closed, stopping tailer");
+                                return;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        ::log::error!("tailer error: {e}");
+                        return;
+                    }
+                }
+            }
+            _ = shutdown.changed() => {
+                ::log::info!("shutdown signal received, stopping tailer");
+                // Flush any remaining partial entries.
+                for entry in tailer.flush() {
+                    let _ = entry_tx.send(entry).await;
+                }
+                return;
+            }
+        }
     }
 }
 
@@ -503,6 +552,63 @@ mod tests {
         let (stream, _sub) = MtgaEventStream::start(f.path()).await?;
         let debug = format!("{stream:?}");
         assert!(debug.contains("MtgaEventStream"));
+        stream.shutdown();
+        Ok(())
+    }
+
+    // -- rotation integration -------------------------------------------------
+
+    #[tokio::test]
+    async fn test_start_emits_log_file_rotated_event_on_rotation() -> TestResult {
+        // Create initial log with enough content to set a non-zero offset.
+        let initial = "[UnityCrossThreadLogger]Updated account. \
+                        DisplayName:TestPlayer, \
+                        AccountID:abc123, \
+                        Token:sometoken\n\
+                        [UnityCrossThreadLogger]2/25/2026 12:00:00 PM\n\
+                        some filler\n";
+        let f = temp_log(initial)?;
+        let path = f.path().to_path_buf();
+
+        let (stream, mut sub) = MtgaEventStream::start(&path).await?;
+
+        // Wait for the initial Session event to be parsed.
+        let event = tokio::time::timeout(std::time::Duration::from_secs(3), sub.recv()).await?;
+        assert!(
+            matches!(&event, Some(GameEvent::Session(_))),
+            "expected Session event, got {event:?}"
+        );
+
+        // Give the tailer time to advance its offset past the initial content.
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        // Simulate file rotation: replace with smaller content.
+        std::fs::write(
+            &path,
+            "[UnityCrossThreadLogger] NewSession\n\
+             [UnityCrossThreadLogger] AfterRotation\n",
+        )?;
+
+        // Wait for the LogFileRotated event.
+        let mut found_rotation = false;
+        for _ in 0..20 {
+            let result = tokio::time::timeout(std::time::Duration::from_secs(2), sub.recv()).await;
+            match result {
+                Ok(Some(GameEvent::LogFileRotated(ref e))) => {
+                    assert!(e.previous_file_size().is_some());
+                    found_rotation = true;
+                    break;
+                }
+                Ok(Some(_)) => {}           // Other events, keep looking.
+                Ok(None) | Err(_) => break, // Bus closed or timeout.
+            }
+        }
+
+        assert!(
+            found_rotation,
+            "expected a LogFileRotated event after file replacement"
+        );
+
         stream.shutdown();
         Ok(())
     }

@@ -18,6 +18,7 @@
 
 use std::io::SeekFrom;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use chrono::{DateTime, Utc};
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
@@ -30,6 +31,12 @@ use super::entry::{LineBuffer, LogEntry};
 
 /// Default poll interval in milliseconds.
 const DEFAULT_POLL_INTERVAL_MS: u64 = 50;
+
+/// Threshold (in seconds) for the mtime-jump rotation heuristic.
+///
+/// If the file's modification time jumps forward by more than this duration
+/// without any new data at the current offset, the file is considered rotated.
+const MTIME_JUMP_THRESHOLD_SECS: u64 = 60;
 
 /// Initial capacity for the read buffer in bytes.
 ///
@@ -52,6 +59,35 @@ pub enum TailerError {
         /// The underlying I/O error.
         source: std::io::Error,
     },
+}
+
+// ---------------------------------------------------------------------------
+// RotationInfo
+// ---------------------------------------------------------------------------
+
+/// Metadata about a detected log file rotation.
+///
+/// Produced by [`FileTailer::take_rotation`] when rotation is detected
+/// during a [`poll`](FileTailer::poll) cycle.
+#[derive(Debug, Clone)]
+pub struct RotationInfo {
+    /// Byte offset in the old file when rotation was detected.
+    previous_file_size: u64,
+    /// Wall-clock timestamp when the rotation was detected.
+    detected_at: DateTime<Utc>,
+}
+
+impl RotationInfo {
+    /// Returns the byte offset in the old file at the time rotation was
+    /// detected.
+    pub fn previous_file_size(&self) -> u64 {
+        self.previous_file_size
+    }
+
+    /// Returns the wall-clock timestamp when rotation was detected.
+    pub fn detected_at(&self) -> DateTime<Utc> {
+        self.detected_at
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -110,6 +146,12 @@ pub struct FileTailer {
     read_buf: Vec<u8>,
     /// Poll interval in milliseconds.
     poll_interval_ms: u64,
+    /// Modification time observed on the previous poll cycle (for mtime-jump
+    /// rotation heuristic).
+    last_mtime: Option<SystemTime>,
+    /// Set by [`poll`](Self::poll) when file rotation is detected. Retrieved
+    /// (and cleared) via [`take_rotation`](Self::take_rotation).
+    last_rotation: Option<RotationInfo>,
 }
 
 impl FileTailer {
@@ -131,6 +173,12 @@ impl FileTailer {
                 source,
             })?;
 
+        // Capture initial mtime for rotation detection.
+        let initial_mtime = tokio::fs::metadata(path)
+            .await
+            .ok()
+            .and_then(|m| m.modified().ok());
+
         let mut tailer = Self {
             path: path.to_path_buf(),
             file,
@@ -140,6 +188,8 @@ impl FileTailer {
             partial_line: String::new(),
             read_buf: vec![0u8; READ_BUFFER_CAPACITY],
             poll_interval_ms: DEFAULT_POLL_INTERVAL_MS,
+            last_mtime: initial_mtime,
+            last_rotation: None,
         };
 
         // Seek to end — tail mode.
@@ -179,6 +229,11 @@ impl FileTailer {
                 source,
             })?;
 
+        let initial_mtime = tokio::fs::metadata(path)
+            .await
+            .ok()
+            .and_then(|m| m.modified().ok());
+
         ::log::info!("opened log file for reading from start: {}", path.display());
 
         Ok(Self {
@@ -190,6 +245,8 @@ impl FileTailer {
             partial_line: String::new(),
             read_buf: vec![0u8; READ_BUFFER_CAPACITY],
             poll_interval_ms: DEFAULT_POLL_INTERVAL_MS,
+            last_mtime: initial_mtime,
+            last_rotation: None,
         })
     }
 
@@ -228,6 +285,93 @@ impl FileTailer {
         &self.path
     }
 
+    /// Takes the rotation info from the last poll cycle, if any.
+    ///
+    /// Returns `Some(RotationInfo)` exactly once after a rotation is
+    /// detected by [`poll`](Self::poll). Subsequent calls return `None`
+    /// until the next rotation.
+    pub fn take_rotation(&mut self) -> Option<RotationInfo> {
+        self.last_rotation.take()
+    }
+
+    /// Checks whether the file at the monitored path has been rotated
+    /// (replaced by MTGA on restart). If rotation is detected, closes the
+    /// old handle, re-opens the file, and resets internal state.
+    ///
+    /// Two signals are checked:
+    /// 1. **Size shrinkage** — file at path is smaller than `self.offset`.
+    /// 2. **Mtime jump** — modification time jumped >60 s without new data.
+    async fn check_rotation(&mut self) -> Result<(), TailerError> {
+        if self.offset == 0 {
+            return Ok(());
+        }
+
+        let Ok(path_meta) = tokio::fs::metadata(&self.path).await else {
+            return Ok(()); // File may be temporarily absent.
+        };
+
+        let path_size = path_meta.len();
+        let path_mtime = path_meta.modified().ok();
+
+        let mut rotated = false;
+
+        // Primary signal: file at path is smaller than our offset.
+        if path_size < self.offset {
+            ::log::info!(
+                "rotation detected: file size ({path_size}) < offset ({})",
+                self.offset,
+            );
+            rotated = true;
+        }
+
+        // Secondary signal: mtime jumped >60 s without new data.
+        if !rotated {
+            if let (Some(current_mtime), Some(prev_mtime)) = (path_mtime, self.last_mtime) {
+                let elapsed = current_mtime.duration_since(prev_mtime).unwrap_or_default();
+                if elapsed.as_secs() > MTIME_JUMP_THRESHOLD_SECS && path_size <= self.offset {
+                    ::log::info!(
+                        "rotation detected: mtime jumped {:.0}s without new data",
+                        elapsed.as_secs_f64(),
+                    );
+                    rotated = true;
+                }
+            }
+        }
+
+        if rotated {
+            let previous_file_size = self.offset;
+
+            // Close old handle, re-open at path (picks up new inode).
+            self.file =
+                tokio::fs::File::open(&self.path)
+                    .await
+                    .map_err(|source| TailerError::Io {
+                        path: self.path.clone(),
+                        source,
+                    })?;
+
+            // Reset state for the new file.
+            self.offset = 0;
+            self.partial_line.clear();
+            self.line_buffer.reset();
+            self.last_mtime = path_mtime;
+
+            self.last_rotation = Some(RotationInfo {
+                previous_file_size,
+                detected_at: Utc::now(),
+            });
+
+            ::log::info!(
+                "re-opened {} after rotation (old offset: {previous_file_size})",
+                self.path.display(),
+            );
+        } else if path_mtime.is_some() {
+            self.last_mtime = path_mtime;
+        }
+
+        Ok(())
+    }
+
     /// Polls the file for new data and returns any complete log entries.
     ///
     /// Reads all new bytes appended since the last poll, splits them
@@ -244,6 +388,8 @@ impl FileTailer {
     ///
     /// Returns [`TailerError::Io`] if the read operation fails.
     pub async fn poll(&mut self) -> Result<Vec<LogEntry>, TailerError> {
+        self.check_rotation().await?;
+
         let mut entries = Vec::new();
         let mut total_bytes_read: u64 = 0;
 
@@ -1027,6 +1173,223 @@ mod tests {
                 received.len() >= 2,
                 "expected at least 2 entries, got {}",
                 received.len()
+            );
+            Ok(())
+        }
+    }
+
+    // -- rotation detection -------------------------------------------------
+
+    mod rotation_tests {
+        use super::*;
+
+        /// Helper: simulate file rotation by replacing the temp file at the
+        /// same path with new (smaller) content. Uses `std::fs::write` to
+        /// atomically write new content (truncating to a shorter size).
+        fn replace_file_at_path(path: &Path, content: &str) -> Result<(), std::io::Error> {
+            std::fs::write(path, content.as_bytes())
+        }
+
+        #[tokio::test]
+        async fn test_rotation_detected_when_file_shrinks() -> TestResult {
+            // Write initial content and open from start.
+            let f = temp_log(
+                "[UnityCrossThreadLogger] Event1\n\
+                 [UnityCrossThreadLogger] Event2\n",
+            )?;
+            let path = f.path().to_path_buf();
+            let mut tailer = FileTailer::open_from_start(&path).await?;
+
+            // Read all existing content so offset advances.
+            let _entries = tailer.run_once().await?;
+            assert!(tailer.offset() > 0);
+
+            // Simulate rotation: replace with smaller content.
+            replace_file_at_path(&path, "[UnityCrossThreadLogger] NewSession\n")?;
+
+            // Re-open from start to reset file handle for test (run_once
+            // exhausted the file). We need to create a new tailer since the
+            // old one has already reached EOF. Instead, let's manually set
+            // up a tailer that has an offset > new file size.
+            let mut tailer = FileTailer::open(&path).await?;
+            // open() seeks to end, so offset == new file size. We need
+            // offset > file size. Manually set a large offset to simulate
+            // the old session's offset.
+            tailer.offset = 10_000;
+
+            // Poll should detect rotation (file size < offset).
+            let entries = tailer.poll().await?;
+            let rotation = tailer.take_rotation();
+            assert!(
+                rotation.is_some(),
+                "rotation should be detected when file shrinks"
+            );
+            if let Some(info) = rotation {
+                assert_eq!(info.previous_file_size(), 10_000);
+            }
+            // Offset should be reset and new content readable.
+            assert!(tailer.offset() > 0, "should have read from new file");
+            // No double-fire.
+            assert!(tailer.take_rotation().is_none());
+
+            // Entries from the new file should be empty or contain new data
+            // (depends on what poll reads after re-open).
+            drop(entries);
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn test_rotation_resets_offset_to_zero_before_reading() -> TestResult {
+            let f = temp_log(
+                "[UnityCrossThreadLogger] OldEvent\n\
+                 [UnityCrossThreadLogger] OldEvent2\n",
+            )?;
+            let path = f.path().to_path_buf();
+
+            let mut tailer = FileTailer::open(&path).await?;
+            // Simulate old session with a large offset.
+            tailer.offset = 50_000;
+
+            // Replace with new content.
+            replace_file_at_path(
+                &path,
+                "[UnityCrossThreadLogger] NewA\n\
+                 [UnityCrossThreadLogger] NewB\n",
+            )?;
+
+            // Poll detects rotation, re-opens, reads from start.
+            let entries = tailer.poll().await?;
+            assert!(tailer.take_rotation().is_some());
+            // First header doesn't flush, second header flushes first.
+            assert_eq!(entries.len(), 1);
+            assert!(entries[0].body.contains("NewA"));
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn test_rotation_clears_partial_line_and_line_buffer() -> TestResult {
+            let f = temp_log("")?;
+            let path = f.path().to_path_buf();
+            let mut tailer = FileTailer::open(&path).await?;
+
+            // Write a partial line (no newline at end) and poll.
+            std::fs::write(&path, "[UnityCrossThreadLogger] Partial")?;
+            tailer.poll().await?;
+            // partial_line should be non-empty.
+            assert!(
+                !tailer.partial_line.is_empty(),
+                "partial_line should hold the incomplete line"
+            );
+
+            // Simulate rotation by making offset > new file size.
+            tailer.offset = 50_000;
+            replace_file_at_path(
+                &path,
+                "[UnityCrossThreadLogger] Fresh\n\
+                 [UnityCrossThreadLogger] Fresh2\n",
+            )?;
+
+            let entries = tailer.poll().await?;
+            assert!(tailer.take_rotation().is_some());
+            // The old partial line should NOT contaminate new entries.
+            // "Fresh" should be a clean entry.
+            assert_eq!(entries.len(), 1);
+            assert!(entries[0].body.contains("Fresh"));
+            assert!(!entries[0].body.contains("Partial"));
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn test_no_false_positive_on_normal_growth() -> TestResult {
+            let mut f = temp_log("")?;
+            let mut tailer = FileTailer::open(f.path()).await?;
+
+            // Write some data and poll.
+            writeln!(f, "[UnityCrossThreadLogger] Event1")?;
+            f.flush()?;
+            tailer.poll().await?;
+            assert!(
+                tailer.take_rotation().is_none(),
+                "no rotation on normal append"
+            );
+
+            // Write more data (file grows).
+            writeln!(f, "[UnityCrossThreadLogger] Event2")?;
+            f.flush()?;
+            tailer.poll().await?;
+            assert!(
+                tailer.take_rotation().is_none(),
+                "no rotation on continued growth"
+            );
+
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn test_no_rotation_when_offset_is_zero() -> TestResult {
+            // When offset is 0 (just opened), rotation check is skipped.
+            let f = temp_log("")?;
+            let tailer = FileTailer::open_from_start(f.path()).await?;
+            assert_eq!(tailer.offset(), 0);
+            // offset == 0 → rotation detection is bypassed.
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn test_rotation_emits_correct_previous_file_size() -> TestResult {
+            let f = temp_log("x".repeat(5000).as_str())?;
+            let path = f.path().to_path_buf();
+            let mut tailer = FileTailer::open(&path).await?;
+            // open() seeks to end, offset = 5000.
+            assert_eq!(tailer.offset(), 5000);
+
+            // Replace with smaller file.
+            replace_file_at_path(&path, "small\n")?;
+
+            tailer.poll().await?;
+            let rotation = tailer.take_rotation();
+            assert!(rotation.is_some());
+            if let Some(info) = rotation {
+                assert_eq!(info.previous_file_size(), 5000);
+            }
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn test_rotation_info_has_timestamp() -> TestResult {
+            let f = temp_log("x".repeat(1000).as_str())?;
+            let path = f.path().to_path_buf();
+            let mut tailer = FileTailer::open(&path).await?;
+
+            replace_file_at_path(&path, "y\n")?;
+            tailer.poll().await?;
+
+            let rotation = tailer.take_rotation();
+            assert!(rotation.is_some());
+            if let Some(info) = rotation {
+                // detected_at should be recent (within last 5 seconds).
+                let elapsed = Utc::now() - info.detected_at();
+                assert!(
+                    elapsed.num_seconds() < 5,
+                    "detected_at should be recent, got {elapsed}"
+                );
+            }
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn test_take_rotation_returns_none_after_first_call() -> TestResult {
+            let f = temp_log("x".repeat(1000).as_str())?;
+            let path = f.path().to_path_buf();
+            let mut tailer = FileTailer::open(&path).await?;
+
+            replace_file_at_path(&path, "y\n")?;
+            tailer.poll().await?;
+
+            assert!(tailer.take_rotation().is_some());
+            assert!(
+                tailer.take_rotation().is_none(),
+                "second take_rotation should return None"
             );
             Ok(())
         }

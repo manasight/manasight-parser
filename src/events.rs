@@ -123,6 +123,7 @@ macro_rules! delegate_to_inner {
             Self::Collection(e) => e.$method(),
             Self::Inventory(e) => e.$method(),
             Self::GameResult(e) => e.$method(),
+            Self::LogFileRotated(e) => e.$method(),
         }
     };
 }
@@ -189,6 +190,14 @@ pub enum GameEvent {
     /// Game result (`GameStage_GameOver` from GRE `GameStateMessage`).
     /// Class 3 — triggers post-game batch assembly.
     GameResult(GameResultEvent),
+
+    /// Log file rotation detected — `Player.log` was replaced (MTGA restart).
+    ///
+    /// Emitted by the file tailer when it detects that the log file at the
+    /// monitored path has been replaced (file size shrinkage or mtime jump).
+    /// Downstream consumers should reset their state for a new session.
+    /// Class 1 — interactive dispatch (local reset signal).
+    LogFileRotated(LogFileRotatedEvent),
 }
 
 impl GameEvent {
@@ -211,6 +220,7 @@ impl GameEvent {
             | Self::Collection(_)
             | Self::Inventory(_) => PerformanceClass::DurablePerEvent,
             Self::GameResult(_) => PerformanceClass::PostGameBatch,
+            Self::LogFileRotated(_) => PerformanceClass::InteractiveDispatch,
         }
     }
 
@@ -494,6 +504,41 @@ define_event! {
     GameResultEvent
 }
 
+// ---------------------------------------------------------------------------
+// Infrastructure events
+// ---------------------------------------------------------------------------
+
+define_event! {
+    /// Log file rotation event.
+    ///
+    /// Emitted when the file tailer detects that `Player.log` was replaced
+    /// (MTGA restart). The payload contains `previous_file_size` — the byte
+    /// offset in the old file at the time rotation was detected.
+    ///
+    /// Unlike parsed log events, `raw_bytes` in the metadata is empty and
+    /// the timestamp reflects when the rotation was detected (wall-clock),
+    /// not a timestamp parsed from the log.
+    LogFileRotatedEvent
+}
+
+impl LogFileRotatedEvent {
+    /// Creates a rotation event with the given detection timestamp and the
+    /// byte offset in the old file.
+    pub fn for_rotation(timestamp: DateTime<Utc>, previous_file_size: u64) -> Self {
+        let metadata = EventMetadata::new(Some(timestamp), Vec::new());
+        let payload = serde_json::json!({ "previous_file_size": previous_file_size });
+        Self::new(metadata, payload)
+    }
+
+    /// Returns the byte offset in the old file when rotation was detected.
+    ///
+    /// Returns `None` only if the payload was manually constructed without
+    /// the `previous_file_size` field (not expected in normal usage).
+    pub fn previous_file_size(&self) -> Option<u64> {
+        self.payload()["previous_file_size"].as_u64()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -540,6 +585,7 @@ mod tests {
             GameEvent::Collection(CollectionEvent::new(meta.clone(), payload.clone())),
             GameEvent::Inventory(InventoryEvent::new(meta.clone(), payload.clone())),
             GameEvent::GameResult(GameResultEvent::new(meta.clone(), payload.clone())),
+            GameEvent::LogFileRotated(LogFileRotatedEvent::new(meta.clone(), payload.clone())),
         ]
     }
 
@@ -771,6 +817,7 @@ mod tests {
             PerformanceClass::DurablePerEvent,     // Collection
             PerformanceClass::DurablePerEvent,     // Inventory
             PerformanceClass::PostGameBatch,       // GameResult
+            PerformanceClass::InteractiveDispatch, // LogFileRotated
         ];
 
         assert_eq!(
@@ -884,6 +931,7 @@ mod tests {
             2, // Collection
             2, // Inventory
             3, // GameResult
+            1, // LogFileRotated
         ];
         assert_eq!(events.len(), expected_numbers.len());
         for (event, expected_num) in events.iter().zip(expected_numbers.iter()) {
@@ -1019,5 +1067,63 @@ mod tests {
         assert!(meta.timestamp().is_none());
         assert_eq!(meta.raw_bytes(), b"data");
         Ok(())
+    }
+
+    // -- LogFileRotatedEvent --
+
+    #[test]
+    fn test_log_file_rotated_for_rotation_stores_previous_file_size() {
+        let ts = Utc
+            .with_ymd_and_hms(2026, 3, 7, 10, 0, 0)
+            .single()
+            .unwrap_or_default();
+        let event = LogFileRotatedEvent::for_rotation(ts, 42_000);
+        assert_eq!(event.previous_file_size(), Some(42_000));
+    }
+
+    #[test]
+    fn test_log_file_rotated_for_rotation_stores_timestamp() {
+        let ts = Utc
+            .with_ymd_and_hms(2026, 3, 7, 10, 0, 0)
+            .single()
+            .unwrap_or_default();
+        let event = LogFileRotatedEvent::for_rotation(ts, 1000);
+        assert_eq!(event.metadata().timestamp(), Some(ts));
+    }
+
+    #[test]
+    fn test_log_file_rotated_has_empty_raw_bytes() {
+        let ts = Utc
+            .with_ymd_and_hms(2026, 3, 7, 10, 0, 0)
+            .single()
+            .unwrap_or_default();
+        let event = LogFileRotatedEvent::for_rotation(ts, 500);
+        assert!(event.metadata().raw_bytes().is_empty());
+    }
+
+    #[test]
+    fn test_log_file_rotated_serde_round_trip() -> TestResult {
+        let ts = Utc
+            .with_ymd_and_hms(2026, 3, 7, 10, 0, 0)
+            .single()
+            .unwrap_or_default();
+        let event = GameEvent::LogFileRotated(LogFileRotatedEvent::for_rotation(ts, 12345));
+        let serialized = serde_json::to_string(&event)?;
+        let deserialized: GameEvent = serde_json::from_str(&serialized)?;
+        assert_eq!(deserialized, event);
+        Ok(())
+    }
+
+    #[test]
+    fn test_log_file_rotated_performance_class_is_interactive() {
+        let ts = Utc
+            .with_ymd_and_hms(2026, 3, 7, 10, 0, 0)
+            .single()
+            .unwrap_or_default();
+        let event = GameEvent::LogFileRotated(LogFileRotatedEvent::for_rotation(ts, 0));
+        assert_eq!(
+            event.performance_class(),
+            PerformanceClass::InteractiveDispatch
+        );
     }
 }

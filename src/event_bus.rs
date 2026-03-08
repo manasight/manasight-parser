@@ -53,6 +53,7 @@ const DEFAULT_CAPACITY: usize = 256;
 /// When the channel is full the oldest message is overwritten, and any
 /// subscriber that has not yet read it will receive a lag notification on
 /// its next `recv()`.
+#[derive(Clone)]
 pub struct EventBus {
     /// The broadcast sender. Cloning this is cheap (Arc internally).
     sender: tokio::sync::broadcast::Sender<GameEvent>,
