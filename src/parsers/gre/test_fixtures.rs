@@ -386,6 +386,72 @@ pub(super) fn batched_gsm_with_game_over_body() -> String {
     )
 }
 
+/// Helper: build a batched GRE event with two `GameStage_GameOver` messages:
+/// `MatchState_GameComplete` followed by `MatchState_MatchComplete`, matching
+/// the real Arena pattern where both are sent in the same batch at game end.
+pub(super) fn batched_dual_game_over_body() -> String {
+    format!(
+        "[UnityCrossThreadLogger]greToClientEvent\n{}",
+        serde_json::json!({
+            "greToClientEvent": {
+                "greToClientMessages": [
+                    {
+                        "type": "GREMessageType_GameStateMessage",
+                        "msgId": 50,
+                        "gameStateId": 500,
+                        "gameStateMessage": {
+                            "gameInfo": {
+                                "stage": "GameStage_GameOver",
+                                "matchState": "MatchState_GameComplete",
+                                "matchID": "match-dual-test",
+                                "gameNumber": 1,
+                                "results": [
+                                    {
+                                        "scope": "MatchScope_Game",
+                                        "result": "ResultType_WinLoss",
+                                        "winningTeamId": 1,
+                                        "reason": "ResultReason_Game"
+                                    }
+                                ]
+                            },
+                            "zones": [],
+                            "gameObjects": [],
+                            "players": [{"seatId": 1, "lifeTotal": 20}]
+                        }
+                    },
+                    {
+                        "type": "GREMessageType_GameStateMessage",
+                        "msgId": 51,
+                        "gameStateId": 501,
+                        "gameStateMessage": {
+                            "gameInfo": {
+                                "stage": "GameStage_GameOver",
+                                "matchState": "MatchState_MatchComplete",
+                                "matchID": "match-dual-test",
+                                "gameNumber": 1,
+                                "results": [
+                                    {
+                                        "scope": "MatchScope_Game",
+                                        "result": "ResultType_WinLoss",
+                                        "winningTeamId": 1,
+                                        "reason": "ResultReason_Game"
+                                    },
+                                    {
+                                        "scope": "MatchScope_Match",
+                                        "result": "ResultType_WinLoss",
+                                        "winningTeamId": 1,
+                                        "reason": "ResultReason_Game"
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                ]
+            }
+        })
+    )
+}
+
 /// Helper: build a `GameStateMessage` with an empty `gameStateMessage`
 /// (no zones, no objects, no game info).
 pub(super) fn empty_game_state_message_body() -> String {

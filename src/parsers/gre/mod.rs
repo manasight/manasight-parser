@@ -21,9 +21,12 @@
 //! structure.
 //!
 //! Most messages are Class 1 (Interactive Dispatch). The exception is when
-//! `gameInfo.stage` equals `GameStage_GameOver` — these are emitted as
+//! `gameInfo.stage` equals `GameStage_GameOver` with
+//! `matchState != MatchState_MatchComplete` — these are emitted as
 //! `GameEvent::GameResult` (Class 3, Post-Game Batch) to trigger batch
-//! assembly in downstream consumers.
+//! assembly in downstream consumers. Arena sends two `GameStage_GameOver`
+//! messages per game end (`MatchState_GameComplete` + `MatchState_MatchComplete`);
+//! only the game-complete signal is emitted to avoid duplicate results.
 //!
 //! ## `GameStateMessage` structure
 //!
@@ -153,12 +156,12 @@ pub fn try_parse(
         let msg_type = msg.get("type").and_then(serde_json::Value::as_str);
         if let Some(GAME_STATE_MESSAGE_TYPE | QUEUED_GAME_STATE_MESSAGE_TYPE) = msg_type {
             let metadata = EventMetadata::new(timestamp, body.as_bytes().to_vec());
-            if game_result::is_game_over(msg) {
+            if game_result::is_game_over(msg) && !game_result::is_match_complete(msg) {
                 let payload = game_result::build_game_result_payload(msg);
                 events.push(GameEvent::GameResult(GameResultEvent::new(
                     metadata, payload,
                 )));
-            } else {
+            } else if !game_result::is_game_over(msg) {
                 let payload = game_state::build_game_state_message_payload(msg);
                 events.push(GameEvent::GameState(GameStateEvent::new(metadata, payload)));
             }
@@ -221,7 +224,7 @@ fn find_message_by_type<'a>(
 mod tests {
     use super::*;
     use crate::parsers::test_helpers::{
-        game_state_payload, test_timestamp, unity_entry, EntryHeader,
+        game_result_payload, game_state_payload, test_timestamp, unity_entry, EntryHeader,
     };
     use test_fixtures::*;
 
@@ -789,6 +792,42 @@ mod tests {
             assert_eq!(results.len(), 2);
             assert!(matches!(&results[0], GameEvent::GameState(_)));
             assert!(matches!(&results[1], GameEvent::GameResult(_)));
+        }
+
+        #[test]
+        fn test_try_parse_dual_game_over_emits_single_game_result() {
+            let body = batched_dual_game_over_body();
+            let entry = unity_entry(&body);
+            let results = try_parse(&entry, Some(test_timestamp()));
+            // Should emit exactly 1 GameResult (GameComplete), not 2.
+            let game_results: Vec<_> = results
+                .iter()
+                .filter(|e| matches!(e, GameEvent::GameResult(_)))
+                .collect();
+            assert_eq!(game_results.len(), 1);
+        }
+
+        #[test]
+        fn test_try_parse_dual_game_over_uses_game_complete() {
+            let body = batched_dual_game_over_body();
+            let entry = unity_entry(&body);
+            let results = try_parse(&entry, Some(test_timestamp()));
+            let game_result = results
+                .iter()
+                .find(|e| matches!(e, GameEvent::GameResult(_)))
+                .unwrap_or_else(|| unreachable!());
+            let payload = game_result_payload(game_result);
+            assert_eq!(payload["match_state"], "MatchState_GameComplete");
+        }
+
+        #[test]
+        fn test_try_parse_dual_game_over_skips_match_complete_entirely() {
+            let body = batched_dual_game_over_body();
+            let entry = unity_entry(&body);
+            let results = try_parse(&entry, Some(test_timestamp()));
+            // MatchComplete should not appear as GameState or GameResult.
+            assert_eq!(results.len(), 1);
+            assert!(matches!(&results[0], GameEvent::GameResult(_)));
         }
 
         #[test]

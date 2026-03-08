@@ -20,7 +20,7 @@ use std::io::SeekFrom;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Local, Utc};
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
 use super::entry::{LineBuffer, LogEntry};
@@ -358,7 +358,7 @@ impl FileTailer {
 
             self.last_rotation = Some(RotationInfo {
                 previous_file_size,
-                detected_at: Utc::now(),
+                detected_at: Local::now().naive_local().and_utc(),
             });
 
             ::log::info!(
@@ -1367,8 +1367,10 @@ mod tests {
             let rotation = tailer.take_rotation();
             assert!(rotation.is_some());
             if let Some(info) = rotation {
-                // detected_at should be recent (within last 5 seconds).
-                let elapsed = Utc::now() - info.detected_at();
+                // detected_at uses local-as-UTC convention (Local::now()
+                // stored as DateTime<Utc>) to match Arena's timestamp format.
+                let local_as_utc = Local::now().naive_local().and_utc();
+                let elapsed = local_as_utc - info.detected_at();
                 assert!(
                     elapsed.num_seconds() < 5,
                     "detected_at should be recent, got {elapsed}"

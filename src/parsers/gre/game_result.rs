@@ -11,6 +11,24 @@ pub(super) fn is_game_over(gre_msg: &serde_json::Value) -> bool {
         == Some(super::GAME_STAGE_GAME_OVER)
 }
 
+/// Match state value indicating the overall match has ended.
+const MATCH_STATE_MATCH_COMPLETE: &str = "MatchState_MatchComplete";
+
+/// Returns `true` if the GRE message has `matchState == MatchState_MatchComplete`.
+///
+/// Arena batches two `GameStage_GameOver` messages per game end:
+/// `MatchState_GameComplete` (game scope) and `MatchState_MatchComplete`
+/// (match scope). We emit only the game-complete signal to avoid duplicates
+/// and to keep consistent semantics for Bo1 and Bo3.
+pub(super) fn is_match_complete(gre_msg: &serde_json::Value) -> bool {
+    gre_msg
+        .get("gameStateMessage")
+        .and_then(|gsm| gsm.get("gameInfo"))
+        .and_then(|gi| gi.get("matchState"))
+        .and_then(serde_json::Value::as_str)
+        == Some(MATCH_STATE_MATCH_COMPLETE)
+}
+
 /// Builds a structured payload for a game result extracted from a GRE
 /// `GameStateMessage` with `GameStage_GameOver`.
 ///
@@ -165,6 +183,48 @@ mod tests {
                 }
             })
         )
+    }
+
+    mod is_match_complete_tests {
+        use crate::parsers::gre::game_result;
+
+        #[test]
+        fn test_is_match_complete_true_for_match_complete() {
+            let msg = serde_json::json!({
+                "gameStateMessage": {
+                    "gameInfo": {
+                        "stage": "GameStage_GameOver",
+                        "matchState": "MatchState_MatchComplete"
+                    }
+                }
+            });
+            assert!(game_result::is_match_complete(&msg));
+        }
+
+        #[test]
+        fn test_is_match_complete_false_for_game_complete() {
+            let msg = serde_json::json!({
+                "gameStateMessage": {
+                    "gameInfo": {
+                        "stage": "GameStage_GameOver",
+                        "matchState": "MatchState_GameComplete"
+                    }
+                }
+            });
+            assert!(!game_result::is_match_complete(&msg));
+        }
+
+        #[test]
+        fn test_is_match_complete_false_for_missing_match_state() {
+            let msg = serde_json::json!({
+                "gameStateMessage": {
+                    "gameInfo": {
+                        "stage": "GameStage_GameOver"
+                    }
+                }
+            });
+            assert!(!game_result::is_match_complete(&msg));
+        }
     }
 
     mod game_result_detection {
