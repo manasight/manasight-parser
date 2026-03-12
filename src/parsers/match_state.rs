@@ -94,6 +94,16 @@ fn build_payload(state_event: &serde_json::Value) -> serde_json::Value {
     let event_id = game_room_config
         .and_then(|cfg| cfg.get("eventId"))
         .and_then(serde_json::Value::as_str)
+        .or_else(|| {
+            // Some log formats place eventId inside each reservedPlayers entry
+            // rather than at the gameRoomConfig level.
+            game_room_config
+                .and_then(|cfg| cfg.get("reservedPlayers"))
+                .and_then(serde_json::Value::as_array)
+                .and_then(|players| players.first())
+                .and_then(|p| p.get("eventId"))
+                .and_then(serde_json::Value::as_str)
+        })
         .unwrap_or("");
 
     // Reserved players: seat assignments, user IDs, team IDs.
@@ -880,6 +890,47 @@ mod tests {
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             let payload = match_state_payload(event);
             assert_eq!(payload["match_id"], "top-level-match");
+        }
+
+        #[test]
+        fn test_try_parse_event_id_from_reserved_players() {
+            // Real Arena logs place eventId inside each reservedPlayers entry
+            // rather than at the gameRoomConfig level.
+            let body = format!(
+                "[UnityCrossThreadLogger]matchGameRoomStateChangedEvent\n{}",
+                serde_json::json!({
+                    "matchGameRoomStateChangedEvent": {
+                        "gameRoomInfo": {
+                            "stateType": "MatchGameRoomStateType_Playing",
+                            "gameRoomConfig": {
+                                "matchId": "reserved-event-match",
+                                "reservedPlayers": [
+                                    {
+                                        "userId": "user-001",
+                                        "playerName": "Player1",
+                                        "systemSeatId": 1,
+                                        "teamId": 1,
+                                        "eventId": "Timeless_Ladder"
+                                    },
+                                    {
+                                        "userId": "user-002",
+                                        "playerName": "Player2",
+                                        "systemSeatId": 2,
+                                        "teamId": 2,
+                                        "eventId": "Timeless_Ladder"
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                })
+            );
+            let entry = unity_entry(&body);
+            let result = try_parse(&entry, Some(test_timestamp()));
+            assert!(result.is_some());
+            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            let payload = match_state_payload(event);
+            assert_eq!(payload["event_id"], "Timeless_Ladder");
         }
 
         #[test]
