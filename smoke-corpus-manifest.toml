@@ -1,7 +1,7 @@
 # Smoke test corpus manifest
 #
 # Describes the Player.log files used for smoke testing. The actual logs live
-# in a private GitHub release (manasight/manasight-test-data, tag smoke-data-v2)
+# in a private GitHub release (manasight/manasight-test-data, tag smoke-data-v3)
 # to keep large binaries out of the parser repo. This manifest is committed so
 # that anyone can see what is tested and verify corpus integrity after download.
 #
@@ -52,3 +52,9 @@ filename     = "session_2026-03-08_1103.log"
 sha256       = "c232a4c278cdbdd29cd61a8a41bd400c8d5b75c09114821a10a14c3c2bc9b9b7"
 size_bytes   = 9859259
 date_captured = "2026-03-08"
+
+[[files]]
+filename     = "session_2026-03-11_1847.log"
+sha256       = "deaca5aabac7a889e408e8a498622127bdbb2d0f461b064cf2cba39cd9d13918"
+size_bytes   = 16424517
+date_captured = "2026-03-11"

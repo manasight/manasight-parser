@@ -1,8 +1,8 @@
 {
   "_meta": {
-    "corpus_tag": "smoke-data-v2",
+    "corpus_tag": "smoke-data-v3",
     "description": "Smoke test baseline -- per-file, per-parser event counts from Level 1 (parser-only) smoke tests.",
-    "generated_from_commit": "9f16d488f509ddcdececb27dae55f2c0d828ae70"
+    "generated_from_commit": "e4a79e318ecaf43c9b41bd06dfaf4fc732bc682a"
   },
   "files": {
     "session_2026-02-22_a.log": {
@@ -10,7 +10,7 @@
       "event_types": {
         "ClientAction": 2026,
         "EventLifecycle": 6,
-        "GameResult": 10,
+        "GameResult": 5,
         "GameState": 4381,
         "Inventory": 7,
         "MatchState": 10,
@@ -41,7 +41,7 @@
         "DraftComplete": 2,
         "DraftHuman": 116,
         "EventLifecycle": 6,
-        "GameResult": 8,
+        "GameResult": 4,
         "GameState": 3478,
         "Inventory": 5,
         "MatchState": 8,
@@ -70,7 +70,7 @@
       "event_types": {
         "ClientAction": 425,
         "EventLifecycle": 4,
-        "GameResult": 4,
+        "GameResult": 2,
         "GameState": 808,
         "Inventory": 3,
         "MatchState": 4,
@@ -99,7 +99,7 @@
       "event_types": {
         "ClientAction": 236,
         "EventLifecycle": 2,
-        "GameResult": 2,
+        "GameResult": 1,
         "GameState": 674,
         "Inventory": 2,
         "MatchState": 2,
@@ -155,7 +155,7 @@
       "event_types": {
         "ClientAction": 1157,
         "EventLifecycle": 1,
-        "GameResult": 2,
+        "GameResult": 1,
         "GameState": 1657,
         "Inventory": 2,
         "MatchState": 2,
@@ -184,7 +184,7 @@
       "event_types": {
         "ClientAction": 254,
         "EventLifecycle": 2,
-        "GameResult": 2,
+        "GameResult": 1,
         "GameState": 307,
         "Inventory": 3,
         "MatchState": 2,
@@ -207,6 +207,35 @@
       "timestamp_failures": 65,
       "total_entries": 460,
       "unclaimed": 97
+    },
+    "session_2026-03-11_1847.log": {
+      "double_claims": 0,
+      "event_types": {
+        "ClientAction": 740,
+        "EventLifecycle": 3,
+        "GameResult": 1,
+        "GameState": 1334,
+        "Inventory": 3,
+        "MatchState": 3,
+        "Rank": 3,
+        "Session": 2
+      },
+      "parsers": {
+        "client_actions": 740,
+        "collection": 0,
+        "draft_bot": 0,
+        "draft_complete": 0,
+        "draft_human": 0,
+        "event_lifecycle": 3,
+        "gre": 900,
+        "inventory": 3,
+        "match_state": 3,
+        "rank": 3,
+        "session": 2
+      },
+      "timestamp_failures": 111,
+      "total_entries": 1842,
+      "unclaimed": 188
     }
   }
 }
