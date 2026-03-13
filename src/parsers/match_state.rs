@@ -10,7 +10,7 @@
 //! |-------|---------|
 //! | `gameRoomInfo.stateType` | Room state: `Playing`, `MatchCompleted` |
 //! | `gameRoomInfo.gameRoomConfig.matchId` | Unique match identifier |
-//! | `gameRoomInfo.gameRoomConfig.reservedPlayers` | Player seat assignments, user IDs |
+//! | `gameRoomInfo.gameRoomConfig.reservedPlayers` | Player seat assignments, user IDs, `eventId` |
 //! | `gameRoomInfo.finalMatchResult` | Final result with `matchCompletedReason` |
 //!
 //! This is Class 1 (Interactive Dispatch) -- the first event emitted for
@@ -893,7 +893,7 @@ mod tests {
         }
 
         #[test]
-        fn test_try_parse_event_id_from_reserved_players() {
+        fn test_try_parse_event_id_from_reserved_players_extracted() {
             // Real Arena logs place eventId inside each reservedPlayers entry
             // rather than at the gameRoomConfig level.
             let body = format!(
@@ -931,6 +931,32 @@ mod tests {
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             let payload = match_state_payload(event);
             assert_eq!(payload["event_id"], "Timeless_Ladder");
+        }
+
+        #[test]
+        fn test_try_parse_event_id_no_source_defaults_empty() {
+            // When eventId is absent at both gameRoomConfig level and inside
+            // reservedPlayers, event_id should default to "".
+            let body = format!(
+                "[UnityCrossThreadLogger]matchGameRoomStateChangedEvent\n{}",
+                serde_json::json!({
+                    "matchGameRoomStateChangedEvent": {
+                        "gameRoomInfo": {
+                            "stateType": "MatchGameRoomStateType_Playing",
+                            "gameRoomConfig": {
+                                "matchId": "no-event-id-match",
+                                "reservedPlayers": []
+                            }
+                        }
+                    }
+                })
+            );
+            let entry = unity_entry(&body);
+            let result = try_parse(&entry, Some(test_timestamp()));
+            assert!(result.is_some());
+            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            let payload = match_state_payload(event);
+            assert_eq!(payload["event_id"], "");
         }
 
         #[test]
