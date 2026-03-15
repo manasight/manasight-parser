@@ -2,8 +2,9 @@
 #
 # Describes the Player.log files used for smoke testing. The actual logs live
 # in a private GitHub release (manasight/manasight-test-data, tag smoke-data-v4)
-# to keep large binaries out of the parser repo. This manifest is committed so
-# that anyone can see what is tested and verify corpus integrity after download.
+# to keep large binaries out of the parser repo (tag smoke-data-v5). This manifest
+# is committed so that anyone can see what is tested and verify corpus integrity
+# after download.
 #
 # Fields:
 #   filename       — name of the .log file inside the archive
@@ -64,3 +65,9 @@ filename     = "session_2026-03-11_2124.log"
 sha256       = "248f70f53d47e46ab6d37fbad8ca7249e35c5418355a71ac7eac41d37912acc0"
 size_bytes   = 11460803
 date_captured = "2026-03-11"
+
+[[files]]
+filename     = "session_2026-03-15_1157_detailed_logs_disabled.log"
+sha256       = "3103ab330542c1ba3ba3a976b16626c9b038ff7fde096f5a9ae6d9a0a00c25d8"
+size_bytes   = 158711
+date_captured = "2026-03-15"

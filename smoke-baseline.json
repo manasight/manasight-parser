@@ -1,8 +1,8 @@
 {
   "_meta": {
-    "corpus_tag": "smoke-data-v4",
+    "corpus_tag": "smoke-data-v5",
     "description": "Smoke test baseline -- per-file, per-parser event counts from Level 1 (parser-only) smoke tests.",
-    "generated_from_commit": "e29e751fffc94a192c913301e1eb64d7255655dd"
+    "generated_from_commit": "9c32702"
   },
   "files": {
     "session_2026-02-22_a.log": {
@@ -265,6 +265,26 @@
       "timestamp_failures": 48,
       "total_entries": 1158,
       "unclaimed": 73
+    },
+    "session_2026-03-15_1157_detailed_logs_disabled.log": {
+      "double_claims": 0,
+      "event_types": {},
+      "parsers": {
+        "client_actions": 0,
+        "collection": 0,
+        "draft_bot": 0,
+        "draft_complete": 0,
+        "draft_human": 0,
+        "event_lifecycle": 0,
+        "gre": 0,
+        "inventory": 0,
+        "match_state": 0,
+        "rank": 0,
+        "session": 0
+      },
+      "timestamp_failures": 15,
+      "total_entries": 15,
+      "unclaimed": 15
     }
   }
 }

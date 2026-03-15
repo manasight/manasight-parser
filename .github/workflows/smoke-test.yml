@@ -56,7 +56,7 @@ jobs:
         uses: actions-rust-lang/setup-rust-toolchain@v1
 
       # Cache the downloaded corpus tarball between runs.
-      # The key is paired with the release tag (smoke-data-v4). If the corpus
+      # The key is paired with the release tag (smoke-data-v5). If the corpus
       # is updated, bump both the release tag and this cache key together.
       - name: Cache corpus tarball
         if: steps.secrets-check.outputs.skip == 'false'
@@ -64,7 +64,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /tmp/smoke-corpus.tar.gz
-          key: smoke-corpus-v4
+          key: smoke-corpus-v5
 
       # Download corpus from manasight-test-data GitHub Release.
       - name: Download corpus
@@ -72,7 +72,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.TEST_DATA_TOKEN }}
         run: |
-          gh release download smoke-data-v4 \
+          gh release download smoke-data-v5 \
             --repo manasight/manasight-test-data \
             --pattern "*.tar.gz" \
             --output /tmp/smoke-corpus.tar.gz
