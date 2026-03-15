@@ -227,6 +227,7 @@ fn extract_timestamp(body: &str) -> Option<DateTime<Utc>> {
 /// Parsers are tried in order of expected frequency during typical
 /// gameplay to minimize unnecessary parse attempts:
 ///
+/// 0. Metadata — `DETAILED LOGS` status (header-type short-circuit)
 /// 1. GRE messages (game state + game result) — most frequent in-game
 /// 2. Client actions — frequent player decisions
 /// 3. Match state — match boundaries
@@ -246,6 +247,11 @@ fn extract_timestamp(body: &str) -> Option<DateTime<Utc>> {
 /// `timestamp` is `None` when the log entry header did not contain a
 /// parseable timestamp; parsers pass it through to `EventMetadata`.
 fn dispatch_to_parsers(entry: &LogEntry, timestamp: Option<DateTime<Utc>>) -> Vec<GameEvent> {
+    // Metadata entries are routed directly to the metadata parser.
+    if let Some(event) = parsers::metadata::try_parse(entry, timestamp) {
+        return vec![event];
+    }
+
     // GRE parser returns Vec<GameEvent> (may contain multiple batched GSMs).
     let gre_events = parsers::gre::try_parse(entry, timestamp);
     if !gre_events.is_empty() {
@@ -830,6 +836,70 @@ mod tests {
             let results = router.route(&entry);
             assert_eq!(results.len(), 1);
             assert!(matches!(&results[0], GameEvent::GameState(_)));
+        }
+    }
+
+    // -- Router: Metadata header entries --------------------------------------
+
+    mod metadata_entries {
+        use super::*;
+
+        /// Helper: build a `LogEntry` with `Metadata` header.
+        fn metadata_entry(body: &str) -> LogEntry {
+            LogEntry {
+                header: EntryHeader::Metadata,
+                body: body.to_owned(),
+            }
+        }
+
+        #[test]
+        fn test_route_detailed_logs_enabled() {
+            let router = Router::new();
+            let entry = metadata_entry("DETAILED LOGS: ENABLED");
+
+            let results = router.route(&entry);
+            assert_eq!(results.len(), 1);
+            assert!(matches!(&results[0], GameEvent::DetailedLoggingStatus(_)));
+            if let GameEvent::DetailedLoggingStatus(ref e) = results[0] {
+                assert_eq!(e.enabled(), Some(true));
+            }
+            assert_eq!(router.stats().routed_count(), 1);
+        }
+
+        #[test]
+        fn test_route_detailed_logs_disabled() {
+            let router = Router::new();
+            let entry = metadata_entry("DETAILED LOGS: DISABLED");
+
+            let results = router.route(&entry);
+            assert_eq!(results.len(), 1);
+            assert!(matches!(&results[0], GameEvent::DetailedLoggingStatus(_)));
+            if let GameEvent::DetailedLoggingStatus(ref e) = results[0] {
+                assert_eq!(e.enabled(), Some(false));
+            }
+        }
+
+        #[test]
+        fn test_route_metadata_no_timestamp_failure() {
+            let router = Router::new();
+            let entry = metadata_entry("DETAILED LOGS: ENABLED");
+
+            router.route(&entry);
+            // Metadata entries have no bracket prefix for timestamp extraction,
+            // so they increment the timestamp failure counter.
+            assert_eq!(router.stats().timestamp_failure_count(), 1);
+            // But they should still be routed successfully.
+            assert_eq!(router.stats().routed_count(), 1);
+        }
+
+        #[test]
+        fn test_route_unrecognized_metadata_returns_empty() {
+            let router = Router::new();
+            let entry = metadata_entry("SOME OTHER METADATA");
+
+            let results = router.route(&entry);
+            assert!(results.is_empty());
+            assert_eq!(router.stats().unknown_count(), 1);
         }
     }
 }

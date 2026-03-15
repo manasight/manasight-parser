@@ -208,6 +208,56 @@ async fn test_stream_subscriber_ends_after_shutdown() -> TestResult {
 }
 
 #[tokio::test]
+async fn test_stream_detailed_logs_enabled_event() -> TestResult {
+    let content = "DETAILED LOGS: ENABLED\n\
+                    [UnityCrossThreadLogger]Updated account. \
+                    DisplayName:TestPlayer, \
+                    AccountID:abc123, \
+                    Token:sometoken\n\
+                    [UnityCrossThreadLogger]2/25/2026 12:00:00 PM\nfiller\n";
+    let f = temp_log(content)?;
+
+    let (stream, mut sub) = MtgaEventStream::start(f.path()).await?;
+
+    // The first event should be DetailedLoggingStatus(enabled=true).
+    let event = tokio::time::timeout(std::time::Duration::from_secs(5), sub.recv()).await?;
+    assert!(event.is_some(), "expected an event, got None");
+    assert!(
+        matches!(&event, Some(GameEvent::DetailedLoggingStatus(_))),
+        "expected DetailedLoggingStatus event, got {event:?}"
+    );
+    if let Some(GameEvent::DetailedLoggingStatus(ref e)) = event {
+        assert_eq!(e.enabled(), Some(true));
+    }
+
+    stream.shutdown();
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_stream_detailed_logs_disabled_event() -> TestResult {
+    let content = "DETAILED LOGS: DISABLED\n\
+                    some unstructured line\n";
+    let f = temp_log(content)?;
+
+    let (stream, mut sub) = MtgaEventStream::start(f.path()).await?;
+
+    // The first event should be DetailedLoggingStatus(enabled=false).
+    let event = tokio::time::timeout(std::time::Duration::from_secs(5), sub.recv()).await?;
+    assert!(event.is_some(), "expected an event, got None");
+    assert!(
+        matches!(&event, Some(GameEvent::DetailedLoggingStatus(_))),
+        "expected DetailedLoggingStatus event, got {event:?}"
+    );
+    if let Some(GameEvent::DetailedLoggingStatus(ref e)) = event {
+        assert_eq!(e.enabled(), Some(false));
+    }
+
+    stream.shutdown();
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_stream_re_exports_accessible() -> TestResult {
     // Verify that key types are accessible via the crate root re-exports.
     // Using them in type annotations proves the re-exports compile.

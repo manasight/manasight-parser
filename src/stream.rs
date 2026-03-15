@@ -32,6 +32,7 @@ use std::path::Path;
 
 use crate::event_bus::{EventBus, Subscriber};
 use crate::events::{DetailedLoggingStatusEvent, GameEvent, LogFileRotatedEvent};
+use crate::log::entry::EntryHeader;
 use crate::log::tailer::{FileTailer, TailerError};
 use crate::router::Router;
 
@@ -208,16 +209,28 @@ impl std::fmt::Debug for MtgaEventStream {
 /// Tracks whether structured log headers have been observed.
 ///
 /// Used by [`run_tailer`] to detect when Arena's "Detailed Logs (Plugin
-/// Support)" setting is disabled. The 30-second timer starts on the first
-/// non-empty read (not on tailer open) to avoid false positives when Arena
-/// hasn't launched yet.
+/// Support)" setting is disabled. Detection uses two complementary signals:
+///
+/// 1. **Literal detection** (primary): `DETAILED LOGS: ENABLED/DISABLED`
+///    lines near the top of `Player.log`. When a literal signal fires,
+///    the timeout is suppressed to avoid duplicate events.
+///
+/// 2. **Timeout detection** (fallback): if 30 seconds of log writes pass
+///    without any `[UnityCrossThreadLogger]` / `[Client GRE]` headers,
+///    emits `enabled: false`. Only fires when literal detection has not
+///    already handled the status.
 struct HeaderDetectionState {
     /// When the tailer first read non-zero bytes from the log file.
     first_bytes_at: Option<tokio::time::Instant>,
     /// Whether any structured log entry has been produced.
     headers_seen: bool,
-    /// Whether the `enabled: false` event has been emitted.
+    /// Whether the `enabled: false` event has been emitted (by timeout).
     disabled_emitted: bool,
+    /// Whether a literal `DETAILED LOGS:` line has been seen.
+    ///
+    /// When `true`, the timeout path is suppressed — the literal signal
+    /// is authoritative and sufficient.
+    literal_detected: bool,
 }
 
 impl HeaderDetectionState {
@@ -226,6 +239,7 @@ impl HeaderDetectionState {
             first_bytes_at: None,
             headers_seen: false,
             disabled_emitted: false,
+            literal_detected: false,
         }
     }
 
@@ -234,6 +248,7 @@ impl HeaderDetectionState {
         self.first_bytes_at = None;
         self.headers_seen = false;
         self.disabled_emitted = false;
+        self.literal_detected = false;
     }
 
     /// Records that the tailer read bytes. Called on every poll that
@@ -249,10 +264,18 @@ impl HeaderDetectionState {
         self.headers_seen = true;
     }
 
+    /// Records that a literal `DETAILED LOGS:` line was detected.
+    ///
+    /// This suppresses the timeout fallback for the rest of this log
+    /// file session.
+    fn record_literal_detected(&mut self) {
+        self.literal_detected = true;
+    }
+
     /// Checks the current state and returns an event to emit, if any.
     ///
     /// - Returns `Some(enabled: false)` if the timeout has elapsed without
-    ///   headers (emitted once).
+    ///   headers (emitted once, suppressed if literal detection already fired).
     /// - Returns `Some(enabled: true)` if headers are seen after a
     ///   previous `enabled: false` was emitted.
     /// - Returns `None` otherwise.
@@ -264,6 +287,11 @@ impl HeaderDetectionState {
         }
 
         if self.headers_seen || self.disabled_emitted {
+            return None;
+        }
+
+        // Skip timeout when literal detection already handled it.
+        if self.literal_detected {
             return None;
         }
 
@@ -332,12 +360,25 @@ async fn run_tailer(
                             header_state.record_bytes_read();
                         }
 
-                        if !entries.is_empty() {
+                        // Check entries for metadata (literal DETAILED LOGS
+                        // detection) and structured headers.
+                        let has_structured = entries
+                            .iter()
+                            .any(|e| e.header != EntryHeader::Metadata);
+                        let has_metadata = entries
+                            .iter()
+                            .any(|e| e.header == EntryHeader::Metadata);
+
+                        if has_structured {
                             header_state.record_headers_seen();
+                        }
+                        if has_metadata {
+                            header_state.record_literal_detected();
                         }
 
                         // Check if a detailed logging status event should
-                        // be emitted.
+                        // be emitted (timeout fallback, suppressed when
+                        // literal detection already fired).
                         if let Some(enabled) = header_state.check() {
                             let event = GameEvent::DetailedLoggingStatus(
                                 DetailedLoggingStatusEvent::new_status(
@@ -857,6 +898,45 @@ mod tests {
         assert_eq!(state.check(), Some(false));
     }
 
+    // -- HeaderDetectionState: literal detection suppresses timeout -----------
+
+    #[tokio::test]
+    async fn test_header_detection_literal_suppresses_timeout() {
+        tokio::time::pause();
+        let mut state = HeaderDetectionState::new();
+        state.record_bytes_read();
+        state.record_literal_detected();
+
+        // Even after timeout, should not emit disabled — literal already handled it.
+        tokio::time::advance(std::time::Duration::from_secs(31)).await;
+        assert!(state.check().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_header_detection_literal_before_bytes() {
+        tokio::time::pause();
+        let mut state = HeaderDetectionState::new();
+        state.record_literal_detected();
+        state.record_bytes_read();
+
+        tokio::time::advance(std::time::Duration::from_secs(31)).await;
+        assert!(state.check().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_header_detection_literal_reset_clears() {
+        tokio::time::pause();
+        let mut state = HeaderDetectionState::new();
+        state.record_literal_detected();
+
+        state.reset();
+
+        // After reset, literal_detected is cleared.
+        state.record_bytes_read();
+        tokio::time::advance(std::time::Duration::from_secs(31)).await;
+        assert_eq!(state.check(), Some(false));
+    }
+
     // -- Detailed logging integration (start) ---------------------------------
 
     #[tokio::test]
@@ -897,6 +977,89 @@ mod tests {
         );
 
         stream.shutdown();
+        Ok(())
+    }
+
+    // -- Literal DETAILED LOGS detection (start_once) --------------------------
+
+    #[tokio::test]
+    async fn test_start_once_detailed_logs_enabled() -> TestResult {
+        let content = "DETAILED LOGS: ENABLED\n\
+                        [UnityCrossThreadLogger]Updated account. \
+                        DisplayName:TestPlayer, \
+                        AccountID:abc123, \
+                        Token:sometoken\n\
+                        [UnityCrossThreadLogger]2/25/2026 12:00:00 PM\n\
+                        some filler\n";
+        let f = temp_log(content)?;
+
+        let (_stream, mut sub) = MtgaEventStream::start_once(f.path()).await?;
+
+        // Collect all events.
+        let mut events = Vec::new();
+        loop {
+            let result =
+                tokio::time::timeout(std::time::Duration::from_secs(3), sub.recv()).await?;
+            match result {
+                Some(e) => events.push(e),
+                None => break,
+            }
+        }
+
+        // Should have a DetailedLoggingStatus(enabled=true) event.
+        let dls_events: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(e, GameEvent::DetailedLoggingStatus(_)))
+            .collect();
+        assert_eq!(
+            dls_events.len(),
+            1,
+            "expected exactly one DetailedLoggingStatus event, got {}",
+            dls_events.len(),
+        );
+        if let GameEvent::DetailedLoggingStatus(ref e) = dls_events[0] {
+            assert_eq!(e.enabled(), Some(true));
+        }
+
+        // Should also have Session event.
+        assert!(events.iter().any(|e| matches!(e, GameEvent::Session(_))));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_start_once_detailed_logs_disabled() -> TestResult {
+        let content = "DETAILED LOGS: DISABLED\n\
+                        some unstructured line\n\
+                        another unstructured line\n";
+        let f = temp_log(content)?;
+
+        let (_stream, mut sub) = MtgaEventStream::start_once(f.path()).await?;
+
+        // Collect all events.
+        let mut events = Vec::new();
+        loop {
+            let result =
+                tokio::time::timeout(std::time::Duration::from_secs(3), sub.recv()).await?;
+            match result {
+                Some(e) => events.push(e),
+                None => break,
+            }
+        }
+
+        // Should have a DetailedLoggingStatus(enabled=false) event.
+        let dls_events: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(e, GameEvent::DetailedLoggingStatus(_)))
+            .collect();
+        assert_eq!(
+            dls_events.len(),
+            1,
+            "expected exactly one DetailedLoggingStatus event, got {}",
+            dls_events.len(),
+        );
+        if let GameEvent::DetailedLoggingStatus(ref e) = dls_events[0] {
+            assert_eq!(e.enabled(), Some(false));
+        }
         Ok(())
     }
 }
