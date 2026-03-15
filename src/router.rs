@@ -187,12 +187,16 @@ impl Default for Router {
 /// ```text
 /// [UnityCrossThreadLogger]2/25/2026 12:00:00 PM some content
 /// [Client GRE]2/25/2026 12:00:00 PM GreToClientEvent
+/// [UnityCrossThreadLogger]3/13/2026 11:34:51 PM: Match to ...
 /// ```
 ///
 /// Strips the bracket-enclosed header prefix and extracts the date/time
 /// portion that follows. The timestamp string may be followed by
 /// additional content on the same line (event name, method name, etc.)
 /// or by a newline if the timestamp is on its own line.
+///
+/// Trims trailing punctuation (like colons in `... PM: MatchGameRoom...`) from
+/// the extracted tokens before parsing to ensure robust matching.
 fn extract_timestamp(body: &str) -> Option<DateTime<Utc>> {
     let first_line = body.lines().next()?;
 
@@ -214,7 +218,9 @@ fn extract_timestamp(body: &str) -> Option<DateTime<Utc>> {
     let max_words = words.len().min(4);
     for end in (2..=max_words).rev() {
         let candidate = words[..end].join(" ");
-        if let Ok(ts) = parse_log_timestamp(&candidate) {
+        // Ensure trailing punctuation (like colons after AM/PM) doesn't break parsing.
+        let cleaned = candidate.trim_end_matches(|c: char| c.is_ascii_punctuation());
+        if let Ok(ts) = parse_log_timestamp(cleaned) {
             return Some(ts);
         }
     }
@@ -276,6 +282,7 @@ fn dispatch_to_parsers(entry: &LogEntry, timestamp: Option<DateTime<Utc>>) -> Ve
 mod tests {
     use super::*;
     use crate::log::entry::EntryHeader;
+    use chrono::Timelike;
 
     /// Helper: build a `LogEntry` with `UnityCrossThreadLogger` header.
     fn unity_entry(body: &str) -> LogEntry {
@@ -321,6 +328,16 @@ mod tests {
                     ts.format("%Y-%m-%d %H:%M:%S").to_string(),
                     "2026-02-22 11:59:51"
                 );
+            }
+        }
+
+        #[test]
+        fn test_extract_timestamp_with_trailing_colon() {
+            let body = "[UnityCrossThreadLogger]3/13/2026 11:34:51 PM: Match to AAF4FC69CE47D53A";
+            let ts = extract_timestamp(body);
+            assert!(ts.is_some());
+            if let Some(ts) = ts {
+                assert_eq!(ts.hour(), 23); // Should correctly identify PM
             }
         }
 
