@@ -7,6 +7,14 @@ on:
     types: [completed]
     branches: [main]
 
+  # Run on PRs that touch parser or test code.
+  pull_request:
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "smoke-baseline.json"
+      - "smoke-corpus-manifest.toml"
+
   # Weekly on Sundays at 06:00 UTC.
   schedule:
     - cron: "0 6 * * 0"
