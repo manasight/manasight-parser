@@ -483,6 +483,19 @@ fn reports_to_baseline_files(
         .collect()
 }
 
+/// Reads `corpus_tag` from `smoke-corpus-manifest.toml` (single source of truth).
+fn read_corpus_tag() -> String {
+    #[derive(serde::Deserialize)]
+    struct ManifestMeta {
+        corpus_tag: String,
+    }
+
+    std::fs::read_to_string("smoke-corpus-manifest.toml")
+        .ok()
+        .and_then(|s| toml::from_str::<ManifestMeta>(&s).ok())
+        .map_or_else(|| "unknown".to_string(), |m| m.corpus_tag)
+}
+
 /// Builds a full `Baseline` from actual results for bless mode.
 fn build_baseline(actual: &std::collections::BTreeMap<String, BaselineFile>) -> Baseline {
     // Get current git commit hash for metadata, falling back gracefully.
@@ -507,7 +520,7 @@ fn build_baseline(actual: &std::collections::BTreeMap<String, BaselineFile>) -> 
                           (parser-only) smoke tests."
                 .to_string(),
             generated_from_commit: commit,
-            corpus_tag: "smoke-data-v1".to_string(),
+            corpus_tag: read_corpus_tag(),
         },
         files: actual.clone(),
     }

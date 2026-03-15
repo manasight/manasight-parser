@@ -15,6 +15,7 @@ type TestResult = Result<(), Box<dyn std::error::Error>>;
 
 #[derive(Deserialize)]
 struct Manifest {
+    corpus_tag: String,
     files: Vec<ManifestEntry>,
 }
 
@@ -214,6 +215,35 @@ fn test_manifest_and_baseline_cover_same_files() -> TestResult {
     assert_eq!(
         manifest_files, baseline_files,
         "manifest and baseline should reference the same set of files"
+    );
+    Ok(())
+}
+
+#[test]
+fn test_manifest_has_corpus_tag() -> TestResult {
+    let manifest = read_manifest()?;
+
+    assert!(
+        !manifest.corpus_tag.is_empty(),
+        "manifest corpus_tag should not be empty"
+    );
+    assert!(
+        manifest.corpus_tag.starts_with("smoke-data-"),
+        "manifest corpus_tag should start with 'smoke-data-', got '{}'",
+        manifest.corpus_tag
+    );
+    Ok(())
+}
+
+#[test]
+fn test_baseline_corpus_tag_matches_manifest() -> TestResult {
+    let manifest = read_manifest()?;
+    let baseline = read_baseline()?;
+
+    assert_eq!(
+        baseline.meta.corpus_tag, manifest.corpus_tag,
+        "baseline corpus_tag ('{}') should match manifest corpus_tag ('{}')",
+        baseline.meta.corpus_tag, manifest.corpus_tag
     );
     Ok(())
 }

@@ -1,16 +1,22 @@
 # Smoke test corpus manifest
 #
 # Describes the Player.log files used for smoke testing. The actual logs live
-# in a private GitHub release (manasight/manasight-test-data, tag smoke-data-v4)
-# to keep large binaries out of the parser repo (tag smoke-data-v5). This manifest
-# is committed so that anyone can see what is tested and verify corpus integrity
-# after download.
+# in a private GitHub release (manasight/manasight-test-data) to keep large
+# binaries out of the parser repo. This manifest is committed so that anyone
+# can see what is tested and verify corpus integrity after download.
+#
+# The corpus_tag below is the single source of truth for the release tag.
+# It is read by bless mode (smoke_parsers.rs) when writing smoke-baseline.json
+# and must match the tag in .github/workflows/smoke-test.yml.
 #
 # Fields:
+#   corpus_tag     — GitHub release tag for the corpus archive
 #   filename       — name of the .log file inside the archive
 #   sha256         — hex-encoded SHA-256 hash of the file
 #   size_bytes     — file size in bytes
 #   date_captured  — date the play session was recorded (YYYY-MM-DD)
+
+corpus_tag = "smoke-data-v5"
 
 [[files]]
 filename     = "session_2026-02-22_a.log"
