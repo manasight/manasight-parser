@@ -18,7 +18,7 @@ use regex::Regex;
 
 use crate::util::truncate_for_log;
 
-/// The two known log entry header prefixes in MTG Arena's `Player.log`.
+/// The known log entry header prefixes in MTG Arena's `Player.log`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum EntryHeader {
@@ -27,14 +27,24 @@ pub enum EntryHeader {
     UnityCrossThreadLogger,
     /// `[Client GRE]` — used for Game Rules Engine messages.
     ClientGre,
+    /// Metadata lines that appear outside bracket-delimited entries.
+    ///
+    /// Currently covers `DETAILED LOGS: ENABLED` and `DETAILED LOGS: DISABLED`,
+    /// which Arena writes near the top of every session (typically line 24).
+    Metadata,
 }
 
 impl EntryHeader {
-    /// Returns the bracket-enclosed header string as it appears in the log.
+    /// Returns the header string as it appears in the log.
+    ///
+    /// Bracket-delimited headers return the full `[...]` prefix.
+    /// `Metadata` returns `"METADATA"` as a synthetic label (metadata
+    /// lines have no bracket prefix in the actual log).
     pub fn as_str(self) -> &'static str {
         match self {
             Self::UnityCrossThreadLogger => "[UnityCrossThreadLogger]",
             Self::ClientGre => "[Client GRE]",
+            Self::Metadata => "METADATA",
         }
     }
 }
@@ -124,10 +134,36 @@ impl LineBuffer {
     /// line is a continuation of the current entry, or when no entry was
     /// in progress (buffer was empty).
     ///
+    /// Metadata lines (`DETAILED LOGS: ENABLED` / `DISABLED`) are treated
+    /// as self-contained entries: the current in-progress entry (if any) is
+    /// flushed, the metadata entry is returned, and no new accumulation
+    /// begins. If a metadata line is the first line in the stream (nothing
+    /// to flush), it is returned directly.
+    ///
     /// Lines that arrive before any header has been seen are discarded with
     /// a warning log — this handles partial entries at the start of a file
     /// or after rotation.
     pub fn push_line(&mut self, line: &str) -> Option<LogEntry> {
+        // Check for metadata lines first — these are self-contained.
+        if Self::is_metadata_line(line) {
+            let flushed = self.take_entry();
+            let metadata_entry = LogEntry {
+                header: EntryHeader::Metadata,
+                body: line.to_owned(),
+            };
+            // If there was a buffered entry, return it now.
+            // The metadata entry needs to be emitted too, so we buffer it
+            // as a complete single-line entry that will flush on the next
+            // header or explicit flush.
+            if flushed.is_some() {
+                self.current_header = Some(EntryHeader::Metadata);
+                self.lines.push(line.to_owned());
+                return flushed;
+            }
+            // No prior entry — return the metadata entry directly.
+            return Some(metadata_entry);
+        }
+
         if let Some(header) = self.detect_header(line) {
             let flushed = self.take_entry();
             self.current_header = Some(header);
@@ -167,6 +203,16 @@ impl LineBuffer {
     /// Returns `true` if no entry is currently being accumulated.
     pub fn is_empty(&self) -> bool {
         self.current_header.is_none()
+    }
+
+    /// Returns `true` if the line is a metadata line that should be
+    /// treated as a self-contained entry.
+    ///
+    /// Currently matches `DETAILED LOGS: ENABLED` and
+    /// `DETAILED LOGS: DISABLED`.
+    fn is_metadata_line(line: &str) -> bool {
+        let trimmed = line.trim();
+        trimmed == "DETAILED LOGS: ENABLED" || trimmed == "DETAILED LOGS: DISABLED"
     }
 
     /// Detects whether `line` starts with a known header prefix.
@@ -628,6 +674,122 @@ mod tests {
                 assert_eq!(e.header, EntryHeader::UnityCrossThreadLogger);
                 assert_eq!(e.body, format!("[UnityCrossThreadLogger] Event{i}"));
             }
+        }
+    }
+
+    // -- Metadata line detection -----------------------------------------------
+
+    mod metadata_lines {
+        use super::*;
+
+        #[test]
+        fn test_push_line_detailed_logs_enabled_as_first_line() {
+            let mut buf = LineBuffer::new();
+            let result = buf.push_line("DETAILED LOGS: ENABLED");
+
+            assert_eq!(
+                result,
+                Some(expected(EntryHeader::Metadata, "DETAILED LOGS: ENABLED")),
+            );
+            // Buffer should be empty after — metadata is self-contained.
+            assert!(buf.is_empty());
+        }
+
+        #[test]
+        fn test_push_line_detailed_logs_disabled_as_first_line() {
+            let mut buf = LineBuffer::new();
+            let result = buf.push_line("DETAILED LOGS: DISABLED");
+
+            assert_eq!(
+                result,
+                Some(expected(EntryHeader::Metadata, "DETAILED LOGS: DISABLED")),
+            );
+        }
+
+        #[test]
+        fn test_push_line_metadata_flushes_buffered_entry() {
+            let mut buf = LineBuffer::new();
+            buf.push_line("[UnityCrossThreadLogger] Event1");
+
+            // Metadata line should flush the buffered entry.
+            let flushed = buf.push_line("DETAILED LOGS: ENABLED");
+            assert_eq!(
+                flushed,
+                Some(expected(
+                    EntryHeader::UnityCrossThreadLogger,
+                    "[UnityCrossThreadLogger] Event1",
+                )),
+            );
+
+            // The metadata entry should be available on next flush.
+            let metadata = buf.flush();
+            assert_eq!(
+                metadata,
+                Some(expected(EntryHeader::Metadata, "DETAILED LOGS: ENABLED")),
+            );
+        }
+
+        #[test]
+        fn test_push_line_metadata_then_header_flushes_metadata() {
+            let mut buf = LineBuffer::new();
+            buf.push_line("DETAILED LOGS: ENABLED");
+
+            // Next header should work normally (nothing to flush since
+            // the metadata entry was returned immediately).
+            assert!(buf.push_line("[UnityCrossThreadLogger] Event").is_none());
+            assert_eq!(
+                buf.flush(),
+                Some(expected(
+                    EntryHeader::UnityCrossThreadLogger,
+                    "[UnityCrossThreadLogger] Event",
+                )),
+            );
+        }
+
+        #[test]
+        fn test_push_line_metadata_buffered_then_next_header_flushes() {
+            let mut buf = LineBuffer::new();
+            buf.push_line("[UnityCrossThreadLogger] Event1");
+
+            // Metadata line flushes Event1, buffers itself.
+            buf.push_line("DETAILED LOGS: DISABLED");
+
+            // Next header flushes the metadata entry.
+            let flushed = buf.push_line("[UnityCrossThreadLogger] Event2");
+            assert_eq!(
+                flushed,
+                Some(expected(EntryHeader::Metadata, "DETAILED LOGS: DISABLED")),
+            );
+        }
+
+        #[test]
+        fn test_push_line_metadata_similar_text_not_matched() {
+            let mut buf = LineBuffer::new();
+            // Similar but not exact — should be treated as headerless.
+            assert!(buf.push_line("DETAILED LOGS: UNKNOWN").is_none());
+            assert!(buf.push_line("detailed logs: enabled").is_none());
+            assert!(buf.push_line("DETAILED LOGS:ENABLED").is_none());
+        }
+
+        #[test]
+        fn test_push_line_metadata_with_leading_trailing_whitespace() {
+            let mut buf = LineBuffer::new();
+            // Whitespace around the exact text should still match.
+            let result = buf.push_line("  DETAILED LOGS: ENABLED  ");
+            assert!(result.is_some());
+            if let Some(entry) = result {
+                assert_eq!(entry.header, EntryHeader::Metadata);
+            }
+        }
+
+        #[test]
+        fn test_entry_header_metadata_as_str() {
+            assert_eq!(EntryHeader::Metadata.as_str(), "METADATA");
+        }
+
+        #[test]
+        fn test_entry_header_metadata_display() {
+            assert_eq!(EntryHeader::Metadata.to_string(), "METADATA");
         }
     }
 }

@@ -81,6 +81,10 @@ pub struct ParserStats {
 pub fn all_parsers() -> Vec<NamedParser> {
     vec![
         NamedParser {
+            name: "metadata",
+            func: ParserFunc::Single(parsers::metadata::try_parse),
+        },
+        NamedParser {
             name: "session",
             func: ParserFunc::Single(parsers::session::try_parse),
         },
@@ -146,6 +150,8 @@ pub fn event_type_name(event: &GameEvent) -> &'static str {
         GameEvent::Collection(_) => "Collection",
         GameEvent::Inventory(_) => "Inventory",
         GameEvent::GameResult(_) => "GameResult",
+        GameEvent::LogFileRotated(_) => "LogFileRotated",
+        GameEvent::DetailedLoggingStatus(_) => "DetailedLoggingStatus",
         // `GameEvent` is `#[non_exhaustive]`; this branch keeps the compiler
         // happy if new variants are added before this match is updated.
         _ => "Unknown",

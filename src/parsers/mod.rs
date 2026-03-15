@@ -8,6 +8,7 @@ pub mod event_lifecycle;
 pub mod gre;
 pub mod inventory;
 pub mod match_state;
+pub mod metadata;
 pub mod rank;
 pub mod session;
 #[cfg(test)]
