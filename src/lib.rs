@@ -48,8 +48,9 @@ pub(crate) mod util;
 
 pub use event_bus::Subscriber;
 pub use events::{
-    ClientActionEvent, CollectionEvent, DraftBotEvent, DraftCompleteEvent, DraftHumanEvent,
-    EventLifecycleEvent, EventMetadata, GameEvent, GameResultEvent, GameStateEvent, InventoryEvent,
-    LogFileRotatedEvent, MatchStateEvent, PerformanceClass, RankEvent, SessionEvent,
+    ClientActionEvent, CollectionEvent, DetailedLoggingStatusEvent, DraftBotEvent,
+    DraftCompleteEvent, DraftHumanEvent, EventLifecycleEvent, EventMetadata, GameEvent,
+    GameResultEvent, GameStateEvent, InventoryEvent, LogFileRotatedEvent, MatchStateEvent,
+    PerformanceClass, RankEvent, SessionEvent,
 };
 pub use stream::{MtgaEventStream, StreamError};

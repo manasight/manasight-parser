@@ -124,6 +124,7 @@ macro_rules! delegate_to_inner {
             Self::Inventory(e) => e.$method(),
             Self::GameResult(e) => e.$method(),
             Self::LogFileRotated(e) => e.$method(),
+            Self::DetailedLoggingStatus(e) => e.$method(),
         }
     };
 }
@@ -198,6 +199,17 @@ pub enum GameEvent {
     /// Downstream consumers should reset their state for a new session.
     /// Class 1 — interactive dispatch (local reset signal).
     LogFileRotated(LogFileRotatedEvent),
+
+    /// Detailed logging status change detected.
+    ///
+    /// Emitted by the file tailer when it determines whether Arena's
+    /// "Detailed Logs (Plugin Support)" setting is enabled. `enabled: false`
+    /// is emitted after 30 seconds of observed log writes without any
+    /// `[UnityCrossThreadLogger]` or `[Client GRE]` headers. `enabled: true`
+    /// is emitted if structured headers are later detected (user enabled the
+    /// setting and restarted Arena).
+    /// Class 1 — interactive dispatch (local status signal).
+    DetailedLoggingStatus(DetailedLoggingStatusEvent),
 }
 
 impl GameEvent {
@@ -208,9 +220,11 @@ impl GameEvent {
     /// - Class 3: post-game batch upload trigger
     pub fn performance_class(&self) -> PerformanceClass {
         match self {
-            Self::GameState(_) | Self::ClientAction(_) | Self::MatchState(_) => {
-                PerformanceClass::InteractiveDispatch
-            }
+            Self::GameState(_)
+            | Self::ClientAction(_)
+            | Self::MatchState(_)
+            | Self::LogFileRotated(_)
+            | Self::DetailedLoggingStatus(_) => PerformanceClass::InteractiveDispatch,
             Self::DraftBot(_)
             | Self::DraftHuman(_)
             | Self::DraftComplete(_)
@@ -220,7 +234,6 @@ impl GameEvent {
             | Self::Collection(_)
             | Self::Inventory(_) => PerformanceClass::DurablePerEvent,
             Self::GameResult(_) => PerformanceClass::PostGameBatch,
-            Self::LogFileRotated(_) => PerformanceClass::InteractiveDispatch,
         }
     }
 
@@ -539,6 +552,36 @@ impl LogFileRotatedEvent {
     }
 }
 
+define_event! {
+    /// Detailed logging status event.
+    ///
+    /// Emitted when the file tailer detects whether Arena's "Detailed Logs
+    /// (Plugin Support)" setting is enabled. The payload contains `enabled`
+    /// — `false` after 30 seconds of log writes without structured headers,
+    /// `true` when structured headers are subsequently detected.
+    ///
+    /// Like `LogFileRotatedEvent`, `raw_bytes` in the metadata is empty and
+    /// the timestamp reflects wall-clock detection time.
+    DetailedLoggingStatusEvent
+}
+
+impl DetailedLoggingStatusEvent {
+    /// Creates a detailed logging status event.
+    pub fn new_status(timestamp: DateTime<Utc>, enabled: bool) -> Self {
+        let metadata = EventMetadata::new(Some(timestamp), Vec::new());
+        let payload = serde_json::json!({ "enabled": enabled });
+        Self::new(metadata, payload)
+    }
+
+    /// Returns whether detailed logging is enabled.
+    ///
+    /// Returns `None` only if the payload was manually constructed without
+    /// the `enabled` field (not expected in normal usage).
+    pub fn enabled(&self) -> Option<bool> {
+        self.payload()["enabled"].as_bool()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -564,7 +607,7 @@ mod tests {
         EventMetadata::new(Some(timestamp), raw.to_vec())
     }
 
-    /// Helper: build all 12 `GameEvent` variants for exhaustive testing.
+    /// Helper: build all `GameEvent` variants for exhaustive testing.
     ///
     /// Must stay in sync with `GameEvent` variants. Compile-time
     /// exhaustiveness is enforced by `performance_class()` and
@@ -586,6 +629,10 @@ mod tests {
             GameEvent::Inventory(InventoryEvent::new(meta.clone(), payload.clone())),
             GameEvent::GameResult(GameResultEvent::new(meta.clone(), payload.clone())),
             GameEvent::LogFileRotated(LogFileRotatedEvent::new(meta.clone(), payload.clone())),
+            GameEvent::DetailedLoggingStatus(DetailedLoggingStatusEvent::new(
+                meta.clone(),
+                payload.clone(),
+            )),
         ]
     }
 
@@ -818,6 +865,7 @@ mod tests {
             PerformanceClass::DurablePerEvent,     // Inventory
             PerformanceClass::PostGameBatch,       // GameResult
             PerformanceClass::InteractiveDispatch, // LogFileRotated
+            PerformanceClass::InteractiveDispatch, // DetailedLoggingStatus
         ];
 
         assert_eq!(
@@ -932,6 +980,7 @@ mod tests {
             2, // Inventory
             3, // GameResult
             1, // LogFileRotated
+            1, // DetailedLoggingStatus
         ];
         assert_eq!(events.len(), expected_numbers.len());
         for (event, expected_num) in events.iter().zip(expected_numbers.iter()) {
@@ -1121,6 +1170,76 @@ mod tests {
             .single()
             .unwrap_or_default();
         let event = GameEvent::LogFileRotated(LogFileRotatedEvent::for_rotation(ts, 0));
+        assert_eq!(
+            event.performance_class(),
+            PerformanceClass::InteractiveDispatch
+        );
+    }
+
+    // -- DetailedLoggingStatusEvent --
+
+    #[test]
+    fn test_detailed_logging_status_new_status_stores_enabled_true() {
+        let ts = Utc
+            .with_ymd_and_hms(2026, 3, 15, 10, 0, 0)
+            .single()
+            .unwrap_or_default();
+        let event = DetailedLoggingStatusEvent::new_status(ts, true);
+        assert_eq!(event.enabled(), Some(true));
+    }
+
+    #[test]
+    fn test_detailed_logging_status_new_status_stores_enabled_false() {
+        let ts = Utc
+            .with_ymd_and_hms(2026, 3, 15, 10, 0, 0)
+            .single()
+            .unwrap_or_default();
+        let event = DetailedLoggingStatusEvent::new_status(ts, false);
+        assert_eq!(event.enabled(), Some(false));
+    }
+
+    #[test]
+    fn test_detailed_logging_status_stores_timestamp() {
+        let ts = Utc
+            .with_ymd_and_hms(2026, 3, 15, 10, 0, 0)
+            .single()
+            .unwrap_or_default();
+        let event = DetailedLoggingStatusEvent::new_status(ts, true);
+        assert_eq!(event.metadata().timestamp(), Some(ts));
+    }
+
+    #[test]
+    fn test_detailed_logging_status_has_empty_raw_bytes() {
+        let ts = Utc
+            .with_ymd_and_hms(2026, 3, 15, 10, 0, 0)
+            .single()
+            .unwrap_or_default();
+        let event = DetailedLoggingStatusEvent::new_status(ts, false);
+        assert!(event.metadata().raw_bytes().is_empty());
+    }
+
+    #[test]
+    fn test_detailed_logging_status_serde_round_trip() -> TestResult {
+        let ts = Utc
+            .with_ymd_and_hms(2026, 3, 15, 10, 0, 0)
+            .single()
+            .unwrap_or_default();
+        let event =
+            GameEvent::DetailedLoggingStatus(DetailedLoggingStatusEvent::new_status(ts, false));
+        let serialized = serde_json::to_string(&event)?;
+        let deserialized: GameEvent = serde_json::from_str(&serialized)?;
+        assert_eq!(deserialized, event);
+        Ok(())
+    }
+
+    #[test]
+    fn test_detailed_logging_status_performance_class_is_interactive() {
+        let ts = Utc
+            .with_ymd_and_hms(2026, 3, 15, 10, 0, 0)
+            .single()
+            .unwrap_or_default();
+        let event =
+            GameEvent::DetailedLoggingStatus(DetailedLoggingStatusEvent::new_status(ts, true));
         assert_eq!(
             event.performance_class(),
             PerformanceClass::InteractiveDispatch

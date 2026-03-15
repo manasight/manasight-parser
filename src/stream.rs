@@ -31,9 +31,13 @@
 use std::path::Path;
 
 use crate::event_bus::{EventBus, Subscriber};
-use crate::events::{GameEvent, LogFileRotatedEvent};
+use crate::events::{DetailedLoggingStatusEvent, GameEvent, LogFileRotatedEvent};
 use crate::log::tailer::{FileTailer, TailerError};
 use crate::router::Router;
+
+/// Default duration to wait for structured headers before emitting a
+/// `DetailedLoggingStatus { enabled: false }` event.
+const HEADER_DETECTION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 // ---------------------------------------------------------------------------
 // Error type
@@ -198,15 +202,98 @@ impl std::fmt::Debug for MtgaEventStream {
 }
 
 // ---------------------------------------------------------------------------
+// Header detection state
+// ---------------------------------------------------------------------------
+
+/// Tracks whether structured log headers have been observed.
+///
+/// Used by [`run_tailer`] to detect when Arena's "Detailed Logs (Plugin
+/// Support)" setting is disabled. The 30-second timer starts on the first
+/// non-empty read (not on tailer open) to avoid false positives when Arena
+/// hasn't launched yet.
+struct HeaderDetectionState {
+    /// When the tailer first read non-zero bytes from the log file.
+    first_bytes_at: Option<tokio::time::Instant>,
+    /// Whether any structured log entry has been produced.
+    headers_seen: bool,
+    /// Whether the `enabled: false` event has been emitted.
+    disabled_emitted: bool,
+}
+
+impl HeaderDetectionState {
+    fn new() -> Self {
+        Self {
+            first_bytes_at: None,
+            headers_seen: false,
+            disabled_emitted: false,
+        }
+    }
+
+    /// Resets detection state for a new log file (after rotation).
+    fn reset(&mut self) {
+        self.first_bytes_at = None;
+        self.headers_seen = false;
+        self.disabled_emitted = false;
+    }
+
+    /// Records that the tailer read bytes. Called on every poll that
+    /// produces non-zero bytes (even if no structured entries result).
+    fn record_bytes_read(&mut self) {
+        if self.first_bytes_at.is_none() {
+            self.first_bytes_at = Some(tokio::time::Instant::now());
+        }
+    }
+
+    /// Records that structured log entries were produced.
+    fn record_headers_seen(&mut self) {
+        self.headers_seen = true;
+    }
+
+    /// Checks the current state and returns an event to emit, if any.
+    ///
+    /// - Returns `Some(enabled: false)` if the timeout has elapsed without
+    ///   headers (emitted once).
+    /// - Returns `Some(enabled: true)` if headers are seen after a
+    ///   previous `enabled: false` was emitted.
+    /// - Returns `None` otherwise.
+    fn check(&mut self) -> Option<bool> {
+        if self.headers_seen && self.disabled_emitted {
+            // Headers appeared after we told the UI logging was disabled.
+            self.disabled_emitted = false;
+            return Some(true);
+        }
+
+        if self.headers_seen || self.disabled_emitted {
+            return None;
+        }
+
+        if let Some(first) = self.first_bytes_at {
+            if first.elapsed() >= HEADER_DETECTION_TIMEOUT {
+                self.disabled_emitted = true;
+                return Some(false);
+            }
+        }
+
+        None
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Background tasks
 // ---------------------------------------------------------------------------
 
-/// Runs the file tailer with rotation detection.
+/// Runs the file tailer with rotation and header detection.
 ///
 /// Polls the tailer at its configured interval, forwarding log entries to
 /// the routing channel. When file rotation is detected, emits a
 /// [`GameEvent::LogFileRotated`] event directly to the event bus so that
 /// downstream consumers can reset their state.
+///
+/// Also tracks whether structured log headers (`[UnityCrossThreadLogger]`
+/// or `[Client GRE]`) have been observed. If 30 seconds of log writes pass
+/// without any structured entries, emits a
+/// [`GameEvent::DetailedLoggingStatus`] with `enabled: false`. If headers
+/// are subsequently detected, emits `enabled: true` to clear the UI state.
 async fn run_tailer(
     mut tailer: FileTailer,
     entry_tx: tokio::sync::mpsc::Sender<crate::log::entry::LogEntry>,
@@ -218,9 +305,14 @@ async fn run_tailer(
     // First tick completes immediately.
     interval.tick().await;
 
+    let mut header_state = HeaderDetectionState::new();
+
     loop {
         tokio::select! {
             _ = interval.tick() => {
+                // Snapshot last_event_at before poll to detect new bytes.
+                let pre_poll_event_at = tailer.last_event_at();
+
                 match tailer.poll().await {
                     Ok(entries) => {
                         // Check for rotation before sending entries.
@@ -229,6 +321,28 @@ async fn run_tailer(
                                 LogFileRotatedEvent::for_rotation(
                                     rotation.detected_at(),
                                     rotation.previous_file_size(),
+                                ),
+                            );
+                            bus.send(event);
+                            header_state.reset();
+                        }
+
+                        // Detect new bytes read by comparing last_event_at.
+                        if tailer.last_event_at() != pre_poll_event_at {
+                            header_state.record_bytes_read();
+                        }
+
+                        if !entries.is_empty() {
+                            header_state.record_headers_seen();
+                        }
+
+                        // Check if a detailed logging status event should
+                        // be emitted.
+                        if let Some(enabled) = header_state.check() {
+                            let event = GameEvent::DetailedLoggingStatus(
+                                DetailedLoggingStatusEvent::new_status(
+                                    chrono::Utc::now(),
+                                    enabled,
                                 ),
                             );
                             bus.send(event);
@@ -634,5 +748,155 @@ mod tests {
         });
         let debug = format!("{err:?}");
         assert!(debug.contains("Tailer"));
+    }
+
+    // -- HeaderDetectionState -------------------------------------------------
+
+    #[test]
+    fn test_header_detection_initial_check_returns_none() {
+        let mut state = HeaderDetectionState::new();
+        assert!(state.check().is_none());
+    }
+
+    #[test]
+    fn test_header_detection_no_timeout_before_bytes() {
+        let mut state = HeaderDetectionState::new();
+        // No bytes read yet — timer hasn't started.
+        assert!(state.check().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_header_detection_emits_disabled_after_timeout() {
+        tokio::time::pause();
+        let mut state = HeaderDetectionState::new();
+        state.record_bytes_read();
+
+        // Before timeout: no event.
+        tokio::time::advance(std::time::Duration::from_secs(29)).await;
+        assert!(state.check().is_none());
+
+        // After timeout: disabled.
+        tokio::time::advance(std::time::Duration::from_secs(2)).await;
+        assert_eq!(state.check(), Some(false));
+    }
+
+    #[tokio::test]
+    async fn test_header_detection_disabled_emitted_once() {
+        tokio::time::pause();
+        let mut state = HeaderDetectionState::new();
+        state.record_bytes_read();
+
+        tokio::time::advance(std::time::Duration::from_secs(31)).await;
+        assert_eq!(state.check(), Some(false));
+
+        // Second check should not re-emit.
+        assert!(state.check().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_header_detection_no_event_when_headers_seen_early() {
+        tokio::time::pause();
+        let mut state = HeaderDetectionState::new();
+        state.record_bytes_read();
+        state.record_headers_seen();
+
+        // Even after timeout, should not emit disabled.
+        tokio::time::advance(std::time::Duration::from_secs(31)).await;
+        assert!(state.check().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_header_detection_emits_enabled_after_disabled() {
+        tokio::time::pause();
+        let mut state = HeaderDetectionState::new();
+        state.record_bytes_read();
+
+        // Trigger disabled.
+        tokio::time::advance(std::time::Duration::from_secs(31)).await;
+        assert_eq!(state.check(), Some(false));
+
+        // Headers seen later — should emit enabled.
+        state.record_headers_seen();
+        assert_eq!(state.check(), Some(true));
+    }
+
+    #[tokio::test]
+    async fn test_header_detection_enabled_emitted_once() {
+        tokio::time::pause();
+        let mut state = HeaderDetectionState::new();
+        state.record_bytes_read();
+
+        tokio::time::advance(std::time::Duration::from_secs(31)).await;
+        assert_eq!(state.check(), Some(false));
+
+        state.record_headers_seen();
+        assert_eq!(state.check(), Some(true));
+
+        // Should not re-emit.
+        assert!(state.check().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_header_detection_reset_clears_state() {
+        tokio::time::pause();
+        let mut state = HeaderDetectionState::new();
+        state.record_bytes_read();
+
+        tokio::time::advance(std::time::Duration::from_secs(31)).await;
+        assert_eq!(state.check(), Some(false));
+
+        // Reset simulates log rotation.
+        state.reset();
+
+        // After reset, timer hasn't started — no event.
+        assert!(state.check().is_none());
+
+        // New bytes after reset start a fresh timer.
+        state.record_bytes_read();
+        tokio::time::advance(std::time::Duration::from_secs(31)).await;
+        assert_eq!(state.check(), Some(false));
+    }
+
+    // -- Detailed logging integration (start) ---------------------------------
+
+    #[tokio::test]
+    async fn test_start_no_detailed_logging_event_with_headers() -> TestResult {
+        // File with structured headers should NOT produce a
+        // DetailedLoggingStatus event.
+        let content = "[UnityCrossThreadLogger]Updated account. \
+                        DisplayName:TestPlayer, \
+                        AccountID:abc123, \
+                        Token:sometoken\n\
+                        [UnityCrossThreadLogger]2/25/2026 12:00:00 PM\n\
+                        some filler\n";
+        let f = temp_log(content)?;
+
+        let (stream, mut sub) = MtgaEventStream::start(f.path()).await?;
+
+        // Collect events for a short window.
+        let mut events = Vec::new();
+        loop {
+            let result =
+                tokio::time::timeout(std::time::Duration::from_millis(500), sub.recv()).await;
+            match result {
+                Ok(Some(e)) => events.push(e),
+                _ => break,
+            }
+        }
+
+        // Should have a Session event but no DetailedLoggingStatus.
+        assert!(
+            events.iter().any(|e| matches!(e, GameEvent::Session(_))),
+            "expected at least one Session event"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, GameEvent::DetailedLoggingStatus(_))),
+            "should not emit DetailedLoggingStatus when headers are present"
+        );
+
+        stream.shutdown();
+        Ok(())
     }
 }
