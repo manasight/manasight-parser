@@ -1,22 +1,12 @@
 {
   "_meta": {
-    "corpus_tag": "smoke-data-v5",
     "description": "Smoke test baseline -- per-file, per-parser event counts from Level 1 (parser-only) smoke tests.",
-    "generated_from_commit": "9c32702"
+    "generated_from_commit": "0c506ec",
+    "corpus_tag": "smoke-data-v5"
   },
   "files": {
     "session_2026-02-22_a.log": {
-      "double_claims": 0,
-      "event_types": {
-        "ClientAction": 2026,
-        "EventLifecycle": 6,
-        "GameResult": 5,
-        "GameState": 4381,
-        "Inventory": 7,
-        "MatchState": 10,
-        "Rank": 7,
-        "Session": 6
-      },
+      "total_entries": 4914,
       "parsers": {
         "client_actions": 2026,
         "collection": 0,
@@ -27,27 +17,27 @@
         "gre": 2617,
         "inventory": 7,
         "match_state": 10,
+        "metadata": 1,
         "rank": 7,
         "session": 6
       },
-      "timestamp_failures": 163,
-      "total_entries": 4913,
-      "unclaimed": 234
+      "event_types": {
+        "ClientAction": 2026,
+        "DetailedLoggingStatus": 1,
+        "EventLifecycle": 6,
+        "GameResult": 5,
+        "GameState": 4381,
+        "Inventory": 7,
+        "MatchState": 10,
+        "Rank": 7,
+        "Session": 6
+      },
+      "unclaimed": 234,
+      "double_claims": 0,
+      "timestamp_failures": 164
     },
     "session_2026-02-22_b.log": {
-      "double_claims": 0,
-      "event_types": {
-        "ClientAction": 1488,
-        "DraftComplete": 2,
-        "DraftHuman": 116,
-        "EventLifecycle": 6,
-        "GameResult": 4,
-        "GameState": 3478,
-        "Inventory": 5,
-        "MatchState": 8,
-        "Rank": 5,
-        "Session": 5
-      },
+      "total_entries": 3996,
       "parsers": {
         "client_actions": 1488,
         "collection": 0,
@@ -58,25 +48,29 @@
         "gre": 2172,
         "inventory": 5,
         "match_state": 8,
+        "metadata": 1,
         "rank": 5,
         "session": 5
       },
-      "timestamp_failures": 213,
-      "total_entries": 3995,
-      "unclaimed": 188
+      "event_types": {
+        "ClientAction": 1488,
+        "DetailedLoggingStatus": 1,
+        "DraftComplete": 2,
+        "DraftHuman": 116,
+        "EventLifecycle": 6,
+        "GameResult": 4,
+        "GameState": 3478,
+        "Inventory": 5,
+        "MatchState": 8,
+        "Rank": 5,
+        "Session": 5
+      },
+      "unclaimed": 188,
+      "double_claims": 0,
+      "timestamp_failures": 214
     },
     "session_2026-02-23.log": {
-      "double_claims": 0,
-      "event_types": {
-        "ClientAction": 425,
-        "EventLifecycle": 4,
-        "GameResult": 2,
-        "GameState": 808,
-        "Inventory": 3,
-        "MatchState": 4,
-        "Rank": 3,
-        "Session": 3
-      },
+      "total_entries": 949,
       "parsers": {
         "client_actions": 425,
         "collection": 0,
@@ -87,25 +81,27 @@
         "gre": 375,
         "inventory": 3,
         "match_state": 4,
+        "metadata": 1,
         "rank": 3,
         "session": 3
       },
-      "timestamp_failures": 89,
-      "total_entries": 948,
-      "unclaimed": 131
+      "event_types": {
+        "ClientAction": 425,
+        "DetailedLoggingStatus": 1,
+        "EventLifecycle": 4,
+        "GameResult": 2,
+        "GameState": 808,
+        "Inventory": 3,
+        "MatchState": 4,
+        "Rank": 3,
+        "Session": 3
+      },
+      "unclaimed": 131,
+      "double_claims": 0,
+      "timestamp_failures": 90
     },
     "session_2026-03-05.log": {
-      "double_claims": 0,
-      "event_types": {
-        "ClientAction": 236,
-        "EventLifecycle": 2,
-        "GameResult": 1,
-        "GameState": 674,
-        "Inventory": 2,
-        "MatchState": 2,
-        "Rank": 2,
-        "Session": 2
-      },
+      "total_entries": 772,
       "parsers": {
         "client_actions": 236,
         "collection": 0,
@@ -116,23 +112,27 @@
         "gre": 454,
         "inventory": 2,
         "match_state": 2,
+        "metadata": 1,
         "rank": 2,
         "session": 2
       },
-      "timestamp_failures": 48,
-      "total_entries": 771,
-      "unclaimed": 71
+      "event_types": {
+        "ClientAction": 236,
+        "DetailedLoggingStatus": 1,
+        "EventLifecycle": 2,
+        "GameResult": 1,
+        "GameState": 674,
+        "Inventory": 2,
+        "MatchState": 2,
+        "Rank": 2,
+        "Session": 2
+      },
+      "unclaimed": 71,
+      "double_claims": 0,
+      "timestamp_failures": 49
     },
     "session_2026-03-06.log": {
-      "double_claims": 0,
-      "event_types": {
-        "DraftComplete": 2,
-        "DraftHuman": 62,
-        "EventLifecycle": 1,
-        "Inventory": 1,
-        "Rank": 1,
-        "Session": 1
-      },
+      "total_entries": 113,
       "parsers": {
         "client_actions": 0,
         "collection": 0,
@@ -143,25 +143,25 @@
         "gre": 0,
         "inventory": 1,
         "match_state": 0,
+        "metadata": 1,
         "rank": 1,
         "session": 1
       },
-      "timestamp_failures": 72,
-      "total_entries": 112,
-      "unclaimed": 44
+      "event_types": {
+        "DetailedLoggingStatus": 1,
+        "DraftComplete": 2,
+        "DraftHuman": 62,
+        "EventLifecycle": 1,
+        "Inventory": 1,
+        "Rank": 1,
+        "Session": 1
+      },
+      "unclaimed": 44,
+      "double_claims": 0,
+      "timestamp_failures": 73
     },
     "session_2026-03-06_b.log": {
-      "double_claims": 0,
-      "event_types": {
-        "ClientAction": 1157,
-        "EventLifecycle": 1,
-        "GameResult": 1,
-        "GameState": 1657,
-        "Inventory": 2,
-        "MatchState": 2,
-        "Rank": 2,
-        "Session": 2
-      },
+      "total_entries": 2306,
       "parsers": {
         "client_actions": 1157,
         "collection": 0,
@@ -172,25 +172,27 @@
         "gre": 1059,
         "inventory": 2,
         "match_state": 2,
+        "metadata": 1,
         "rank": 2,
         "session": 2
       },
-      "timestamp_failures": 55,
-      "total_entries": 2305,
-      "unclaimed": 80
-    },
-    "session_2026-03-08_1103.log": {
-      "double_claims": 0,
       "event_types": {
-        "ClientAction": 254,
-        "EventLifecycle": 2,
+        "ClientAction": 1157,
+        "DetailedLoggingStatus": 1,
+        "EventLifecycle": 1,
         "GameResult": 1,
-        "GameState": 307,
-        "Inventory": 3,
+        "GameState": 1657,
+        "Inventory": 2,
         "MatchState": 2,
-        "Rank": 3,
+        "Rank": 2,
         "Session": 2
       },
+      "unclaimed": 80,
+      "double_claims": 0,
+      "timestamp_failures": 56
+    },
+    "session_2026-03-08_1103.log": {
+      "total_entries": 461,
       "parsers": {
         "client_actions": 254,
         "collection": 0,
@@ -201,25 +203,27 @@
         "gre": 97,
         "inventory": 3,
         "match_state": 2,
+        "metadata": 1,
         "rank": 3,
         "session": 2
       },
-      "timestamp_failures": 65,
-      "total_entries": 460,
-      "unclaimed": 97
-    },
-    "session_2026-03-11_1847.log": {
-      "double_claims": 0,
       "event_types": {
-        "ClientAction": 740,
-        "EventLifecycle": 3,
+        "ClientAction": 254,
+        "DetailedLoggingStatus": 1,
+        "EventLifecycle": 2,
         "GameResult": 1,
-        "GameState": 1334,
+        "GameState": 307,
         "Inventory": 3,
-        "MatchState": 3,
+        "MatchState": 2,
         "Rank": 3,
         "Session": 2
       },
+      "unclaimed": 97,
+      "double_claims": 0,
+      "timestamp_failures": 66
+    },
+    "session_2026-03-11_1847.log": {
+      "total_entries": 1843,
       "parsers": {
         "client_actions": 740,
         "collection": 0,
@@ -230,25 +234,27 @@
         "gre": 900,
         "inventory": 3,
         "match_state": 3,
+        "metadata": 1,
         "rank": 3,
         "session": 2
       },
-      "timestamp_failures": 111,
-      "total_entries": 1842,
-      "unclaimed": 188
-    },
-    "session_2026-03-11_2124.log": {
-      "double_claims": 0,
       "event_types": {
-        "ClientAction": 405,
-        "EventLifecycle": 2,
-        "GameResult": 2,
-        "GameState": 1093,
-        "Inventory": 2,
-        "MatchState": 2,
-        "Rank": 2,
+        "ClientAction": 740,
+        "DetailedLoggingStatus": 1,
+        "EventLifecycle": 3,
+        "GameResult": 1,
+        "GameState": 1334,
+        "Inventory": 3,
+        "MatchState": 3,
+        "Rank": 3,
         "Session": 2
       },
+      "unclaimed": 188,
+      "double_claims": 0,
+      "timestamp_failures": 112
+    },
+    "session_2026-03-11_2124.log": {
+      "total_entries": 1159,
       "parsers": {
         "client_actions": 405,
         "collection": 0,
@@ -259,16 +265,27 @@
         "gre": 670,
         "inventory": 2,
         "match_state": 2,
+        "metadata": 1,
         "rank": 2,
         "session": 2
       },
-      "timestamp_failures": 48,
-      "total_entries": 1158,
-      "unclaimed": 73
+      "event_types": {
+        "ClientAction": 405,
+        "DetailedLoggingStatus": 1,
+        "EventLifecycle": 2,
+        "GameResult": 2,
+        "GameState": 1093,
+        "Inventory": 2,
+        "MatchState": 2,
+        "Rank": 2,
+        "Session": 2
+      },
+      "unclaimed": 73,
+      "double_claims": 0,
+      "timestamp_failures": 49
     },
     "session_2026-03-15_1157_detailed_logs_disabled.log": {
-      "double_claims": 0,
-      "event_types": {},
+      "total_entries": 16,
       "parsers": {
         "client_actions": 0,
         "collection": 0,
@@ -279,12 +296,16 @@
         "gre": 0,
         "inventory": 0,
         "match_state": 0,
+        "metadata": 1,
         "rank": 0,
         "session": 0
       },
-      "timestamp_failures": 15,
-      "total_entries": 15,
-      "unclaimed": 15
+      "event_types": {
+        "DetailedLoggingStatus": 1
+      },
+      "unclaimed": 15,
+      "double_claims": 0,
+      "timestamp_failures": 16
     }
   }
 }
