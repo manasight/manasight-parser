@@ -218,7 +218,9 @@ jobs:
         env:
           MANASIGHT_TEST_LOGS: /tmp/test-logs
           SMOKE_BLESS: "1"
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Use a PAT so the resulting pull_request event triggers CI workflows.
+          # The default GITHUB_TOKEN suppresses downstream workflow triggers.
+          GH_TOKEN: ${{ secrets.BASELINE_PR_TOKEN }}
         run: |
           # Re-run in bless mode to write updated baseline.
           if ! cargo test --all-features smoke_test_real_logs -- --nocapture 2>&1; then
@@ -234,6 +236,10 @@ jobs:
           # Configure git identity for the commit (checkout@v4 does not set these).
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Override the remote URL so git push uses the PAT (not the
+          # GITHUB_TOKEN that actions/checkout@v4 configured).
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
 
           BRANCH="auto/update-smoke-baseline-$(date +%Y%m%d-%H%M%S)"
           git checkout -b "$BRANCH"
