@@ -286,14 +286,38 @@ pub fn read_baseline() -> Option<Baseline> {
 ///
 /// Used in bless mode to update the committed baseline.
 /// Returns an error message on failure.
+///
+/// Serializes via [`serde_json::Value`] and recursively sorts all object keys
+/// so the output is independent of Rust struct field declaration order.
 pub fn write_baseline(baseline: &Baseline) -> Result<(), String> {
+    let value = serde_json::to_value(baseline).map_err(|e| format!("serialize error: {e}"))?;
+    let sorted = sort_json_keys(&value);
     let json =
-        serde_json::to_string_pretty(baseline).map_err(|e| format!("serialize error: {e}"))?;
+        serde_json::to_string_pretty(&sorted).map_err(|e| format!("serialize error: {e}"))?;
     // Ensure trailing newline for POSIX compliance.
     let content = format!("{json}\n");
     std::fs::write(BASELINE_PATH, content)
         .map_err(|e| format!("failed to write {BASELINE_PATH}: {e}"))?;
     Ok(())
+}
+
+/// Recursively sorts all object keys in a JSON value alphabetically.
+fn sort_json_keys(value: &serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Object(map) => {
+            let sorted: serde_json::Map<String, serde_json::Value> = map
+                .iter()
+                .map(|(k, v)| (k.clone(), sort_json_keys(v)))
+                .collect::<BTreeMap<String, serde_json::Value>>()
+                .into_iter()
+                .collect();
+            serde_json::Value::Object(sorted)
+        }
+        serde_json::Value::Array(arr) => {
+            serde_json::Value::Array(arr.iter().map(sort_json_keys).collect())
+        }
+        other => other.clone(),
+    }
 }
 
 /// Returns `true` if `SMOKE_BLESS=1` is set in the environment.
@@ -472,4 +496,53 @@ pub fn compare_against_baseline(
     });
 
     RatchetResult { diffs }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sort_json_keys_reorders_object_keys_alphabetically() {
+        let input: serde_json::Value = serde_json::json!({
+            "z_last": 1,
+            "a_first": 2,
+            "m_middle": { "beta": 10, "alpha": 20 }
+        });
+        let sorted = sort_json_keys(&input);
+        // Serialized output must have keys in alphabetical order.
+        let json = serde_json::to_string(&sorted).unwrap_or_default();
+        assert!(json.starts_with(r#"{"a_first":2,"m_middle":{"alpha":20,"beta":10},"z_last":1}"#));
+    }
+
+    #[test]
+    fn test_sort_json_keys_preserves_array_order() {
+        let input: serde_json::Value = serde_json::json!([
+            {"b": 1, "a": 2},
+            {"d": 3, "c": 4}
+        ]);
+        let sorted = sort_json_keys(&input);
+        let json = serde_json::to_string(&sorted).unwrap_or_default();
+        assert_eq!(json, r#"[{"a":2,"b":1},{"c":4,"d":3}]"#);
+    }
+
+    #[test]
+    fn test_sort_json_keys_leaves_scalars_unchanged() {
+        assert_eq!(
+            sort_json_keys(&serde_json::json!(42)),
+            serde_json::json!(42)
+        );
+        assert_eq!(
+            sort_json_keys(&serde_json::json!("hi")),
+            serde_json::json!("hi")
+        );
+        assert_eq!(
+            sort_json_keys(&serde_json::json!(null)),
+            serde_json::json!(null)
+        );
+        assert_eq!(
+            sort_json_keys(&serde_json::json!(true)),
+            serde_json::json!(true)
+        );
+    }
 }
