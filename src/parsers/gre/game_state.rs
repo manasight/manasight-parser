@@ -1,6 +1,6 @@
 //! `GameStateMessage` and `QueuedGameStateMessage` payload builder.
 
-use super::annotations::extract_annotations;
+use super::annotations::{extract_annotations, extract_persistent_annotations};
 use super::helpers::{extract_nested_value, extract_string_array};
 use super::turn_info::extract_turn_info;
 
@@ -20,6 +20,7 @@ use super::turn_info::extract_turn_info;
 ///   "game_info": { ... },
 ///   "turn_info": { "turn_number": 3, "phase": "Phase_Main1", ... },
 ///   "annotations": [ { "id": 145, "affector_id": 296, ... }, ... ],
+///   "persistent_annotations": [ { "id": 5, "affector_id": 28, ... }, ... ],
 ///   "timers": [ { "timer_id": 9, "type": "TimerType_ActivePlayer", ... }, ... ],
 ///   "diff_deleted_instance_ids": [279, 282, 284]
 /// }
@@ -27,9 +28,9 @@ use super::turn_info::extract_turn_info;
 ///
 /// Incremental updates may include only a subset of zones and objects.
 /// Missing fields default to empty arrays / null. `turn_info` is `null`
-/// when `gameInfo.turnInfo` is absent. `annotations`, `timers`, and
-/// `diff_deleted_instance_ids` are empty arrays when their respective
-/// source arrays are absent.
+/// when `gameInfo.turnInfo` is absent. `annotations`, `persistent_annotations`,
+/// `timers`, and `diff_deleted_instance_ids` are empty arrays when their
+/// respective source arrays are absent.
 pub(super) fn build_game_state_message_payload(gre_msg: &serde_json::Value) -> serde_json::Value {
     let gsm = gre_msg.get("gameStateMessage");
 
@@ -73,6 +74,9 @@ pub(super) fn build_game_state_message_payload(gre_msg: &serde_json::Value) -> s
     // Extract annotations from gameStateMessage.annotations[].
     let annotations = extract_annotations(gsm);
 
+    // Extract persistent annotations from gameStateMessage.persistentAnnotations[].
+    let persistent_annotations = extract_persistent_annotations(gsm);
+
     // Extract inline timers from gameStateMessage.timers[].
     let timers = extract_timers(gsm);
 
@@ -96,6 +100,7 @@ pub(super) fn build_game_state_message_payload(gre_msg: &serde_json::Value) -> s
         "game_info": game_info,
         "turn_info": turn_info,
         "annotations": annotations,
+        "persistent_annotations": persistent_annotations,
         "timers": timers,
         "diff_deleted_instance_ids": diff_deleted_instance_ids,
     })
@@ -354,6 +359,19 @@ fn extract_single_game_object(obj: &serde_json::Value) -> Option<serde_json::Val
     }
     if !block_info_attacker_ids.is_empty() {
         result["block_info"] = serde_json::json!({ "attacker_ids": block_info_attacker_ids });
+    }
+
+    // Ability chain fields: only present on GameObjectType_Ability objects.
+    // objectSourceGrpId = GRP ID of the card that created this ability.
+    // parentId = instance ID of the source card on the battlefield.
+    if let Some(source_grp_id) = obj
+        .get("objectSourceGrpId")
+        .and_then(serde_json::Value::as_i64)
+    {
+        result["object_source_grp_id"] = serde_json::json!(source_grp_id);
+    }
+    if let Some(parent_id) = obj.get("parentId").and_then(serde_json::Value::as_i64) {
+        result["parent_id"] = serde_json::json!(parent_id);
     }
 
     Some(result)
@@ -1698,5 +1716,84 @@ mod tests {
             assert_eq!(ids.len(), 1);
             assert_eq!(ids[0], 500);
         }
+    }
+
+    // -- Ability chain fields (objectSourceGrpId, parentId) -------------------
+
+    #[test]
+    fn test_game_object_ability_has_source_grp_id_and_parent_id() {
+        let body = format!(
+            "[UnityCrossThreadLogger]greToClientEvent\n{}",
+            serde_json::json!({
+                "greToClientEvent": {
+                    "greToClientMessages": [{
+                        "type": "GREMessageType_GameStateMessage",
+                        "msgId": 40,
+                        "gameStateId": 110,
+                        "gameStateMessage": {
+                            "gameObjects": [{
+                                "instanceId": 294,
+                                "grpId": 174_395,
+                                "type": "GameObjectType_Ability",
+                                "zoneId": 27,
+                                "visibility": "Visibility_Public",
+                                "ownerSeatId": 1,
+                                "controllerSeatId": 1,
+                                "objectSourceGrpId": 92189,
+                                "parentId": 291
+                            }]
+                        }
+                    }]
+                }
+            })
+        );
+        let entry = unity_entry(&body);
+        let event = try_parse(&entry, Some(test_timestamp()))
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| unreachable!());
+        let payload = game_state_payload(&event);
+
+        let obj = &payload["game_objects"][0];
+        assert_eq!(obj["object_type"], "GameObjectType_Ability");
+        assert_eq!(obj["object_source_grp_id"], 92189);
+        assert_eq!(obj["parent_id"], 291);
+    }
+
+    #[test]
+    fn test_game_object_card_omits_ability_chain_fields() {
+        let body = format!(
+            "[UnityCrossThreadLogger]greToClientEvent\n{}",
+            serde_json::json!({
+                "greToClientEvent": {
+                    "greToClientMessages": [{
+                        "type": "GREMessageType_GameStateMessage",
+                        "msgId": 41,
+                        "gameStateId": 111,
+                        "gameStateMessage": {
+                            "gameObjects": [{
+                                "instanceId": 291,
+                                "grpId": 92189,
+                                "type": "GameObjectType_Card",
+                                "zoneId": 28,
+                                "ownerSeatId": 1,
+                                "controllerSeatId": 1
+                            }]
+                        }
+                    }]
+                }
+            })
+        );
+        let entry = unity_entry(&body);
+        let event = try_parse(&entry, Some(test_timestamp()))
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| unreachable!());
+        let payload = game_state_payload(&event);
+
+        let obj = &payload["game_objects"][0];
+        assert_eq!(obj["object_type"], "GameObjectType_Card");
+        assert!(obj.get("object_source_grp_id").is_none());
+        assert!(obj.get("parent_id").is_none());
     }
 }
