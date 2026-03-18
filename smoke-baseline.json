@@ -1,8 +1,8 @@
 {
   "_meta": {
-    "corpus_tag": "smoke-data-v5",
+    "corpus_tag": "smoke-data-v6",
     "description": "Smoke test baseline -- per-file, per-parser event counts from Level 1 (parser-only) smoke tests.",
-    "generated_from_commit": "f59c86c"
+    "generated_from_commit": "40e2475"
   },
   "files": {
     "session_2026-02-22_a.log": {
@@ -306,6 +306,57 @@
       "timestamp_failures": 16,
       "total_entries": 16,
       "unclaimed": 15
+    },
+    "session_2026-03-17_1933.log": {
+      "double_claims": 0,
+      "event_types": {
+        "ClientAction": 393,
+        "DetailedLoggingStatus": 1,
+        "GameResult": 2,
+        "GameState": 456,
+        "Inventory": 3,
+        "MatchState": 4,
+        "Rank": 3,
+        "Session": 3
+      },
+      "parsers": {
+        "client_actions": 393,
+        "collection": 0,
+        "draft_bot": 0,
+        "draft_complete": 0,
+        "draft_human": 0,
+        "event_lifecycle": 0,
+        "gre": 125,
+        "inventory": 3,
+        "match_state": 4,
+        "metadata": 1,
+        "rank": 3,
+        "session": 3
+      },
+      "timestamp_failures": 77,
+      "total_entries": 645,
+      "unclaimed": 113
+    },
+    "session_2026-03-17_1933.manasight.log": {
+      "double_claims": 0,
+      "event_types": {},
+      "parsers": {
+        "client_actions": 0,
+        "collection": 0,
+        "draft_bot": 0,
+        "draft_complete": 0,
+        "draft_human": 0,
+        "event_lifecycle": 0,
+        "gre": 0,
+        "inventory": 0,
+        "match_state": 0,
+        "metadata": 0,
+        "rank": 0,
+        "session": 0
+      },
+      "timestamp_failures": 0,
+      "total_entries": 0,
+      "unclaimed": 0
     }
   }
 }
