@@ -68,12 +68,15 @@ pub(super) fn build_game_result_payload(gre_msg: &serde_json::Value) -> serde_js
         .cloned()
         .unwrap_or(serde_json::Value::Array(Vec::new()));
 
-    // Find the first MatchScope_Game result for top-level convenience fields.
+    // Find the latest MatchScope_Game result for top-level convenience fields.
+    // We search in reverse (.rev()) because Arena appends new game results to
+    // the array in Bo3 matches. Searching from the start would always return
+    // the result of Game 1, even when processing Game 2 or 3.
     let game_scope_result = game_info
         .and_then(|gi| gi.get("results"))
         .and_then(serde_json::Value::as_array)
         .and_then(|arr| {
-            arr.iter().find(|r| {
+            arr.iter().rev().find(|r| {
                 r.get("scope").and_then(serde_json::Value::as_str) == Some("MatchScope_Game")
             })
         });
@@ -461,6 +464,92 @@ mod tests {
                 .as_array()
                 .unwrap_or_else(|| unreachable!());
             assert_eq!(results.len(), 2);
+        }
+
+        #[test]
+        fn test_try_parse_game_over_bo3_full_match_sequence() {
+            // This test simulates the sequence of GameStage_GameOver messages
+            // received throughout a full Best-of-3 match.
+
+            // --- Game 1 End (Team 1 wins) ---
+            let body1 = format!(
+                "[UnityCrossThreadLogger]greToClientEvent\n{}",
+                serde_json::json!({
+                    "greToClientEvent": {
+                        "greToClientMessages": [{
+                            "type": "GREMessageType_GameStateMessage",
+                            "gameStateMessage": {
+                                "gameInfo": {
+                                    "stage": "GameStage_GameOver",
+                                    "matchState": "MatchState_GameComplete",
+                                    "results": [
+                                        { "scope": "MatchScope_Game", "winningTeamId": 1 }
+                                    ]
+                                }
+                            }
+                        }]
+                    }
+                })
+            );
+            let entry1 = unity_entry(&body1);
+            let event1 = &try_parse(&entry1, Some(test_timestamp()))[0];
+            assert_eq!(game_result_payload(event1)["winning_team_id"], 1);
+
+            // --- Game 2 End (Team 2 wins) ---
+            // The results array now contains BOTH game results.
+            let body2 = format!(
+                "[UnityCrossThreadLogger]greToClientEvent\n{}",
+                serde_json::json!({
+                    "greToClientEvent": {
+                        "greToClientMessages": [{
+                            "type": "GREMessageType_GameStateMessage",
+                            "gameStateMessage": {
+                                "gameInfo": {
+                                    "stage": "GameStage_GameOver",
+                                    "matchState": "MatchState_GameComplete",
+                                    "results": [
+                                        { "scope": "MatchScope_Game", "winningTeamId": 1 },
+                                        { "scope": "MatchScope_Game", "winningTeamId": 2 }
+                                    ]
+                                }
+                            }
+                        }]
+                    }
+                })
+            );
+            let entry2 = unity_entry(&body2);
+            let event2 = &try_parse(&entry2, Some(test_timestamp()))[0];
+            // Without .rev(), this would incorrectly return 1 (the first entry).
+            assert_eq!(game_result_payload(event2)["winning_team_id"], 2);
+
+            // --- Game 3 End (Team 1 wins match) ---
+            // The results array now contains all 3 game results + the match result.
+            let body3 = format!(
+                "[UnityCrossThreadLogger]greToClientEvent\n{}",
+                serde_json::json!({
+                    "greToClientEvent": {
+                        "greToClientMessages": [{
+                            "type": "GREMessageType_GameStateMessage",
+                            "gameStateMessage": {
+                                "gameInfo": {
+                                    "stage": "GameStage_GameOver",
+                                    "matchState": "MatchState_GameComplete",
+                                    "results": [
+                                        { "scope": "MatchScope_Game", "winningTeamId": 1 },
+                                        { "scope": "MatchScope_Game", "winningTeamId": 2 },
+                                        { "scope": "MatchScope_Game", "winningTeamId": 1 },
+                                        { "scope": "MatchScope_Match", "winningTeamId": 1 }
+                                    ]
+                                }
+                            }
+                        }]
+                    }
+                })
+            );
+            let entry3 = unity_entry(&body3);
+            let event3 = &try_parse(&entry3, Some(test_timestamp()))[0];
+            // Should correctly extract the latest game winner (Team 1).
+            assert_eq!(game_result_payload(event3)["winning_team_id"], 1);
         }
 
         #[test]
