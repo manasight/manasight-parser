@@ -367,27 +367,6 @@
       "timestamp_failures": 50,
       "total_entries": 712,
       "unclaimed": 74
-    },
-    "session_2026-03-21_0905.manasight.log": {
-      "double_claims": 0,
-      "event_types": {},
-      "parsers": {
-        "client_actions": 0,
-        "collection": 0,
-        "draft_bot": 0,
-        "draft_complete": 0,
-        "draft_human": 0,
-        "event_lifecycle": 0,
-        "gre": 0,
-        "inventory": 0,
-        "match_state": 0,
-        "metadata": 0,
-        "rank": 0,
-        "session": 0
-      },
-      "timestamp_failures": 0,
-      "total_entries": 0,
-      "unclaimed": 0
     }
   }
 }
