@@ -1,8 +1,8 @@
 {
   "_meta": {
-    "corpus_tag": "smoke-data-v6",
+    "corpus_tag": "smoke-data-v7",
     "description": "Smoke test baseline -- per-file, per-parser event counts from Level 1 (parser-only) smoke tests.",
-    "generated_from_commit": "40e2475"
+    "generated_from_commit": "f0ffcec"
   },
   "files": {
     "session_2026-02-22_a.log": {
@@ -336,6 +336,37 @@
       "timestamp_failures": 77,
       "total_entries": 645,
       "unclaimed": 113
+    },
+    "session_2026-03-21_0905.log": {
+      "double_claims": 0,
+      "event_types": {
+        "ClientAction": 325,
+        "DetailedLoggingStatus": 1,
+        "EventLifecycle": 2,
+        "GameResult": 2,
+        "GameState": 671,
+        "Inventory": 2,
+        "MatchState": 2,
+        "Rank": 2,
+        "Session": 1
+      },
+      "parsers": {
+        "client_actions": 325,
+        "collection": 0,
+        "draft_bot": 0,
+        "draft_complete": 0,
+        "draft_human": 0,
+        "event_lifecycle": 2,
+        "gre": 303,
+        "inventory": 2,
+        "match_state": 2,
+        "metadata": 1,
+        "rank": 2,
+        "session": 1
+      },
+      "timestamp_failures": 50,
+      "total_entries": 712,
+      "unclaimed": 74
     }
   }
 }
