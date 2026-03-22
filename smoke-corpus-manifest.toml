@@ -16,7 +16,7 @@
 #   size_bytes     — file size in bytes
 #   date_captured  — date the play session was recorded (YYYY-MM-DD)
 
-corpus_tag = "smoke-data-v9"
+corpus_tag = "smoke-data-v10"
 
 [[files]]
 filename     = "session_2026-02-22_a.log"
