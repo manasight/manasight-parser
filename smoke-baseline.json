@@ -1,8 +1,8 @@
 {
   "_meta": {
-    "corpus_tag": "smoke-data-v7",
+    "corpus_tag": "smoke-data-v10",
     "description": "Smoke test baseline -- per-file, per-parser event counts from Level 1 (parser-only) smoke tests.",
-    "generated_from_commit": "f0ffcec"
+    "generated_from_commit": "c411e226c7b48a2e30b0374e6d39dbd75afe17e5"
   },
   "files": {
     "session_2026-02-22_a.log": {
@@ -367,6 +367,68 @@
       "timestamp_failures": 50,
       "total_entries": 712,
       "unclaimed": 74
+    },
+    "session_2026-03-22_1232_debug.log": {
+      "double_claims": 0,
+      "event_types": {
+        "ClientAction": 2012,
+        "DetailedLoggingStatus": 1,
+        "EventLifecycle": 16,
+        "GameResult": 10,
+        "GameState": 3724,
+        "Inventory": 11,
+        "MatchState": 20,
+        "Rank": 11,
+        "Session": 10
+      },
+      "parsers": {
+        "client_actions": 2012,
+        "collection": 0,
+        "draft_bot": 0,
+        "draft_complete": 0,
+        "draft_human": 0,
+        "event_lifecycle": 16,
+        "gre": 1698,
+        "inventory": 11,
+        "match_state": 20,
+        "metadata": 1,
+        "rank": 11,
+        "session": 10
+      },
+      "timestamp_failures": 298,
+      "total_entries": 4204,
+      "unclaimed": 425
+    },
+    "session_2026-03-22_feedback-019d1311.log": {
+      "double_claims": 0,
+      "event_types": {
+        "ClientAction": 1137,
+        "DetailedLoggingStatus": 1,
+        "EventLifecycle": 4,
+        "GameResult": 2,
+        "GameState": 2212,
+        "Inventory": 2,
+        "MatchState": 4,
+        "Rank": 2,
+        "Session": 2
+      },
+      "parsers": {
+        "client_actions": 1137,
+        "collection": 0,
+        "draft_bot": 0,
+        "draft_complete": 0,
+        "draft_human": 0,
+        "event_lifecycle": 4,
+        "gre": 1172,
+        "inventory": 2,
+        "match_state": 4,
+        "metadata": 1,
+        "rank": 2,
+        "session": 2
+      },
+      "timestamp_failures": 82,
+      "total_entries": 2435,
+      "unclaimed": 111
     }
   }
 }

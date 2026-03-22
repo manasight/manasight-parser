@@ -72,7 +72,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /tmp/smoke-corpus.tar.gz
-          key: smoke-corpus-v7
+          key: smoke-corpus-v10
 
       # Download corpus from manasight-test-data GitHub Release.
       - name: Download corpus
@@ -80,7 +80,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.TEST_DATA_TOKEN }}
         run: |
-          gh release download smoke-data-v7 \
+          gh release download smoke-data-v10 \
             --repo manasight/manasight-test-data \
             --pattern "*.tar.gz" \
             --output /tmp/smoke-corpus.tar.gz
