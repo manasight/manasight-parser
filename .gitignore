@@ -4,6 +4,7 @@
 # Environment files
 .env
 .env.*
+.envrc
 
 # OS files
 .DS_Store
