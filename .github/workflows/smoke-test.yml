@@ -22,6 +22,8 @@ on:
   # Manual trigger for ad-hoc runs.
   workflow_dispatch:
 
+permissions: {}
+
 # Only one smoke test per ref at a time.
 concurrency:
   group: smoke-test-${{ github.ref }}
@@ -43,7 +45,7 @@ jobs:
       pull-requests: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       # Detect whether the TEST_DATA_TOKEN secret is available.
       # Fork PRs and repos without the secret will skip gracefully.
@@ -61,7 +63,7 @@ jobs:
 
       - name: Install Rust toolchain
         if: steps.secrets-check.outputs.skip == 'false'
-        uses: actions-rust-lang/setup-rust-toolchain@v1
+        uses: actions-rust-lang/setup-rust-toolchain@150fca883cd4034361b621bd4e6a9d34e5143606 # v1
 
       # Cache the downloaded corpus tarball between runs.
       # The key is paired with the release tag (smoke-data-v6). If the corpus
@@ -69,7 +71,7 @@ jobs:
       - name: Cache corpus tarball
         if: steps.secrets-check.outputs.skip == 'false'
         id: cache-corpus
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: /tmp/smoke-corpus.tar.gz
           key: smoke-corpus-v10
@@ -191,7 +193,7 @@ jobs:
       # Upload full smoke test output as artifact.
       - name: Upload report
         if: always() && steps.secrets-check.outputs.skip == 'false' && steps.smoke.outcome != 'skipped'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: smoke-test-report
           path: /tmp/smoke-output.txt
