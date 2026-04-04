@@ -1,0 +1,14 @@
+# Gitleaks configuration for manasight-parser
+# https://github.com/gitleaks/gitleaks
+
+title = "manasight-parser gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+  description = "Global allowlist"
+  paths = [
+    '''tests/fixtures/.*''',
+    '''\.env\.example''',
+  ]
