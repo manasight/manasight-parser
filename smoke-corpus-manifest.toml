@@ -16,7 +16,7 @@
 #   size_bytes     — file size in bytes
 #   date_captured  — date the play session was recorded (YYYY-MM-DD)
 
-corpus_tag = "smoke-data-v10"
+corpus_tag = "smoke-data-v11"
 
 [[files]]
 filename     = "session_2026-02-22_a.log"
@@ -101,3 +101,9 @@ filename     = "session_2026-03-22_feedback-019d1311.log"
 sha256       = "3c498279c0f254d89350d5491df3b49aa4175e65b8ab81d97e8976aca641164e"
 size_bytes   = 10512926
 date_captured = "2026-03-22"
+
+[[files]]
+filename     = "session_2026-04-05_feedback-019d5e75.log"
+sha256       = "378060d73c98381ec2c009873beabfb63bb722cfbfad8a9ea4bedf741abcb51d"
+size_bytes   = 25898695
+date_captured = "2026-04-05"

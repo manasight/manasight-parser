@@ -82,7 +82,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.TEST_DATA_TOKEN }}
         run: |
-          gh release download smoke-data-v10 \
+          gh release download smoke-data-v11 \
             --repo manasight/manasight-test-data \
             --pattern "*.tar.gz" \
             --output /tmp/smoke-corpus.tar.gz
