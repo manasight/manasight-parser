@@ -399,27 +399,6 @@
       "total_entries": 4204,
       "unclaimed": 425
     },
-    "session_2026-03-22_1232_debug.manasight.log": {
-      "double_claims": 0,
-      "event_types": {},
-      "parsers": {
-        "client_actions": 0,
-        "collection": 0,
-        "draft_bot": 0,
-        "draft_complete": 0,
-        "draft_human": 0,
-        "event_lifecycle": 0,
-        "gre": 0,
-        "inventory": 0,
-        "match_state": 0,
-        "metadata": 0,
-        "rank": 0,
-        "session": 0
-      },
-      "timestamp_failures": 0,
-      "total_entries": 0,
-      "unclaimed": 0
-    },
     "session_2026-03-22_feedback-019d1311.log": {
       "double_claims": 0,
       "event_types": {
@@ -480,27 +459,6 @@
       "timestamp_failures": 60,
       "total_entries": 603,
       "unclaimed": 90
-    },
-    "session_2026-04-05_1509.manasight.log": {
-      "double_claims": 0,
-      "event_types": {},
-      "parsers": {
-        "client_actions": 0,
-        "collection": 0,
-        "draft_bot": 0,
-        "draft_complete": 0,
-        "draft_human": 0,
-        "event_lifecycle": 0,
-        "gre": 0,
-        "inventory": 0,
-        "match_state": 0,
-        "metadata": 0,
-        "rank": 0,
-        "session": 0
-      },
-      "timestamp_failures": 0,
-      "total_entries": 0,
-      "unclaimed": 0
     },
     "session_2026-04-05_feedback-019d5e75.log": {
       "double_claims": 0,
