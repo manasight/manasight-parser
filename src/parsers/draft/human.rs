@@ -142,28 +142,56 @@ fn try_parse_draft_notify(body: &str) -> Option<serde_json::Value> {
 ///   - `CardId`: the GRP ID of the selected card
 ///   - `PackNumber`: zero-indexed pack number
 ///   - `PickNumber`: zero-indexed pick number within the pack
+/// - OR an outbound API request format containing:
+///   - `request` string-escaped JSON with `GrpIds` (array), `Pack`, and `Pick`
 fn try_parse_make_pick(body: &str) -> Option<serde_json::Value> {
     if !body.contains(MAKE_PICK_MARKER) {
         return None;
     }
 
+    // Ignore paired API responses like `<== EventPlayerDraftMakePick(uuid)`.
+    // They only confirm success and do not contain pack, pick or card IDs.
+    if api_common::is_api_response(body, MAKE_PICK_MARKER) {
+        return None;
+    }
+
     let parsed = api_common::parse_json_from_body(body, "EventPlayerDraftMakePick")?;
 
-    // The pick info may be at top level or nested under a `PickInfo` key.
-    let pick_info = parsed.get("PickInfo").unwrap_or(&parsed);
+    // Try to extract the string-escaped `request` payload if it exists (outbound API request)
+    let request_payload = parsed
+        .get("request")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok());
+
+    // The pick info may be at top level, nested under a `PickInfo` key, or inside the `request` payload.
+    // We prioritize `PickInfo`, then the parsed `request`, then the top-level `parsed` object.
+    let pick_info = parsed
+        .get("PickInfo")
+        .or_else(|| request_payload.as_ref())
+        .unwrap_or(&parsed);
 
     let card_id = pick_info
         .get("CardId")
         .and_then(serde_json::Value::as_i64)
+        .or_else(|| {
+            // Outbound request format has `GrpIds` as an array
+            pick_info
+                .get("GrpIds")
+                .and_then(|v| v.as_array())
+                .and_then(|arr| arr.first())
+                .and_then(serde_json::Value::as_i64)
+        })
         .unwrap_or(0);
 
     let pack_idx = pick_info
         .get("PackNumber")
+        .or_else(|| pick_info.get("Pack"))
         .and_then(serde_json::Value::as_i64)
         .unwrap_or(0);
 
     let selection_idx = pick_info
         .get("PickNumber")
+        .or_else(|| pick_info.get("Pick"))
         .and_then(serde_json::Value::as_i64)
         .unwrap_or(0);
 
@@ -184,8 +212,17 @@ fn try_parse_make_pick(body: &str) -> Option<serde_json::Value> {
         })
         .unwrap_or_default();
 
+    let draft_id = pick_info
+        .get("DraftId")
+        .or_else(|| pick_info.get("draftId"))
+        .or_else(|| parsed.get("DraftId"))
+        .or_else(|| parsed.get("draftId"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+
     Some(serde_json::json!({
         "type": "draft_human_pick",
+        "draft_id": draft_id,
         "event_name": event_name,
         "card_id": card_id,
         "pack_number": pack_idx,
@@ -668,6 +705,42 @@ mod tests {
             let payload = draft_human_payload(event);
 
             assert_eq!(payload["raw_make_pick"]["PickInfo"]["ExtraField"], "kept");
+        }
+
+        #[test]
+        fn test_try_parse_make_pick_outbound_request_format() {
+            let body = "[UnityCrossThreadLogger]==> EventPlayerDraftMakePick\n\
+                         {\n\
+                           \"id\": \"b0114c5d-0462-4855-a7ab-d06ede720f93\",\n\
+                           \"request\": \"{\\\"DraftId\\\":\\\"0784e646\\\",\\\"GrpIds\\\":[100486],\\\"Pack\\\":1,\\\"Pick\\\":2}\"\n\
+                         }";
+            let entry = unity_entry(body);
+            let result = try_parse(&entry, Some(test_timestamp()));
+
+            assert!(result.is_some());
+            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            let payload = draft_human_payload(event);
+
+            assert_eq!(payload["type"], "draft_human_pick");
+            assert_eq!(payload["card_id"], 100486);
+            assert_eq!(payload["pack_number"], 1);
+            assert_eq!(payload["pick_number"], 2);
+            assert_eq!(payload["event_name"], ""); // No event name in this format
+            assert_eq!(
+                payload["raw_make_pick"]["id"],
+                "b0114c5d-0462-4855-a7ab-d06ede720f93"
+            );
+        }
+
+        #[test]
+        fn test_try_parse_make_pick_ignores_success_response() {
+            let body = "[UnityCrossThreadLogger]3/11/2026 9:44:16 PM\n\
+                         <== EventPlayerDraftMakePick(b0114c5d-0462-4855-a7ab-d06ede720f93)\n\
+                         {\"IsPickSuccessful\":true}";
+            let entry = unity_entry(body);
+            let result = try_parse(&entry, Some(test_timestamp()));
+
+            assert!(result.is_none());
         }
 
         #[test]
