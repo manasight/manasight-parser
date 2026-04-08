@@ -167,7 +167,7 @@ fn try_parse_make_pick(body: &str) -> Option<serde_json::Value> {
     // We prioritize `PickInfo`, then the parsed `request`, then the top-level `parsed` object.
     let pick_info = parsed
         .get("PickInfo")
-        .or_else(|| request_payload.as_ref())
+        .or(request_payload.as_ref())
         .unwrap_or(&parsed);
 
     let card_id = pick_info
@@ -722,7 +722,7 @@ mod tests {
             let payload = draft_human_payload(event);
 
             assert_eq!(payload["type"], "draft_human_pick");
-            assert_eq!(payload["card_id"], 100486);
+            assert_eq!(payload["card_id"], 100_486);
             assert_eq!(payload["pack_number"], 1);
             assert_eq!(payload["pick_number"], 2);
             assert_eq!(payload["event_name"], ""); // No event name in this format
