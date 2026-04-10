@@ -143,7 +143,7 @@ fn try_parse_draft_notify(body: &str) -> Option<serde_json::Value> {
 ///   - `PackNumber`: zero-indexed pack number
 ///   - `PickNumber`: zero-indexed pick number within the pack
 /// - OR an outbound API request format containing:
-///   - `request` string-escaped JSON with `GrpIds` (array), `Pack`, and `Pick`
+///   - `request` string-escaped JSON with `DraftId`, `GrpIds` (array), `Pack`, and `Pick`
 fn try_parse_make_pick(body: &str) -> Option<serde_json::Value> {
     if !body.contains(MAKE_PICK_MARKER) {
         return None;
@@ -725,6 +725,7 @@ mod tests {
             assert_eq!(payload["card_id"], 100_486);
             assert_eq!(payload["pack_number"], 1);
             assert_eq!(payload["pick_number"], 2);
+            assert_eq!(payload["draft_id"], "0784e646");
             assert_eq!(payload["event_name"], ""); // No event name in this format
             assert_eq!(
                 payload["raw_make_pick"]["id"],
