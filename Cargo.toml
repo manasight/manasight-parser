@@ -10,9 +10,14 @@ rust-version = "1.93.0"
 keywords = ["mtg-arena", "parser", "log", "magic-the-gathering"]
 categories = ["parser-implementations", "games"]
 
+[[bin]]
+name = "scrub"
+path = "src/bin/scrub.rs"
+
 [dependencies]
 base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
+flate2 = "1"
 log = "0.4"
 regex = "1"
 serde = { version = "1", features = ["derive"] }
