@@ -9,30 +9,79 @@ permissions:
 
 jobs:
   build:
-    name: Build scrub binary
-    runs-on: ubuntu-latest
+    name: Build scrub (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+            artifact: scrub-linux-x86_64
+          - target: x86_64-apple-darwin
+            runner: macos-latest
+            artifact: scrub-macos-x86_64
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+            artifact: scrub-macos-aarch64
+          - target: x86_64-pc-windows-msvc
+            runner: windows-latest
+            artifact: scrub-windows-x86_64
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Install Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@150fca883cd4034361b621bd4e6a9d34e5143606 # v1
+        with:
+          target: ${{ matrix.target }}
 
       - name: Build scrub (release)
-        run: cargo build --release --bin scrub
+        run: cargo build --release --bin scrub --target ${{ matrix.target }}
 
-      - name: Package binary
+      - name: Package binary (Unix)
+        if: runner.os != 'Windows'
         run: |
-          cd target/release
-          tar czf scrub-linux-x86_64.tar.gz scrub
-          sha256sum scrub-linux-x86_64.tar.gz > scrub-linux-x86_64.tar.gz.sha256
+          cd target/${{ matrix.target }}/release
+          tar czf ${{ matrix.artifact }}.tar.gz scrub
+          sha256sum ${{ matrix.artifact }}.tar.gz > ${{ matrix.artifact }}.tar.gz.sha256
 
-      - name: Create GitHub Release
+      - name: Package binary (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cd target/${{ matrix.target }}/release
+          Compress-Archive -Path scrub.exe -DestinationPath ${{ matrix.artifact }}.zip
+          (Get-FileHash ${{ matrix.artifact }}.zip -Algorithm SHA256).Hash.ToLower() + "  ${{ matrix.artifact }}.zip" | Out-File -Encoding ascii ${{ matrix.artifact }}.zip.sha256
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            target/${{ matrix.target }}/release/${{ matrix.artifact }}.tar.gz
+            target/${{ matrix.target }}/release/${{ matrix.artifact }}.tar.gz.sha256
+            target/${{ matrix.target }}/release/${{ matrix.artifact }}.zip
+            target/${{ matrix.target }}/release/${{ matrix.artifact }}.zip.sha256
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           gh release create "${{ github.ref_name }}" \
             --title "${{ github.ref_name }}" \
             --generate-notes \
-            target/release/scrub-linux-x86_64.tar.gz \
-            target/release/scrub-linux-x86_64.tar.gz.sha256
+            artifacts/*
