@@ -56,6 +56,8 @@ jobs:
       # Query the latest corpus release tag for cache keying.
       - name: Resolve corpus release tag
         id: corpus-tag
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           TAG=$(gh release view --repo manasight/manasight-corpus --json tagName --jq '.tagName')
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
@@ -73,6 +75,8 @@ jobs:
       # Download corpus from the public manasight-corpus GitHub Release.
       - name: Download corpus
         if: steps.cache-corpus.outputs.cache-hit != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           gh release download --latest \
             --repo manasight/manasight-corpus \

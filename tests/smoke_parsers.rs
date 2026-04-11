@@ -11,7 +11,7 @@
 //!
 //! ```bash
 //! MANASIGHT_TEST_LOGS=/path/to/logs cargo test smoke_parsers -- --nocapture
-//! SMOKE_BLESS=1 MANASIGHT_TEST_LOGS=/path/to/logs cargo test smoke_parsers -- --nocapture
+//! SMOKE_BLESS=1 CORPUS_TAG=manasight-corpus-vN MANASIGHT_TEST_LOGS=/path/to/logs cargo test smoke_parsers -- --nocapture
 //! ```
 
 mod smoke_common;
@@ -631,8 +631,9 @@ fn test_baseline_meta_fields_present() {
         "_meta.corpus_tag should not be empty"
     );
     assert!(
-        baseline.meta.corpus_tag.starts_with("manasight-corpus-"),
-        "_meta.corpus_tag should start with 'manasight-corpus-', got '{}'",
+        baseline.meta.corpus_tag == "local"
+            || baseline.meta.corpus_tag.starts_with("manasight-corpus-"),
+        "_meta.corpus_tag should be 'local' or start with 'manasight-corpus-', got '{}'",
         baseline.meta.corpus_tag
     );
 }
