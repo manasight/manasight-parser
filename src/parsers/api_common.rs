@@ -148,6 +148,35 @@ pub(crate) fn event_name_from_request(parsed: &serde_json::Value) -> String {
         .to_owned()
 }
 
+/// Extracts an event name from a response-shaped JSON payload.
+///
+/// Checks top-level `EventName` / `InternalEventName` first, then falls back
+/// to `Course.InternalEventName` / `Course.EventName`.
+///
+/// Unlike [`event_name_from_request`], this helper does not inspect nested
+/// string-escaped `request` fields because response payloads carry the event
+/// name in Course (i.e., `{"Course": {"InternalEventName": "..."}`).
+pub(crate) fn event_name_from_response(parsed: &serde_json::Value) -> String {
+    if let Some(name) = parsed
+        .get("EventName")
+        .or_else(|| parsed.get("InternalEventName"))
+        .and_then(serde_json::Value::as_str)
+    {
+        return name.to_owned();
+    }
+
+    parsed
+        .get("Course")
+        .and_then(|course| {
+            course
+                .get("InternalEventName")
+                .or_else(|| course.get("EventName"))
+                .and_then(serde_json::Value::as_str)
+        })
+        .unwrap_or("")
+        .to_owned()
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -382,6 +411,48 @@ mod tests {
         fn test_event_name_from_request_internal_event_name() {
             let parsed = serde_json::json!({"InternalEventName": "InternalTest"});
             assert_eq!(event_name_from_request(&parsed), "InternalTest");
+        }
+
+        #[test]
+        fn test_event_name_from_response_top_level_event_name() {
+            let parsed = serde_json::json!({"EventName": "TopLevelEvent"});
+            assert_eq!(event_name_from_response(&parsed), "TopLevelEvent");
+        }
+
+        #[test]
+        fn test_event_name_from_response_top_level_internal_event_name() {
+            let parsed = serde_json::json!({"InternalEventName": "TopLevelInternal"});
+            assert_eq!(event_name_from_response(&parsed), "TopLevelInternal");
+        }
+
+        #[test]
+        fn test_event_name_from_response_course_internal_event_name() {
+            let parsed = serde_json::json!({
+                "Course": {"InternalEventName": "CourseInternal"}
+            });
+            assert_eq!(event_name_from_response(&parsed), "CourseInternal");
+        }
+
+        #[test]
+        fn test_event_name_from_response_course_event_name() {
+            let parsed = serde_json::json!({
+                "Course": {"EventName": "CourseEvent"}
+            });
+            assert_eq!(event_name_from_response(&parsed), "CourseEvent");
+        }
+
+        #[test]
+        fn test_event_name_from_response_ignores_nested_request_field() {
+            let parsed = serde_json::json!({
+                "request": "{\"EventName\":\"NestedRequestOnly\"}"
+            });
+            assert_eq!(event_name_from_response(&parsed), "");
+        }
+
+        #[test]
+        fn test_event_name_from_response_no_field_returns_empty() {
+            let parsed = serde_json::json!({"id": "test"});
+            assert_eq!(event_name_from_response(&parsed), "");
         }
     }
 }
