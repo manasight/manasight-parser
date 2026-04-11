@@ -1,11 +1,11 @@
 {
   "_meta": {
-    "corpus_tag": "smoke-data-v12",
+    "corpus_tag": "manasight-corpus-v3",
     "description": "Smoke test baseline -- per-file, per-parser event counts from Level 1 (parser-only) smoke tests.",
-    "generated_from_commit": "3973fbb"
+    "generated_from_commit": "04cbd96"
   },
   "files": {
-    "session_2026-02-22_a.log": {
+    "session_2026-02-22_0000_ecl-premier-bg-elves.log": {
       "double_claims": 0,
       "event_types": {
         "ClientAction": 2026,
@@ -36,13 +36,13 @@
       "total_entries": 4914,
       "unclaimed": 234
     },
-    "session_2026-02-22_b.log": {
+    "session_2026-02-22_0000_ecl-premier-uw-merfolk.log": {
       "double_claims": 0,
       "event_types": {
         "ClientAction": 1488,
         "DetailedLoggingStatus": 1,
         "DraftComplete": 2,
-        "DraftHuman": 116,
+        "DraftHuman": 77,
         "EventLifecycle": 6,
         "GameResult": 4,
         "GameState": 3478,
@@ -56,7 +56,7 @@
         "collection": 0,
         "draft_bot": 0,
         "draft_complete": 2,
-        "draft_human": 116,
+        "draft_human": 77,
         "event_lifecycle": 6,
         "gre": 2172,
         "inventory": 5,
@@ -67,9 +67,9 @@
       },
       "timestamp_failures": 214,
       "total_entries": 3996,
-      "unclaimed": 188
+      "unclaimed": 227
     },
-    "session_2026-02-23.log": {
+    "session_2026-02-23_0000_standard-bo1.log": {
       "double_claims": 0,
       "event_types": {
         "ClientAction": 425,
@@ -100,7 +100,7 @@
       "total_entries": 949,
       "unclaimed": 131
     },
-    "session_2026-03-05.log": {
+    "session_2026-03-05_0000.log": {
       "double_claims": 0,
       "event_types": {
         "ClientAction": 236,
@@ -131,36 +131,7 @@
       "total_entries": 772,
       "unclaimed": 71
     },
-    "session_2026-03-06.log": {
-      "double_claims": 0,
-      "event_types": {
-        "DetailedLoggingStatus": 1,
-        "DraftComplete": 2,
-        "DraftHuman": 62,
-        "EventLifecycle": 1,
-        "Inventory": 1,
-        "Rank": 1,
-        "Session": 1
-      },
-      "parsers": {
-        "client_actions": 0,
-        "collection": 0,
-        "draft_bot": 0,
-        "draft_complete": 2,
-        "draft_human": 62,
-        "event_lifecycle": 1,
-        "gre": 0,
-        "inventory": 1,
-        "match_state": 0,
-        "metadata": 1,
-        "rank": 1,
-        "session": 1
-      },
-      "timestamp_failures": 73,
-      "total_entries": 113,
-      "unclaimed": 44
-    },
-    "session_2026-03-06_b.log": {
+    "session_2026-03-06_0000_pick2-draft-game.log": {
       "double_claims": 0,
       "event_types": {
         "ClientAction": 1157,
@@ -191,7 +162,36 @@
       "total_entries": 2306,
       "unclaimed": 80
     },
-    "session_2026-03-08_1103.log": {
+    "session_2026-03-06_0000_pick2-draft-only.log": {
+      "double_claims": 0,
+      "event_types": {
+        "DetailedLoggingStatus": 1,
+        "DraftComplete": 2,
+        "DraftHuman": 41,
+        "EventLifecycle": 1,
+        "Inventory": 1,
+        "Rank": 1,
+        "Session": 1
+      },
+      "parsers": {
+        "client_actions": 0,
+        "collection": 0,
+        "draft_bot": 0,
+        "draft_complete": 2,
+        "draft_human": 41,
+        "event_lifecycle": 1,
+        "gre": 0,
+        "inventory": 1,
+        "match_state": 0,
+        "metadata": 1,
+        "rank": 1,
+        "session": 1
+      },
+      "timestamp_failures": 73,
+      "total_entries": 113,
+      "unclaimed": 65
+    },
+    "session_2026-03-08_1103_standard-bo1-log-rotated.log": {
       "double_claims": 0,
       "event_types": {
         "ClientAction": 254,
@@ -222,7 +222,7 @@
       "total_entries": 461,
       "unclaimed": 97
     },
-    "session_2026-03-11_1847.log": {
+    "session_2026-03-11_1847_quick-draft-selesnya.log": {
       "double_claims": 0,
       "event_types": {
         "ClientAction": 740,
@@ -253,7 +253,7 @@
       "total_entries": 1843,
       "unclaimed": 188
     },
-    "session_2026-03-11_2124.log": {
+    "session_2026-03-11_2124_trad-standard-bo3.log": {
       "double_claims": 0,
       "event_types": {
         "ClientAction": 405,
@@ -307,7 +307,7 @@
       "total_entries": 16,
       "unclaimed": 15
     },
-    "session_2026-03-17_1933.log": {
+    "session_2026-03-17_1933_standard-bo1-debug.log": {
       "double_claims": 0,
       "event_types": {
         "ClientAction": 393,
@@ -337,7 +337,7 @@
       "total_entries": 645,
       "unclaimed": 113
     },
-    "session_2026-03-21_0905.log": {
+    "session_2026-03-21_0905_standard-bo3-skeleton.log": {
       "double_claims": 0,
       "event_types": {
         "ClientAction": 325,
@@ -367,6 +367,37 @@
       "timestamp_failures": 50,
       "total_entries": 712,
       "unclaimed": 74
+    },
+    "session_2026-03-22_0000_feedback-019d1311.log": {
+      "double_claims": 0,
+      "event_types": {
+        "ClientAction": 1137,
+        "DetailedLoggingStatus": 1,
+        "EventLifecycle": 4,
+        "GameResult": 2,
+        "GameState": 2212,
+        "Inventory": 2,
+        "MatchState": 4,
+        "Rank": 2,
+        "Session": 2
+      },
+      "parsers": {
+        "client_actions": 1137,
+        "collection": 0,
+        "draft_bot": 0,
+        "draft_complete": 0,
+        "draft_human": 0,
+        "event_lifecycle": 4,
+        "gre": 1172,
+        "inventory": 2,
+        "match_state": 4,
+        "metadata": 1,
+        "rank": 2,
+        "session": 2
+      },
+      "timestamp_failures": 82,
+      "total_entries": 2435,
+      "unclaimed": 111
     },
     "session_2026-03-22_1232_debug.log": {
       "double_claims": 0,
@@ -399,36 +430,36 @@
       "total_entries": 4204,
       "unclaimed": 425
     },
-    "session_2026-03-22_feedback-019d1311.log": {
+    "session_2026-04-05_0000_feedback-019d5e75.log": {
       "double_claims": 0,
       "event_types": {
-        "ClientAction": 1137,
+        "ClientAction": 2029,
         "DetailedLoggingStatus": 1,
-        "EventLifecycle": 4,
-        "GameResult": 2,
-        "GameState": 2212,
-        "Inventory": 2,
-        "MatchState": 4,
-        "Rank": 2,
-        "Session": 2
+        "EventLifecycle": 14,
+        "GameResult": 6,
+        "GameState": 3782,
+        "Inventory": 7,
+        "MatchState": 12,
+        "Rank": 7,
+        "Session": 6
       },
       "parsers": {
-        "client_actions": 1137,
+        "client_actions": 2029,
         "collection": 0,
         "draft_bot": 0,
         "draft_complete": 0,
         "draft_human": 0,
-        "event_lifecycle": 4,
-        "gre": 1172,
-        "inventory": 2,
-        "match_state": 4,
+        "event_lifecycle": 14,
+        "gre": 1949,
+        "inventory": 7,
+        "match_state": 12,
         "metadata": 1,
-        "rank": 2,
-        "session": 2
+        "rank": 7,
+        "session": 6
       },
-      "timestamp_failures": 82,
-      "total_entries": 2435,
-      "unclaimed": 111
+      "timestamp_failures": 227,
+      "total_entries": 4324,
+      "unclaimed": 299
     },
     "session_2026-04-05_1509.log": {
       "double_claims": 0,
@@ -459,37 +490,6 @@
       "timestamp_failures": 60,
       "total_entries": 603,
       "unclaimed": 90
-    },
-    "session_2026-04-05_feedback-019d5e75.log": {
-      "double_claims": 0,
-      "event_types": {
-        "ClientAction": 2029,
-        "DetailedLoggingStatus": 1,
-        "EventLifecycle": 14,
-        "GameResult": 6,
-        "GameState": 3782,
-        "Inventory": 7,
-        "MatchState": 12,
-        "Rank": 7,
-        "Session": 6
-      },
-      "parsers": {
-        "client_actions": 2029,
-        "collection": 0,
-        "draft_bot": 0,
-        "draft_complete": 0,
-        "draft_human": 0,
-        "event_lifecycle": 14,
-        "gre": 1949,
-        "inventory": 7,
-        "match_state": 12,
-        "metadata": 1,
-        "rank": 7,
-        "session": 6
-      },
-      "timestamp_failures": 227,
-      "total_entries": 4324,
-      "unclaimed": 299
     }
   }
 }
