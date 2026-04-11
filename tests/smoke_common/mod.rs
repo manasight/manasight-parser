@@ -425,8 +425,8 @@ impl RatchetResult {
 
 /// Compares actual smoke test results against the baseline.
 ///
-/// Only compares files that appear in both the baseline and actual results.
-/// Checks per-parser claimed counts and per-event-type counts.
+/// Compares per-parser claimed counts and per-event-type counts for files in
+/// the baseline, and detects new files in actual that are not yet baselined.
 pub fn compare_against_baseline(
     baseline: &Baseline,
     actual: &BTreeMap<String, BaselineFile>,
@@ -487,6 +487,35 @@ pub fn compare_against_baseline(
                 diffs.push(RatchetDiff {
                     filename: filename.clone(),
                     metric: format!("parser/{parser_name}"),
+                    baseline_value: 0,
+                    actual_value: actual_count,
+                });
+            }
+        }
+    }
+
+    // Detect new files in actual that are not in the baseline.
+    for (filename, actual_file) in actual {
+        if baseline.files.contains_key(filename) {
+            continue;
+        }
+
+        for (parser_name, &actual_count) in &actual_file.parsers {
+            if actual_count > 0 {
+                diffs.push(RatchetDiff {
+                    filename: filename.clone(),
+                    metric: format!("parser/{parser_name}"),
+                    baseline_value: 0,
+                    actual_value: actual_count,
+                });
+            }
+        }
+
+        for (event_type, &actual_count) in &actual_file.event_types {
+            if actual_count > 0 {
+                diffs.push(RatchetDiff {
+                    filename: filename.clone(),
+                    metric: format!("event_type/{event_type}"),
                     baseline_value: 0,
                     actual_value: actual_count,
                 });

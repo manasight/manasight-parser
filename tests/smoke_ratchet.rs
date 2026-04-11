@@ -216,6 +216,118 @@ fn test_ratchet_missing_actual_file_is_skipped() {
 }
 
 // ---------------------------------------------------------------------------
+// Tests: new files not in baseline
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_ratchet_new_file_in_actual_is_improvement() {
+    let baseline_parsers = BTreeMap::from([("session".to_string(), 5_u64)]);
+    let baseline = make_baseline("existing.log", baseline_parsers);
+
+    // Actual contains the existing file plus a new file not in baseline.
+    let actual = BTreeMap::from([
+        (
+            "existing.log".to_string(),
+            make_actual_file(BTreeMap::from([("session".to_string(), 5_u64)])),
+        ),
+        (
+            "new_session.log".to_string(),
+            BaselineFile {
+                total_entries: 200,
+                parsers: BTreeMap::from([("gre".to_string(), 80_u64)]),
+                event_types: BTreeMap::from([("Session".to_string(), 10_u64)]),
+                unclaimed: 5,
+                double_claims: 0,
+                timestamp_failures: 2,
+            },
+        ),
+    ]);
+
+    let result = compare_against_baseline(&baseline, &actual);
+    assert!(
+        result.is_pass(),
+        "new file should be an improvement, not a regression"
+    );
+    assert_eq!(result.improvements().len(), 2); // parser/gre + event_type/Session
+    assert_eq!(result.regressions().len(), 0);
+
+    // Verify diffs reference the new file.
+    for diff in result.improvements() {
+        assert_eq!(diff.filename, "new_session.log");
+        assert_eq!(diff.baseline_value, 0);
+    }
+}
+
+#[test]
+fn test_ratchet_new_file_with_zero_counts_produces_no_diffs() {
+    let baseline_parsers = BTreeMap::from([("session".to_string(), 5_u64)]);
+    let baseline = make_baseline("existing.log", baseline_parsers);
+
+    let actual = BTreeMap::from([
+        (
+            "existing.log".to_string(),
+            make_actual_file(BTreeMap::from([("session".to_string(), 5_u64)])),
+        ),
+        (
+            "empty.log".to_string(),
+            BaselineFile {
+                total_entries: 0,
+                parsers: BTreeMap::from([("gre".to_string(), 0_u64)]),
+                event_types: BTreeMap::new(),
+                unclaimed: 0,
+                double_claims: 0,
+                timestamp_failures: 0,
+            },
+        ),
+    ]);
+
+    let result = compare_against_baseline(&baseline, &actual);
+    assert!(
+        result.diffs.is_empty(),
+        "zero-count new file should produce no diffs"
+    );
+}
+
+#[test]
+fn test_ratchet_new_file_report_shows_improvement_markers() {
+    let baseline = Baseline {
+        meta: BaselineMeta {
+            description: "test".to_string(),
+            generated_from_commit: "abc1234".to_string(),
+            corpus_tag: "test-v1".to_string(),
+        },
+        files: BTreeMap::new(), // empty baseline
+    };
+
+    let actual = BTreeMap::from([(
+        "brand_new.log".to_string(),
+        BaselineFile {
+            total_entries: 100,
+            parsers: BTreeMap::from([("session".to_string(), 5_u64)]),
+            event_types: BTreeMap::from([("Session".to_string(), 5_u64)]),
+            unclaimed: 10,
+            double_claims: 0,
+            timestamp_failures: 5,
+        },
+    )]);
+
+    let result = compare_against_baseline(&baseline, &actual);
+    let report = result.format_report();
+    assert!(
+        report.contains("[+]"),
+        "report should show [+] for new file: {report}"
+    );
+    assert!(
+        report.contains("brand_new.log"),
+        "report should reference new filename: {report}"
+    );
+    assert!(
+        report.contains("0 -> 5"),
+        "report should show 0 -> actual for new file metrics: {report}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Tests: report formatting
 // ---------------------------------------------------------------------------
 
