@@ -18,6 +18,8 @@ Player.log → File Tailer → Entry Buffer → Router → Parsers → Event Bus
 - **`events`** — public event type enums/structs (the parser's output contract)
 - **`event_bus`** — `tokio::broadcast` channel for fan-out to subscribers
 - **`stream`** — public entry point (`MtgaEventStream`)
+- **`sanitize`** — privacy scrubber for redacting PII from raw log text
+- **`util`** — pipeline utilities (gzip compression, content hashing)
 
 ## Usage
 
@@ -35,6 +37,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
+```
+
+## Log Sanitization
+
+The `sanitize` module strips PII and credentials from raw `Player.log` text before it leaves the user's machine. It redacts auth tokens, bearer tokens, account IDs, display names, session identifiers, OS user paths, and hardware fingerprints.
+
+```rust
+use manasight_parser::sanitize::scrub_raw_log;
+
+let raw = std::fs::read_to_string("Player.log").unwrap();
+let clean = scrub_raw_log(&raw);
+// clean contains no tokens, account IDs, or user paths
+```
+
+Pipeline utilities for compression and content-addressable storage:
+
+```rust
+use manasight_parser::util::{compress_log, content_hash};
+
+let compressed = compress_log(&clean).unwrap();
+let hash = content_hash(&compressed); // 64-char hex SHA-256
+```
+
+### CLI
+
+The `scrub` binary reads stdin and writes sanitized output to stdout:
+
+```sh
+cargo run --bin scrub < Player.log > Player-sanitized.log
 ```
 
 ## Event Types

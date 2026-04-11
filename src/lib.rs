@@ -39,8 +39,9 @@ pub mod events;
 pub mod log;
 pub mod parsers;
 pub mod router;
+pub mod sanitize;
 pub mod stream;
-pub(crate) mod util;
+pub mod util;
 
 // ---------------------------------------------------------------------------
 // Re-exports — public API surface
@@ -53,4 +54,6 @@ pub use events::{
     GameResultEvent, GameStateEvent, InventoryEvent, LogFileRotatedEvent, MatchStateEvent,
     PerformanceClass, RankEvent, SessionEvent,
 };
+pub use sanitize::scrub_raw_log;
 pub use stream::{MtgaEventStream, StreamError};
+pub use util::{compress_log, content_hash};

@@ -11,7 +11,7 @@
 //!
 //! ```bash
 //! MANASIGHT_TEST_LOGS=/path/to/logs cargo test smoke_parsers -- --nocapture
-//! SMOKE_BLESS=1 MANASIGHT_TEST_LOGS=/path/to/logs cargo test smoke_parsers -- --nocapture
+//! SMOKE_BLESS=1 CORPUS_TAG=manasight-corpus-vN MANASIGHT_TEST_LOGS=/path/to/logs cargo test smoke_parsers -- --nocapture
 //! ```
 
 mod smoke_common;
@@ -483,17 +483,12 @@ fn reports_to_baseline_files(
         .collect()
 }
 
-/// Reads `corpus_tag` from `smoke-corpus-manifest.toml` (single source of truth).
+/// Reads the corpus tag from the `CORPUS_TAG` environment variable.
+///
+/// In CI, this is set to the release tag of the downloaded corpus (e.g.
+/// `manasight-corpus-v3`).  For local runs it falls back to `"local"`.
 fn read_corpus_tag() -> String {
-    #[derive(serde::Deserialize)]
-    struct ManifestMeta {
-        corpus_tag: String,
-    }
-
-    std::fs::read_to_string("smoke-corpus-manifest.toml")
-        .ok()
-        .and_then(|s| toml::from_str::<ManifestMeta>(&s).ok())
-        .map_or_else(|| "unknown".to_string(), |m| m.corpus_tag)
+    std::env::var("CORPUS_TAG").unwrap_or_else(|_| "local".to_string())
 }
 
 /// Builds a full `Baseline` from actual results for bless mode.
@@ -604,4 +599,41 @@ fn smoke_test_real_logs() {
                     Run with SMOKE_BLESS=1 to generate the initial baseline.\n";
         let _ = std::io::Write::write_all(&mut std::io::stdout(), msg.as_bytes());
     }
+}
+
+// ---------------------------------------------------------------------------
+// Baseline metadata validation
+// ---------------------------------------------------------------------------
+
+/// Validates the committed `smoke-baseline.json` has well-formed metadata.
+///
+/// Moved from `smoke_metadata.rs` after removing the corpus manifest dependency.
+/// The corpus repo now owns file-level integrity checks; the parser validates
+/// only its own baseline structure.
+#[test]
+fn test_baseline_meta_fields_present() {
+    let Some(baseline) = read_baseline() else {
+        let msg = "smoke-baseline.json not found — skipping metadata validation\n";
+        let _ = std::io::Write::write_all(&mut std::io::stdout(), msg.as_bytes());
+        return;
+    };
+
+    assert!(
+        !baseline.meta.description.is_empty(),
+        "_meta.description should not be empty"
+    );
+    assert!(
+        !baseline.meta.generated_from_commit.is_empty(),
+        "_meta.generated_from_commit should not be empty"
+    );
+    assert!(
+        !baseline.meta.corpus_tag.is_empty(),
+        "_meta.corpus_tag should not be empty"
+    );
+    assert!(
+        baseline.meta.corpus_tag == "local"
+            || baseline.meta.corpus_tag.starts_with("manasight-corpus-"),
+        "_meta.corpus_tag should be 'local' or start with 'manasight-corpus-', got '{}'",
+        baseline.meta.corpus_tag
+    );
 }

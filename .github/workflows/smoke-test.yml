@@ -13,7 +13,10 @@ on:
       - "src/**"
       - "tests/**"
       - "smoke-baseline.json"
-      - "smoke-corpus-manifest.toml"
+
+  # Triggered by manasight-corpus when a new corpus release is published.
+  repository_dispatch:
+    types: [corpus-release]
 
   # Weekly on Sundays at 06:00 UTC.
   schedule:
@@ -47,61 +50,55 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      # Detect whether the TEST_DATA_TOKEN secret is available.
-      # Fork PRs and repos without the secret will skip gracefully.
-      - name: Check secret availability
-        id: secrets-check
-        env:
-          HAS_TOKEN: ${{ secrets.TEST_DATA_TOKEN != '' }}
-        run: |
-          if [ "$HAS_TOKEN" != "true" ]; then
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "::notice::TEST_DATA_TOKEN not available — skipping smoke test (expected for fork PRs)"
-          else
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Install Rust toolchain
-        if: steps.secrets-check.outputs.skip == 'false'
         uses: actions-rust-lang/setup-rust-toolchain@150fca883cd4034361b621bd4e6a9d34e5143606 # v1
 
+      # Query the latest corpus release tag for cache keying.
+      - name: Resolve corpus release tag
+        id: corpus-tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG=$(gh release view --repo manasight/manasight-corpus --json tagName --jq '.tagName')
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Corpus release tag: $TAG"
+
       # Cache the downloaded corpus tarball between runs.
-      # The key is paired with the release tag (smoke-data-v6). If the corpus
-      # is updated, bump both the release tag and this cache key together.
+      # The key uses the release tag so caches auto-invalidate on new releases.
       - name: Cache corpus tarball
-        if: steps.secrets-check.outputs.skip == 'false'
         id: cache-corpus
         uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
           path: /tmp/smoke-corpus.tar.gz
-          key: smoke-corpus-v12
+          key: smoke-corpus-${{ steps.corpus-tag.outputs.tag }}
 
-      # Download corpus from manasight-test-data GitHub Release.
+      # Download corpus from the public manasight-corpus GitHub Release.
       - name: Download corpus
-        if: steps.secrets-check.outputs.skip == 'false' && steps.cache-corpus.outputs.cache-hit != 'true'
+        if: steps.cache-corpus.outputs.cache-hit != 'true'
         env:
-          GH_TOKEN: ${{ secrets.TEST_DATA_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          gh release download smoke-data-v12 \
-            --repo manasight/manasight-test-data \
+          gh release download "${{ steps.corpus-tag.outputs.tag }}" \
+            --repo manasight/manasight-corpus \
             --pattern "*.tar.gz" \
             --output /tmp/smoke-corpus.tar.gz
 
-      # Extract corpus to a temp directory.
+      # Extract corpus and decompress log files.
+      # The tarball contains corpus/*.log.gz — extract and gunzip to get .log files.
       - name: Extract corpus
-        if: steps.secrets-check.outputs.skip == 'false'
         run: |
           mkdir -p /tmp/test-logs
           tar -xzf /tmp/smoke-corpus.tar.gz -C /tmp/test-logs
+          gunzip /tmp/test-logs/corpus/*.log.gz
           echo "Corpus files:"
-          ls -lh /tmp/test-logs/
+          ls -lh /tmp/test-logs/corpus/
 
       # Run smoke tests with ratchet comparison against baseline.
       - name: Run smoke tests
-        if: steps.secrets-check.outputs.skip == 'false'
         id: smoke
         env:
-          MANASIGHT_TEST_LOGS: /tmp/test-logs
+          MANASIGHT_TEST_LOGS: /tmp/test-logs/corpus
+          CORPUS_TAG: ${{ steps.corpus-tag.outputs.tag }}
         run: |
           set +e
           cargo test --all-features smoke_test_real_logs -- --nocapture 2>&1 | tee /tmp/smoke-output.txt
@@ -122,7 +119,7 @@ jobs:
 
       # Write job summary with ratchet results.
       - name: Write job summary
-        if: always() && steps.secrets-check.outputs.skip == 'false' && steps.smoke.outcome != 'skipped'
+        if: always() && steps.smoke.outcome != 'skipped'
         run: |
           {
             echo "## Smoke Test Results"
@@ -192,7 +189,7 @@ jobs:
 
       # Upload full smoke test output as artifact.
       - name: Upload report
-        if: always() && steps.secrets-check.outputs.skip == 'false' && steps.smoke.outcome != 'skipped'
+        if: always() && steps.smoke.outcome != 'skipped'
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: smoke-test-report
@@ -218,7 +215,8 @@ jobs:
           steps.baseline-check.outcome == 'success' &&
           steps.baseline-check.outputs.has_improvements == 'true'
         env:
-          MANASIGHT_TEST_LOGS: /tmp/test-logs
+          MANASIGHT_TEST_LOGS: /tmp/test-logs/corpus
+          CORPUS_TAG: ${{ steps.corpus-tag.outputs.tag }}
           SMOKE_BLESS: "1"
           # Use a PAT so the resulting pull_request event triggers CI workflows.
           # The default GITHUB_TOKEN suppresses downstream workflow triggers.
@@ -266,14 +264,3 @@ jobs:
           Auto-generated by the smoke test workflow.
           EOF
           )"
-
-      # Summary for skipped runs.
-      - name: Write skip summary
-        if: steps.secrets-check.outputs.skip == 'true'
-        run: |
-          {
-            echo "## Smoke Test — Skipped"
-            echo ""
-            echo "TEST_DATA_TOKEN secret is not available."
-            echo "This is expected for fork PRs. Smoke tests require access to the private test corpus."
-          } >> "$GITHUB_STEP_SUMMARY"
