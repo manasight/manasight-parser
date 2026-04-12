@@ -1,8 +1,8 @@
 {
   "_meta": {
-    "corpus_tag": "manasight-corpus-v8",
+    "corpus_tag": "manasight-corpus-v9",
     "description": "Smoke test baseline -- per-file, per-parser event counts from Level 1 (parser-only) smoke tests.",
-    "generated_from_commit": "d7c7029"
+    "generated_from_commit": "357dee8"
   },
   "files": {
     "session_2026-02-22_0000_ecl-premier-bg-elves.log": {
@@ -643,6 +643,37 @@
       "timestamp_failures": 62,
       "total_entries": 182,
       "unclaimed": 82
+    },
+    "session_2026-04-12_0844_edge-cases.log": {
+      "double_claims": 0,
+      "event_types": {
+        "ClientAction": 476,
+        "DetailedLoggingStatus": 1,
+        "EventLifecycle": 2,
+        "GameResult": 1,
+        "GameState": 1084,
+        "Inventory": 3,
+        "MatchState": 2,
+        "Rank": 3,
+        "Session": 12
+      },
+      "parsers": {
+        "client_actions": 476,
+        "collection": 0,
+        "draft_bot": 0,
+        "draft_complete": 0,
+        "draft_human": 0,
+        "event_lifecycle": 2,
+        "gre": 732,
+        "inventory": 3,
+        "match_state": 2,
+        "metadata": 1,
+        "rank": 3,
+        "session": 12
+      },
+      "timestamp_failures": 128,
+      "total_entries": 1381,
+      "unclaimed": 150
     }
   }
 }
