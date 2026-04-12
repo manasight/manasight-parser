@@ -118,13 +118,16 @@ pub(crate) fn parse_json_from_body(body: &str, context: &str) -> Option<serde_js
     }
 }
 
-/// Extracts `EventName` or `InternalEventName` from a parsed JSON value.
+/// Extracts an event name from a parsed JSON value.
 ///
-/// Checks for `EventName` or `InternalEventName` at the top level first,
-/// then falls back to a nested string-escaped `request` field containing
-/// `{"EventName": "..."}`.
-pub(crate) fn event_name_from_request(parsed: &serde_json::Value) -> String {
-    // Try direct EventName field first.
+/// MTG Arena is inconsistent about where it stores event names. This helper
+/// checks the following locations in order:
+/// 1. Top-level `EventName` or `InternalEventName`.
+/// 2. `Course.InternalEventName` or `Course.EventName` (common in responses).
+/// 3. A nested string-escaped `request` field containing `{"EventName": "..."}`
+///    (common in outbound requests).
+pub(crate) fn extract_event_name(parsed: &serde_json::Value) -> String {
+    // 1. Try direct top-level fields.
     if let Some(name) = parsed
         .get("EventName")
         .or_else(|| parsed.get("InternalEventName"))
@@ -133,48 +136,30 @@ pub(crate) fn event_name_from_request(parsed: &serde_json::Value) -> String {
         return name.to_owned();
     }
 
-    // Try nested string-escaped request field.
-    let Some(request_str) = parsed.get("request").and_then(serde_json::Value::as_str) else {
-        return String::new();
-    };
-    let Ok(request_json) = serde_json::from_str::<serde_json::Value>(request_str) else {
-        return String::new();
-    };
-    request_json
-        .get("EventName")
-        .or_else(|| request_json.get("InternalEventName"))
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("")
-        .to_owned()
-}
-
-/// Extracts an event name from a response-shaped JSON payload.
-///
-/// Checks top-level `EventName` / `InternalEventName` first, then falls back
-/// to `Course.InternalEventName` / `Course.EventName`.
-///
-/// Unlike [`event_name_from_request`], this helper does not inspect nested
-/// string-escaped `request` fields because response payloads carry the event
-/// name in Course (i.e., `{"Course": {"InternalEventName": "..."}`).
-pub(crate) fn event_name_from_response(parsed: &serde_json::Value) -> String {
-    if let Some(name) = parsed
-        .get("EventName")
-        .or_else(|| parsed.get("InternalEventName"))
-        .and_then(serde_json::Value::as_str)
-    {
+    // 2. Try nested Course object (responses).
+    if let Some(name) = parsed.get("Course").and_then(|course| {
+        course
+            .get("InternalEventName")
+            .or_else(|| course.get("EventName"))
+            .and_then(serde_json::Value::as_str)
+    }) {
         return name.to_owned();
     }
 
-    parsed
-        .get("Course")
-        .and_then(|course| {
-            course
-                .get("InternalEventName")
-                .or_else(|| course.get("EventName"))
+    // 3. Try nested string-escaped request field (requests).
+    if let Some(request_str) = parsed.get("request").and_then(serde_json::Value::as_str) {
+        if let Ok(request_json) = serde_json::from_str::<serde_json::Value>(request_str) {
+            if let Some(name) = request_json
+                .get("EventName")
+                .or_else(|| request_json.get("InternalEventName"))
                 .and_then(serde_json::Value::as_str)
-        })
-        .unwrap_or("")
-        .to_owned()
+            {
+                return name.to_owned();
+            }
+        }
+    }
+
+    String::new()
 }
 
 // ---------------------------------------------------------------------------
@@ -372,87 +357,60 @@ mod tests {
         }
     }
 
-    // -- event_name_from_request -----------------------------------------------
-
+    // -- extract_event_name ----------------------------------------------------
     mod event_name {
         use super::*;
 
         #[test]
-        fn test_event_name_from_request_nested() {
-            let parsed = serde_json::json!({
-                "id": "test",
-                "request": "{\"EventName\":\"PremierDraft_ECL_20260120\"}"
-            });
-            assert_eq!(
-                event_name_from_request(&parsed),
-                "PremierDraft_ECL_20260120",
-            );
-        }
-
-        #[test]
-        fn test_event_name_from_request_direct() {
+        fn test_extract_event_name_direct() {
             let parsed = serde_json::json!({"EventName": "DirectEvent"});
-            assert_eq!(event_name_from_request(&parsed), "DirectEvent");
+            assert_eq!(extract_event_name(&parsed), "DirectEvent");
         }
 
         #[test]
-        fn test_event_name_from_request_no_field() {
-            let parsed = serde_json::json!({"id": "test"});
-            assert_eq!(event_name_from_request(&parsed), "");
-        }
-
-        #[test]
-        fn test_event_name_from_request_invalid_nested_json() {
-            let parsed = serde_json::json!({"request": "not json"});
-            assert_eq!(event_name_from_request(&parsed), "");
-        }
-
-        #[test]
-        fn test_event_name_from_request_internal_event_name() {
+        fn test_extract_event_name_internal_event_name() {
             let parsed = serde_json::json!({"InternalEventName": "InternalTest"});
-            assert_eq!(event_name_from_request(&parsed), "InternalTest");
+            assert_eq!(extract_event_name(&parsed), "InternalTest");
         }
 
         #[test]
-        fn test_event_name_from_response_top_level_event_name() {
-            let parsed = serde_json::json!({"EventName": "TopLevelEvent"});
-            assert_eq!(event_name_from_response(&parsed), "TopLevelEvent");
-        }
-
-        #[test]
-        fn test_event_name_from_response_top_level_internal_event_name() {
-            let parsed = serde_json::json!({"InternalEventName": "TopLevelInternal"});
-            assert_eq!(event_name_from_response(&parsed), "TopLevelInternal");
-        }
-
-        #[test]
-        fn test_event_name_from_response_course_internal_event_name() {
+        fn test_extract_event_name_nested_course() {
             let parsed = serde_json::json!({
                 "Course": {"InternalEventName": "CourseInternal"}
             });
-            assert_eq!(event_name_from_response(&parsed), "CourseInternal");
+            assert_eq!(extract_event_name(&parsed), "CourseInternal");
         }
 
         #[test]
-        fn test_event_name_from_response_course_event_name() {
+        fn test_extract_event_name_nested_request() {
             let parsed = serde_json::json!({
-                "Course": {"EventName": "CourseEvent"}
+                "id": "test",
+                "request": "{\"EventName\":\"NestedRequest\"}"
             });
-            assert_eq!(event_name_from_response(&parsed), "CourseEvent");
+            assert_eq!(extract_event_name(&parsed), "NestedRequest");
         }
 
         #[test]
-        fn test_event_name_from_response_ignores_nested_request_field() {
+        fn test_extract_event_name_priority() {
+            // Top-level should win over Course, which should win over request.
             let parsed = serde_json::json!({
-                "request": "{\"EventName\":\"NestedRequestOnly\"}"
+                "EventName": "TopLevel",
+                "Course": {"EventName": "CourseLevel"},
+                "request": "{\"EventName\":\"RequestLevel\"}"
             });
-            assert_eq!(event_name_from_response(&parsed), "");
+            assert_eq!(extract_event_name(&parsed), "TopLevel");
         }
 
         #[test]
-        fn test_event_name_from_response_no_field_returns_empty() {
+        fn test_extract_event_name_no_field() {
             let parsed = serde_json::json!({"id": "test"});
-            assert_eq!(event_name_from_response(&parsed), "");
+            assert_eq!(extract_event_name(&parsed), "");
+        }
+
+        #[test]
+        fn test_extract_event_name_invalid_nested_json() {
+            let parsed = serde_json::json!({"request": "not json"});
+            assert_eq!(extract_event_name(&parsed), "");
         }
     }
 }

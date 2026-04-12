@@ -72,7 +72,7 @@ fn build_payload(
         .or(draft_id_from_body)
         .unwrap_or("");
 
-    let event_name = api_common::event_name_from_request(parsed);
+    let event_name = api_common::extract_event_name(parsed);
 
     serde_json::json!({
         "type": "draft_complete",
