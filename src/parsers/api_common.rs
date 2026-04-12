@@ -362,19 +362,19 @@ mod tests {
         use super::*;
 
         #[test]
-        fn test_extract_event_name_direct() {
+        fn test_extract_event_name_top_level_event_name_returns_name() {
             let parsed = serde_json::json!({"EventName": "DirectEvent"});
             assert_eq!(extract_event_name(&parsed), "DirectEvent");
         }
 
         #[test]
-        fn test_extract_event_name_internal_event_name() {
+        fn test_extract_event_name_top_level_internal_name_returns_name() {
             let parsed = serde_json::json!({"InternalEventName": "InternalTest"});
             assert_eq!(extract_event_name(&parsed), "InternalTest");
         }
 
         #[test]
-        fn test_extract_event_name_nested_course() {
+        fn test_extract_event_name_course_nested_returns_name() {
             let parsed = serde_json::json!({
                 "Course": {"InternalEventName": "CourseInternal"}
             });
@@ -382,7 +382,7 @@ mod tests {
         }
 
         #[test]
-        fn test_extract_event_name_nested_request() {
+        fn test_extract_event_name_string_escaped_request_returns_name() {
             let parsed = serde_json::json!({
                 "id": "test",
                 "request": "{\"EventName\":\"NestedRequest\"}"
@@ -391,7 +391,7 @@ mod tests {
         }
 
         #[test]
-        fn test_extract_event_name_priority() {
+        fn test_extract_event_name_top_level_wins_over_course_and_request_returns_top_level() {
             // Top-level should win over Course, which should win over request.
             let parsed = serde_json::json!({
                 "EventName": "TopLevel",
@@ -402,13 +402,13 @@ mod tests {
         }
 
         #[test]
-        fn test_extract_event_name_no_field() {
+        fn test_extract_event_name_no_matching_field_returns_empty() {
             let parsed = serde_json::json!({"id": "test"});
             assert_eq!(extract_event_name(&parsed), "");
         }
 
         #[test]
-        fn test_extract_event_name_invalid_nested_json() {
+        fn test_extract_event_name_malformed_request_json_returns_empty() {
             let parsed = serde_json::json!({"request": "not json"});
             assert_eq!(extract_event_name(&parsed), "");
         }
