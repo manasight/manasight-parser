@@ -132,21 +132,27 @@ fn try_parse_claim_prize_course(
         .and_then(serde_json::Value::as_str)
         .unwrap_or("");
 
-    let wins = course
-        .get("CurrentWins")
-        .and_then(serde_json::Value::as_i64);
-    let losses = course
-        .get("CurrentLosses")
-        .and_then(serde_json::Value::as_i64);
-
-    Some(serde_json::json!({
+    let mut payload = serde_json::json!({
         "type": "event_lifecycle",
         "action": method,
         "event_name": event_name,
-        "current_wins": wins,
-        "current_losses": losses,
         "raw_response": parsed,
-    }))
+    });
+
+    if let Some(wins) = course
+        .get("CurrentWins")
+        .and_then(serde_json::Value::as_i64)
+    {
+        payload["current_wins"] = serde_json::json!(wins);
+    }
+    if let Some(losses) = course
+        .get("CurrentLosses")
+        .and_then(serde_json::Value::as_i64)
+    {
+        payload["current_losses"] = serde_json::json!(losses);
+    }
+
+    Some(payload)
 }
 
 // ---------------------------------------------------------------------------
@@ -417,6 +423,20 @@ mod tests {
         fn test_try_parse_claim_prize_response_without_course_returns_none() {
             let parsed = serde_json::json!({"EventName": "SoloOnly"});
             assert!(try_parse_claim_prize_course(&parsed, CLAIM_PRIZE_METHOD).is_none());
+        }
+
+        #[test]
+        fn test_try_parse_claim_prize_response_course_without_wins_losses_omits_fields() {
+            let parsed = serde_json::json!({
+                "Course": {
+                    "InternalEventName": "PremierDraft_SOS_20260421"
+                }
+            });
+            let payload = try_parse_claim_prize_course(&parsed, CLAIM_PRIZE_METHOD)
+                .unwrap_or_else(|| unreachable!());
+            assert_eq!(payload["event_name"], "PremierDraft_SOS_20260421");
+            assert!(payload.get("current_wins").is_none());
+            assert!(payload.get("current_losses").is_none());
         }
     }
 
