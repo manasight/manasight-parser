@@ -126,6 +126,8 @@ macro_rules! delegate_to_inner {
             Self::LogFileRotated(e) => e.$method(),
             Self::DetailedLoggingStatus(e) => e.$method(),
             Self::MatchConnectionState(e) => e.$method(),
+            Self::TcpConnectionClose(e) => e.$method(),
+            Self::WebSocketClosed(e) => e.$method(),
         }
     };
 }
@@ -220,6 +222,29 @@ pub enum GameEvent {
     /// local-client disconnect detection.
     /// Class 1 — interactive dispatch.
     MatchConnectionState(MatchConnectionStateEvent),
+
+    /// TCP connection close event (`Client.TcpConnection.Close`).
+    ///
+    /// Parsed from `[UnityCrossThreadLogger]Client.TcpConnection.Close {...}`
+    /// entries. The payload is the full parsed JSON from the log line,
+    /// preserving `status`, `reason`, and abnormal-close-only fields
+    /// (`function`, `description`, `exception`). Feeds the desktop
+    /// connection health monitor (AC-DET-2); the parser is agnostic to
+    /// `status` semantics (per ADR-011).
+    /// Class 1 — interactive dispatch.
+    TcpConnectionClose(TcpConnectionCloseEvent),
+
+    /// WebSocket close event (`GREConnection.HandleWebSocketClosed`).
+    ///
+    /// Parsed from
+    /// `[UnityCrossThreadLogger]GREConnection.HandleWebSocketClosed {...}`
+    /// entries. The payload is the full parsed JSON from the log line,
+    /// which always includes `closeType`, `reason`, and a nested `tcpConn`
+    /// object snapshot of the paired TCP connection. Feeds the desktop
+    /// connection health monitor (AC-DET-3); the parser is agnostic to
+    /// `closeType` semantics (per ADR-011).
+    /// Class 1 — interactive dispatch.
+    WebSocketClosed(WebSocketClosedEvent),
 }
 
 impl GameEvent {
@@ -235,7 +260,9 @@ impl GameEvent {
             | Self::MatchState(_)
             | Self::LogFileRotated(_)
             | Self::DetailedLoggingStatus(_)
-            | Self::MatchConnectionState(_) => PerformanceClass::InteractiveDispatch,
+            | Self::MatchConnectionState(_)
+            | Self::TcpConnectionClose(_)
+            | Self::WebSocketClosed(_) => PerformanceClass::InteractiveDispatch,
             Self::DraftBot(_)
             | Self::DraftHuman(_)
             | Self::DraftComplete(_)
@@ -609,6 +636,42 @@ define_event! {
     MatchConnectionStateEvent
 }
 
+define_event! {
+    /// TCP connection close event.
+    ///
+    /// Parsed from `[UnityCrossThreadLogger]Client.TcpConnection.Close {...}`
+    /// entries. The payload is the full parsed JSON from the log line and
+    /// carries at minimum `status` and `reason`; abnormal closes also
+    /// include `function`, `description`, and a nested `exception` tree
+    /// (with `InnerException.NativeErrorCode` on Windows/macOS).
+    ///
+    /// The parser is agnostic to `status` semantics — downstream consumers
+    /// classify close types per ADR-011. Bare-marker entries (no JSON
+    /// payload) do not produce this event.
+    ///
+    /// Feeds the desktop connection health monitor; see feature spec
+    /// `connection-health-indicator.md` **AC-DET-2**.
+    TcpConnectionCloseEvent
+}
+
+define_event! {
+    /// WebSocket close event.
+    ///
+    /// Parsed from
+    /// `[UnityCrossThreadLogger]GREConnection.HandleWebSocketClosed {...}`
+    /// entries. The payload is the full parsed JSON from the log line and
+    /// always includes `closeType`, `reason`, and a nested `tcpConn`
+    /// object snapshot of the paired TCP connection (host/port/timing/ping
+    /// stats).
+    ///
+    /// The parser is agnostic to `closeType` semantics — downstream
+    /// consumers classify close types per ADR-011.
+    ///
+    /// Feeds the desktop connection health monitor; see feature spec
+    /// `connection-health-indicator.md` **AC-DET-3**.
+    WebSocketClosedEvent
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -664,6 +727,11 @@ mod tests {
                 meta.clone(),
                 payload.clone(),
             )),
+            GameEvent::TcpConnectionClose(TcpConnectionCloseEvent::new(
+                meta.clone(),
+                payload.clone(),
+            )),
+            GameEvent::WebSocketClosed(WebSocketClosedEvent::new(meta.clone(), payload.clone())),
         ]
     }
 
@@ -898,6 +966,8 @@ mod tests {
             PerformanceClass::InteractiveDispatch, // LogFileRotated
             PerformanceClass::InteractiveDispatch, // DetailedLoggingStatus
             PerformanceClass::InteractiveDispatch, // MatchConnectionState
+            PerformanceClass::InteractiveDispatch, // TcpConnectionClose
+            PerformanceClass::InteractiveDispatch, // WebSocketClosed
         ];
 
         assert_eq!(
@@ -1014,6 +1084,8 @@ mod tests {
             1, // LogFileRotated
             1, // DetailedLoggingStatus
             1, // MatchConnectionState
+            1, // TcpConnectionClose
+            1, // WebSocketClosed
         ];
         assert_eq!(events.len(), expected_numbers.len());
         for (event, expected_num) in events.iter().zip(expected_numbers.iter()) {

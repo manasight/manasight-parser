@@ -108,3 +108,5 @@ define_payload_extractor!(rank_payload, Rank);
 define_payload_extractor!(collection_payload, Collection);
 define_payload_extractor!(inventory_payload, Inventory);
 define_payload_extractor!(match_connection_state_payload, MatchConnectionState);
+define_payload_extractor!(tcp_connection_close_payload, TcpConnectionClose);
+define_payload_extractor!(websocket_closed_payload, WebSocketClosed);
