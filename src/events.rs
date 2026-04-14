@@ -125,6 +125,7 @@ macro_rules! delegate_to_inner {
             Self::GameResult(e) => e.$method(),
             Self::LogFileRotated(e) => e.$method(),
             Self::DetailedLoggingStatus(e) => e.$method(),
+            Self::MatchConnectionState(e) => e.$method(),
         }
     };
 }
@@ -210,6 +211,15 @@ pub enum GameEvent {
     /// setting and restarted Arena).
     /// Class 1 — interactive dispatch (local status signal).
     DetailedLoggingStatus(DetailedLoggingStatusEvent),
+
+    /// Match connection state machine transition (`STATE CHANGED`).
+    ///
+    /// Parsed from `[UnityCrossThreadLogger]STATE CHANGED {"old":"...","new":"..."}`
+    /// entries. Payload is `{"old": "<state>", "new": "<state>"}`. Drives the
+    /// connection health indicator (AC-DET-1) — the definitive signal for
+    /// local-client disconnect detection.
+    /// Class 1 — interactive dispatch.
+    MatchConnectionState(MatchConnectionStateEvent),
 }
 
 impl GameEvent {
@@ -224,7 +234,8 @@ impl GameEvent {
             | Self::ClientAction(_)
             | Self::MatchState(_)
             | Self::LogFileRotated(_)
-            | Self::DetailedLoggingStatus(_) => PerformanceClass::InteractiveDispatch,
+            | Self::DetailedLoggingStatus(_)
+            | Self::MatchConnectionState(_) => PerformanceClass::InteractiveDispatch,
             Self::DraftBot(_)
             | Self::DraftHuman(_)
             | Self::DraftComplete(_)
@@ -582,6 +593,22 @@ impl DetailedLoggingStatusEvent {
     }
 }
 
+define_event! {
+    /// Match connection state machine transition event.
+    ///
+    /// Parsed from `[UnityCrossThreadLogger]STATE CHANGED {...}` entries.
+    /// The payload is the JSON object `{"old": "<state>", "new": "<state>"}`
+    /// where each state is one of the values observed in the MTGA match
+    /// connection state machine (e.g., `None`, `ConnectedToMatchDoor`,
+    /// `ConnectedToMatchDoor_ConnectingToGRE`,
+    /// `ConnectedToMatchDoor_ConnectedToGRE_Waiting`, `Playing`,
+    /// `MatchCompleted`, `Disconnected`).
+    ///
+    /// Feeds the desktop connection health monitor; see feature spec
+    /// `connection-health-indicator.md` **AC-DET-1**.
+    MatchConnectionStateEvent
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -630,6 +657,10 @@ mod tests {
             GameEvent::GameResult(GameResultEvent::new(meta.clone(), payload.clone())),
             GameEvent::LogFileRotated(LogFileRotatedEvent::new(meta.clone(), payload.clone())),
             GameEvent::DetailedLoggingStatus(DetailedLoggingStatusEvent::new(
+                meta.clone(),
+                payload.clone(),
+            )),
+            GameEvent::MatchConnectionState(MatchConnectionStateEvent::new(
                 meta.clone(),
                 payload.clone(),
             )),
@@ -866,6 +897,7 @@ mod tests {
             PerformanceClass::PostGameBatch,       // GameResult
             PerformanceClass::InteractiveDispatch, // LogFileRotated
             PerformanceClass::InteractiveDispatch, // DetailedLoggingStatus
+            PerformanceClass::InteractiveDispatch, // MatchConnectionState
         ];
 
         assert_eq!(
@@ -981,6 +1013,7 @@ mod tests {
             3, // GameResult
             1, // LogFileRotated
             1, // DetailedLoggingStatus
+            1, // MatchConnectionState
         ];
         assert_eq!(events.len(), expected_numbers.len());
         for (event, expected_num) in events.iter().zip(expected_numbers.iter()) {

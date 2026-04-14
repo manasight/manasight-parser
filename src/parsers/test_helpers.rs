@@ -107,3 +107,4 @@ define_payload_extractor!(lifecycle_payload, EventLifecycle);
 define_payload_extractor!(rank_payload, Rank);
 define_payload_extractor!(collection_payload, Collection);
 define_payload_extractor!(inventory_payload, Inventory);
+define_payload_extractor!(match_connection_state_payload, MatchConnectionState);
