@@ -1,13 +1,14 @@
-//! Connection-error parsers: JSON-bearing error-path markers.
+//! Connection-error parsers: JSON-bearing and plain-text error-path markers.
 //!
-//! Parses four error-path entry types that together form the Layer 1 red
-//! triggers for the desktop connection health monitor. All four markers
-//! currently live under `[UnityCrossThreadLogger]` and all four share a
-//! single payload strategy: the full parsed JSON is passed through
-//! unchanged under a `payload` key, alongside a stable `error_type`
-//! discriminant.
+//! Parses seven error-path entry types that together form the Layer 1 red
+//! triggers for the desktop connection health monitor. The markers live
+//! under three different entry headers and use two different payload
+//! strategies depending on whether the source line carries a structured
+//! JSON payload or is plain text.
 //!
 //! # Markers handled
+//!
+//! ## JSON-marker variants (`[UnityCrossThreadLogger]` header)
 //!
 //! | Marker | `error_type` |
 //! |--------|--------------|
@@ -16,14 +17,29 @@
 //! | `GREConnection.MatchDoorConnectionError` | `gre_match_door_connection_error` |
 //! | `TcpConnection.Close.Exception` | `tcp_close_exception` |
 //!
-//! # Bare-marker entries
+//! ## Plain-text variants (`[ConnectionManager]` and `Matchmaking:` headers)
 //!
-//! All four markers are observed in the disconnect corpus as paired lines —
-//! a bare marker (no JSON) followed by a JSON-carrying line. Bare-marker
-//! entries return `None`; the paired JSON line on a subsequent entry emits
-//! the event.
+//! | Line pattern | Header | `error_type` |
+//! |--------------|--------|--------------|
+//! | `Reconnect result : <value>` | `[ConnectionManager]` | `reconnect_result` |
+//! | `Reconnect succeeded after N attempts` / `Reconnect failed` / `Reconnect timed out` | `[ConnectionManager]` | `reconnect_outcome` |
+//! | `Matchmaking: GRE connection lost` | `Matchmaking:` | `gre_connection_lost` |
 //!
-//! # Payload shape
+//! # Bare-marker entries (JSON variants only)
+//!
+//! All four JSON-marker variants are observed in the disconnect corpus as
+//! paired lines — a bare marker (no JSON) followed by a JSON-carrying
+//! line. Bare-marker entries return `None`; the paired JSON line on a
+//! subsequent entry emits the event.
+//!
+//! # Payload shapes
+//!
+//! Two payload strategies coexist under the single `ConnectionError`
+//! event type. Desktop consumers switch on `error_type` and read either
+//! `payload` (JSON variants) or flat top-level named fields (plain-text
+//! variants).
+//!
+//! ## Strategy 1: JSON passthrough (under a `payload` key)
 //!
 //! ```json
 //! {
@@ -36,20 +52,29 @@
 //! differences in `NativeErrorCode` — Windows `10054`, macOS `10060` /
 //! `10049`). Downstream consumers read fields from `payload` per ADR-011.
 //!
-//! # Header dispatch and future extension
+//! ## Strategy 2: plain-text flattened fields
 //!
-//! [`try_parse`] dispatches on `entry.header`. For A-3 only
-//! `EntryHeader::UnityCrossThreadLogger` is handled; all other headers
-//! return `None`. A-4 will extend this parser to handle three plain-text
-//! error markers under `EntryHeader::ConnectionManager` and
-//! `EntryHeader::Matchmaking` (`Reconnect result`, `Reconnect succeeded` /
-//! `Reconnect failed`, and `Matchmaking: GRE connection lost`). Those
-//! variants use a different, flattened payload strategy — they do not wrap
-//! data in a `payload` key — so each marker group keeps its own helper
-//! function.
+//! Plain-text lines carry a small, fixed set of structured fields. Rather
+//! than wrapping them under a `payload` key, they are flattened alongside
+//! `error_type`:
+//!
+//! ```json
+//! {"error_type": "gre_connection_lost"}
+//! {"error_type": "reconnect_result", "result": "Connected" | "Error" | "None"}
+//! {"error_type": "reconnect_outcome", "outcome": "succeeded" | "failed" | "timed_out", "attempts": <i64 or null>}
+//! ```
+//!
+//! # Header dispatch
+//!
+//! [`try_parse`] dispatches on `entry.header` to one of three sub-parsers:
+//!
+//! - [`EntryHeader::UnityCrossThreadLogger`] → [`try_unity_error`] (JSON variants)
+//! - [`EntryHeader::ConnectionManager`] → [`try_connection_manager`] (plain-text)
+//! - [`EntryHeader::Matchmaking`] → [`try_matchmaking`] (plain-text)
+//! - All other headers → `None`
 //!
 //! Satisfies feature spec `connection-health-indicator.md` **AC-DET-5**
-//! (JSON-marker variants).
+//! (JSON-marker variants and plain-text variants).
 
 use crate::events::{ConnectionErrorEvent, EventMetadata, GameEvent};
 use crate::log::entry::{EntryHeader, LogEntry};
@@ -86,10 +111,12 @@ const ERROR_TYPE_CLOSE_EXCEPTION: &str = "tcp_close_exception";
 /// - [`EntryHeader::UnityCrossThreadLogger`] — inspect the body for one of
 ///   the four JSON-bearing error markers. Bare-marker bodies (no JSON
 ///   payload) return `None`.
+/// - [`EntryHeader::ConnectionManager`] — parse the body for
+///   `Reconnect result : <value>` or `Reconnect <outcome>` plain-text
+///   markers.
+/// - [`EntryHeader::Matchmaking`] — parse the body for
+///   `Matchmaking: GRE connection lost`.
 /// - Any other header — return `None`.
-///
-/// A-4 will extend this dispatch to handle `EntryHeader::ConnectionManager`
-/// and `EntryHeader::Matchmaking` with plain-text markers.
 ///
 /// The `timestamp` is `None` when the log entry header did not contain a
 /// parseable timestamp. It is passed through to [`EventMetadata`] so
@@ -100,6 +127,8 @@ pub fn try_parse(
 ) -> Option<GameEvent> {
     let payload = match entry.header {
         EntryHeader::UnityCrossThreadLogger => try_unity_error(&entry.body)?,
+        EntryHeader::ConnectionManager => try_connection_manager(&entry.body)?,
+        EntryHeader::Matchmaking => try_matchmaking(&entry.body)?,
         _ => return None,
     };
 
@@ -151,6 +180,88 @@ fn try_exception_marker(body: &str, error_type: &str) -> Option<serde_json::Valu
         "error_type": error_type,
         "payload": parsed,
     }))
+}
+
+/// Parses a `[ConnectionManager]` entry body into a flattened plain-text
+/// payload.
+///
+/// The body begins with the literal `[ConnectionManager] ` prefix (the
+/// [`LineBuffer`][crate::log::entry::LineBuffer] keeps the header line in
+/// the entry body). Recognized suffixes:
+///
+/// - `Reconnect result : <value>` — only the enumerated values
+///   `Connected`, `Error`, and `None` are accepted. Any other value
+///   returns `None`.
+/// - `Reconnect succeeded after <N> attempts` — emits
+///   `reconnect_outcome` with `outcome = "succeeded"`. The attempts count
+///   is parsed as `i64`; if unparseable, `attempts` is `null` rather than
+///   causing the whole entry to be rejected.
+/// - `Reconnect failed` — emits `reconnect_outcome` with
+///   `outcome = "failed"` and `attempts = null`.
+/// - `Reconnect timed out` — emits `reconnect_outcome` with
+///   `outcome = "timed_out"` and `attempts = null`.
+///
+/// Returns `None` for any body that lacks the `[ConnectionManager] `
+/// prefix or that does not match one of the recognized suffixes.
+fn try_connection_manager(body: &str) -> Option<serde_json::Value> {
+    let content = body.strip_prefix("[ConnectionManager] ")?;
+
+    if let Some(rest) = content.strip_prefix("Reconnect result : ") {
+        let result = rest.trim();
+        return match result {
+            "Connected" | "Error" | "None" => Some(serde_json::json!({
+                "error_type": "reconnect_result",
+                "result": result,
+            })),
+            _ => None,
+        };
+    }
+
+    if let Some(rest) = content.strip_prefix("Reconnect succeeded after ") {
+        let attempts = rest
+            .split_whitespace()
+            .next()
+            .and_then(|s| s.parse::<i64>().ok());
+        return Some(serde_json::json!({
+            "error_type": "reconnect_outcome",
+            "outcome": "succeeded",
+            "attempts": attempts,
+        }));
+    }
+
+    if content.starts_with("Reconnect failed") {
+        return Some(serde_json::json!({
+            "error_type": "reconnect_outcome",
+            "outcome": "failed",
+            "attempts": serde_json::Value::Null,
+        }));
+    }
+
+    if content.starts_with("Reconnect timed out") {
+        return Some(serde_json::json!({
+            "error_type": "reconnect_outcome",
+            "outcome": "timed_out",
+            "attempts": serde_json::Value::Null,
+        }));
+    }
+
+    None
+}
+
+/// Parses a `Matchmaking:` entry body into a flattened plain-text payload.
+///
+/// Currently only one marker is recognized:
+///
+/// - `Matchmaking: GRE connection lost` → `gre_connection_lost`.
+///
+/// The body is matched with `starts_with` so downstream extensions
+/// (trailing descriptors such as `, attempting reconnect`) remain part of
+/// the same marker. Any other `Matchmaking:` suffix returns `None`.
+fn try_matchmaking(body: &str) -> Option<serde_json::Value> {
+    if body.starts_with("Matchmaking: GRE connection lost") {
+        return Some(serde_json::json!({"error_type": "gre_connection_lost"}));
+    }
+    None
 }
 
 // ---------------------------------------------------------------------------
@@ -510,21 +621,212 @@ mod tests {
         }
 
         #[test]
-        fn test_connection_manager_header_returns_none() {
-            // A-4 will later claim ConnectionManager headers. For A-3, this
-            // parser must ignore them so A-4 can extend dispatch without
-            // breaking existing behavior.
-            let entry = connection_manager_entry(
-                "[ConnectionManager] Reconnect succeeded after 2 attempts (1.5s)",
-            );
+        fn test_unrecognized_connection_manager_body_returns_none() {
+            // A-4 claims ConnectionManager entries, but only the enumerated
+            // Reconnect markers. Unrelated bodies must still return None.
+            let entry =
+                connection_manager_entry("[ConnectionManager] Some unrelated diagnostic line");
             assert!(try_parse(&entry, Some(test_timestamp())).is_none());
         }
 
         #[test]
-        fn test_matchmaking_header_returns_none() {
-            // A-4 will later claim Matchmaking headers. For A-3, this parser
-            // must ignore them.
+        fn test_unrecognized_matchmaking_body_returns_none() {
+            // A-4 claims Matchmaking entries, but only the GRE-connection-lost
+            // marker. Unrelated bodies must still return None.
+            let entry = matchmaking_entry("Matchmaking: queue entered");
+            assert!(try_parse(&entry, Some(test_timestamp())).is_none());
+        }
+    }
+
+    // -- [ConnectionManager] Reconnect result ------------------------------
+
+    mod reconnect_result {
+        use super::*;
+
+        fn parse(body: &str) -> Option<GameEvent> {
+            let entry = connection_manager_entry(body);
+            try_parse(&entry, Some(test_timestamp()))
+        }
+
+        fn assert_result(body: &str, expected: &str) {
+            let result = parse(body);
+            assert!(result.is_some(), "expected Some for {body:?}, got None");
+            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            let payload = connection_error_payload(event);
+            assert_eq!(payload["error_type"], "reconnect_result");
+            assert_eq!(payload["result"], expected);
+        }
+
+        #[test]
+        fn test_reconnect_result_connected() {
+            assert_result(
+                "[ConnectionManager] Reconnect result : Connected",
+                "Connected",
+            );
+        }
+
+        #[test]
+        fn test_reconnect_result_error() {
+            assert_result("[ConnectionManager] Reconnect result : Error", "Error");
+        }
+
+        #[test]
+        fn test_reconnect_result_none() {
+            assert_result("[ConnectionManager] Reconnect result : None", "None");
+        }
+
+        #[test]
+        fn test_reconnect_result_invalid_value_returns_none() {
+            // Only the enumerated Connected/Error/None values are accepted.
+            assert!(parse("[ConnectionManager] Reconnect result : Unknown").is_none());
+        }
+
+        #[test]
+        fn test_reconnect_result_empty_value_returns_none() {
+            assert!(parse("[ConnectionManager] Reconnect result : ").is_none());
+        }
+    }
+
+    // -- [ConnectionManager] Reconnect outcome -----------------------------
+
+    mod reconnect_outcome {
+        use super::*;
+
+        fn parse(body: &str) -> Option<GameEvent> {
+            let entry = connection_manager_entry(body);
+            try_parse(&entry, Some(test_timestamp()))
+        }
+
+        #[test]
+        fn test_reconnect_succeeded_after_1_attempts() {
+            let result = parse("[ConnectionManager] Reconnect succeeded after 1 attempts");
+            assert!(result.is_some());
+            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            let payload = connection_error_payload(event);
+            assert_eq!(payload["error_type"], "reconnect_outcome");
+            assert_eq!(payload["outcome"], "succeeded");
+            assert_eq!(payload["attempts"], 1);
+        }
+
+        #[test]
+        fn test_reconnect_succeeded_with_trailing_descriptor() {
+            // `Reconnect succeeded after 1 attempts (0.8s)` — attempts is
+            // parsed from the first whitespace-delimited token.
+            let result = parse("[ConnectionManager] Reconnect succeeded after 3 attempts (1.5s)");
+            assert!(result.is_some());
+            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            let payload = connection_error_payload(event);
+            assert_eq!(payload["outcome"], "succeeded");
+            assert_eq!(payload["attempts"], 3);
+        }
+
+        #[test]
+        fn test_reconnect_failed() {
+            let result = parse("[ConnectionManager] Reconnect failed");
+            assert!(result.is_some());
+            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            let payload = connection_error_payload(event);
+            assert_eq!(payload["error_type"], "reconnect_outcome");
+            assert_eq!(payload["outcome"], "failed");
+            assert!(payload["attempts"].is_null());
+        }
+
+        #[test]
+        fn test_reconnect_timed_out() {
+            let result = parse("[ConnectionManager] Reconnect timed out");
+            assert!(result.is_some());
+            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            let payload = connection_error_payload(event);
+            assert_eq!(payload["error_type"], "reconnect_outcome");
+            assert_eq!(payload["outcome"], "timed_out");
+            assert!(payload["attempts"].is_null());
+        }
+
+        #[test]
+        fn test_reconnect_succeeded_unparseable_attempts_is_null() {
+            // Unparseable attempts should fall back to null, NOT return
+            // None — the outcome itself is still useful downstream.
+            let result = parse("[ConnectionManager] Reconnect succeeded after banana attempts");
+            assert!(result.is_some());
+            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            let payload = connection_error_payload(event);
+            assert_eq!(payload["error_type"], "reconnect_outcome");
+            assert_eq!(payload["outcome"], "succeeded");
+            assert!(
+                payload["attempts"].is_null(),
+                "unparseable attempts must be null, got {:?}",
+                payload["attempts"]
+            );
+        }
+    }
+
+    // -- Matchmaking: GRE connection lost ----------------------------------
+
+    mod gre_connection_lost {
+        use super::*;
+
+        #[test]
+        fn test_gre_connection_lost_bare() {
+            let entry = matchmaking_entry("Matchmaking: GRE connection lost");
+            let result = try_parse(&entry, Some(test_timestamp()));
+            assert!(result.is_some());
+            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            let payload = connection_error_payload(event);
+            assert_eq!(payload["error_type"], "gre_connection_lost");
+            // Plain-text flattened strategy: no `payload` wrapper key.
+            assert!(payload.get("payload").is_none());
+        }
+
+        #[test]
+        fn test_gre_connection_lost_with_trailing_descriptor() {
+            // Trailing descriptors are permitted — the marker is matched
+            // via starts_with.
             let entry = matchmaking_entry("Matchmaking: GRE connection lost, attempting reconnect");
+            let result = try_parse(&entry, Some(test_timestamp()));
+            assert!(result.is_some());
+            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            let payload = connection_error_payload(event);
+            assert_eq!(payload["error_type"], "gre_connection_lost");
+        }
+
+        #[test]
+        fn test_non_matching_matchmaking_suffix_returns_none() {
+            // `Matchmaking: GRE connected` (wrong suffix, not "lost") must
+            // not match the gre_connection_lost marker.
+            let entry = matchmaking_entry("Matchmaking: GRE connected");
+            assert!(try_parse(&entry, Some(test_timestamp())).is_none());
+        }
+    }
+
+    // -- Plain-text dispatch edge cases ------------------------------------
+
+    mod plain_text_dispatch {
+        use super::*;
+
+        #[test]
+        fn test_connection_manager_without_prefix_returns_none() {
+            // The body is required to begin with `[ConnectionManager] `.
+            let entry = LogEntry {
+                header: EntryHeader::ConnectionManager,
+                body: "Reconnect result : Connected".to_owned(),
+            };
+            assert!(try_parse(&entry, Some(test_timestamp())).is_none());
+        }
+
+        #[test]
+        fn test_matchmaking_empty_body_returns_none() {
+            let entry = matchmaking_entry("");
+            assert!(try_parse(&entry, Some(test_timestamp())).is_none());
+        }
+
+        #[test]
+        fn test_client_gre_header_with_reconnect_body_returns_none() {
+            // Confirms dispatch is header-gated: a ConnectionManager-shaped
+            // body under the wrong header (ClientGre) must return None.
+            let entry = LogEntry {
+                header: EntryHeader::ClientGre,
+                body: "[ConnectionManager] Reconnect result : Connected".to_owned(),
+            };
             assert!(try_parse(&entry, Some(test_timestamp())).is_none());
         }
     }
