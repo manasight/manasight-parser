@@ -27,6 +27,30 @@ pub fn unity_entry(body: &str) -> LogEntry {
     }
 }
 
+/// Build a [`LogEntry`] with `ConnectionManager` header from body text.
+///
+/// Mirrors [`unity_entry`]. Used by the A-3 connection-health parsers
+/// (e.g., `Reconnect result`, `Reconnect succeeded`, `Reconnect failed`)
+/// to construct test inputs without re-specifying the header.
+pub fn connection_manager_entry(body: &str) -> LogEntry {
+    LogEntry {
+        header: EntryHeader::ConnectionManager,
+        body: body.to_owned(),
+    }
+}
+
+/// Build a [`LogEntry`] with `Matchmaking` header from body text.
+///
+/// Mirrors [`unity_entry`]. Used by the A-3 connection-health parsers
+/// (e.g., `Matchmaking: GRE connection lost`) to construct test inputs
+/// without re-specifying the header.
+pub fn matchmaking_entry(body: &str) -> LogEntry {
+    LogEntry {
+        header: EntryHeader::Matchmaking,
+        body: body.to_owned(),
+    }
+}
+
 /// Generate a per-variant payload extractor for test use.
 ///
 /// Each generated function matches one [`GameEvent`] variant and returns its
@@ -44,6 +68,32 @@ macro_rules! define_payload_extractor {
             }
         }
     };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_unity_entry_sets_header() {
+        let entry = unity_entry("body");
+        assert_eq!(entry.header, EntryHeader::UnityCrossThreadLogger);
+        assert_eq!(entry.body, "body");
+    }
+
+    #[test]
+    fn test_connection_manager_entry_sets_header() {
+        let entry = connection_manager_entry("[ConnectionManager] Reconnect succeeded");
+        assert_eq!(entry.header, EntryHeader::ConnectionManager);
+        assert_eq!(entry.body, "[ConnectionManager] Reconnect succeeded");
+    }
+
+    #[test]
+    fn test_matchmaking_entry_sets_header() {
+        let entry = matchmaking_entry("Matchmaking: GRE connection lost");
+        assert_eq!(entry.header, EntryHeader::Matchmaking);
+        assert_eq!(entry.body, "Matchmaking: GRE connection lost");
+    }
 }
 
 define_payload_extractor!(session_payload, Session);

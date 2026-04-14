@@ -1,8 +1,9 @@
 //! Log entry prefix identification and multi-line JSON accumulation.
 //!
-//! Detects log entry boundaries using the `[UnityCrossThreadLogger]` and
-//! `[Client GRE]` header patterns, then accumulates subsequent lines until
-//! the next header boundary to form complete raw entries.
+//! Detects log entry boundaries using the `[UnityCrossThreadLogger]`,
+//! `[Client GRE]`, `[ConnectionManager]`, and `Matchmaking:` header patterns,
+//! then accumulates subsequent lines until the next header boundary to form
+//! complete raw entries.
 //!
 //! # Data flow
 //!
@@ -27,6 +28,16 @@ pub enum EntryHeader {
     UnityCrossThreadLogger,
     /// `[Client GRE]` — used for Game Rules Engine messages.
     ClientGre,
+    /// `[ConnectionManager]` — emitted for Arena's connection-lifecycle
+    /// diagnostics (e.g., `Reconnect result : ...`, `Reconnect succeeded`,
+    /// `Reconnect failed`). These lines are plain-text, single-line entries
+    /// in practice.
+    ConnectionManager,
+    /// `Matchmaking:` — a bare (non-bracketed) prefix Arena emits for
+    /// matchmaking-side connection markers such as
+    /// `Matchmaking: GRE connection lost`. These lines are plain-text,
+    /// single-line entries in practice.
+    Matchmaking,
     /// Metadata lines that appear outside bracket-delimited entries.
     ///
     /// Currently covers `DETAILED LOGS: ENABLED` and `DETAILED LOGS: DISABLED`,
@@ -44,6 +55,8 @@ impl EntryHeader {
         match self {
             Self::UnityCrossThreadLogger => "[UnityCrossThreadLogger]",
             Self::ClientGre => "[Client GRE]",
+            Self::ConnectionManager => "[ConnectionManager]",
+            Self::Matchmaking => "Matchmaking:",
             Self::Metadata => "METADATA",
         }
     }
@@ -116,10 +129,11 @@ impl LineBuffer {
         // The regex crate documents that `Regex::new` only fails on invalid
         // patterns. This pattern is a compile-time constant and is valid, so
         // the `Err` branch is unreachable in practice.
-        let header_re = match Regex::new(r"^\[(UnityCrossThreadLogger|Client GRE)\]") {
-            Ok(re) => re,
-            Err(e) => unreachable!("invalid header regex: {e}"),
-        };
+        let header_re =
+            match Regex::new(r"^\[(UnityCrossThreadLogger|Client GRE|ConnectionManager)\]") {
+                Ok(re) => re,
+                Err(e) => unreachable!("invalid header regex: {e}"),
+            };
         Self {
             header_re,
             current_header: None,
@@ -216,14 +230,25 @@ impl LineBuffer {
     }
 
     /// Detects whether `line` starts with a known header prefix.
+    ///
+    /// Bracketed headers (`[UnityCrossThreadLogger]`, `[Client GRE]`,
+    /// `[ConnectionManager]`) are matched via the compiled regex. The
+    /// bare `Matchmaking: ` prefix is matched via a separate
+    /// `starts_with` check because it has no brackets.
     fn detect_header(&self, line: &str) -> Option<EntryHeader> {
-        let caps = self.header_re.captures(line)?;
-        let prefix = caps.get(1)?.as_str();
-        match prefix {
-            "UnityCrossThreadLogger" => Some(EntryHeader::UnityCrossThreadLogger),
-            "Client GRE" => Some(EntryHeader::ClientGre),
-            _ => None,
+        if let Some(caps) = self.header_re.captures(line) {
+            let prefix = caps.get(1)?.as_str();
+            return match prefix {
+                "UnityCrossThreadLogger" => Some(EntryHeader::UnityCrossThreadLogger),
+                "Client GRE" => Some(EntryHeader::ClientGre),
+                "ConnectionManager" => Some(EntryHeader::ConnectionManager),
+                _ => None,
+            };
         }
+        if line.starts_with("Matchmaking: ") {
+            return Some(EntryHeader::Matchmaking);
+        }
+        None
     }
 
     /// Takes the current entry out of the buffer, leaving it empty.
@@ -790,6 +815,222 @@ mod tests {
         #[test]
         fn test_entry_header_metadata_display() {
             assert_eq!(EntryHeader::Metadata.to_string(), "METADATA");
+        }
+    }
+
+    // -- ConnectionManager / Matchmaking header framing ---------------------
+
+    mod connection_and_matchmaking_headers {
+        use super::*;
+
+        #[test]
+        fn test_as_str_connection_manager() {
+            assert_eq!(
+                EntryHeader::ConnectionManager.as_str(),
+                "[ConnectionManager]"
+            );
+        }
+
+        #[test]
+        fn test_as_str_matchmaking() {
+            // The `Matchmaking:` prefix keeps the colon — this matches how
+            // the line appears in Arena's actual log.
+            assert_eq!(EntryHeader::Matchmaking.as_str(), "Matchmaking:");
+        }
+
+        #[test]
+        fn test_display_connection_manager() {
+            assert_eq!(
+                EntryHeader::ConnectionManager.to_string(),
+                "[ConnectionManager]"
+            );
+        }
+
+        #[test]
+        fn test_display_matchmaking() {
+            assert_eq!(EntryHeader::Matchmaking.to_string(), "Matchmaking:");
+        }
+
+        #[test]
+        fn test_connection_manager_header_mid_stream_flushes_unity() {
+            let mut buf = LineBuffer::new();
+            buf.push_line("[UnityCrossThreadLogger] 1/1/2025 Event1");
+
+            let flushed = buf.push_line("[ConnectionManager] Reconnect result : Error");
+            assert_eq!(
+                flushed,
+                Some(expected(
+                    EntryHeader::UnityCrossThreadLogger,
+                    "[UnityCrossThreadLogger] 1/1/2025 Event1",
+                )),
+            );
+
+            // The ConnectionManager entry should be buffered and flushable.
+            assert_eq!(
+                buf.flush(),
+                Some(expected(
+                    EntryHeader::ConnectionManager,
+                    "[ConnectionManager] Reconnect result : Error",
+                )),
+            );
+        }
+
+        #[test]
+        fn test_matchmaking_header_mid_stream_flushes_unity() {
+            let mut buf = LineBuffer::new();
+            buf.push_line("[UnityCrossThreadLogger] 1/1/2025 Event1");
+
+            let flushed = buf.push_line("Matchmaking: GRE connection lost");
+            assert_eq!(
+                flushed,
+                Some(expected(
+                    EntryHeader::UnityCrossThreadLogger,
+                    "[UnityCrossThreadLogger] 1/1/2025 Event1",
+                )),
+            );
+
+            assert_eq!(
+                buf.flush(),
+                Some(expected(
+                    EntryHeader::Matchmaking,
+                    "Matchmaking: GRE connection lost",
+                )),
+            );
+        }
+
+        #[test]
+        fn test_connection_manager_as_first_line_no_warning_emitted() {
+            // A ConnectionManager entry as the very first line should not
+            // be discarded as headerless — push_line returns None only
+            // because there is nothing to flush yet; the entry is buffered
+            // and flushable normally.
+            let mut buf = LineBuffer::new();
+            assert!(buf
+                .push_line("[ConnectionManager] Reconnect succeeded")
+                .is_none());
+            assert!(!buf.is_empty());
+            assert_eq!(
+                buf.flush(),
+                Some(expected(
+                    EntryHeader::ConnectionManager,
+                    "[ConnectionManager] Reconnect succeeded",
+                )),
+            );
+        }
+
+        #[test]
+        fn test_matchmaking_as_first_line_no_warning_emitted() {
+            let mut buf = LineBuffer::new();
+            assert!(buf.push_line("Matchmaking: GRE connection lost").is_none());
+            assert!(!buf.is_empty());
+            assert_eq!(
+                buf.flush(),
+                Some(expected(
+                    EntryHeader::Matchmaking,
+                    "Matchmaking: GRE connection lost",
+                )),
+            );
+        }
+
+        #[test]
+        fn test_four_way_interleave_yields_four_entries() {
+            // Realistic corpus-derived pattern from issues #528/#529:
+            // Unity STATE CHANGED → Matchmaking: GRE connection lost →
+            // ConnectionManager Reconnect result → Unity (next event).
+            let mut buf = LineBuffer::new();
+            let mut entries = Vec::new();
+
+            if let Some(e) = buf.push_line(
+                "[UnityCrossThreadLogger]STATE CHANGED {\"old\":\"Playing\",\"new\":\"Disconnected\"}",
+            ) {
+                entries.push(e);
+            }
+            if let Some(e) = buf.push_line("Matchmaking: GRE connection lost") {
+                entries.push(e);
+            }
+            if let Some(e) = buf.push_line("[ConnectionManager] Reconnect result : Error") {
+                entries.push(e);
+            }
+            if let Some(e) = buf.push_line("[UnityCrossThreadLogger] Next event") {
+                entries.push(e);
+            }
+            if let Some(e) = buf.flush() {
+                entries.push(e);
+            }
+
+            assert_eq!(entries.len(), 4);
+            assert_eq!(entries[0].header, EntryHeader::UnityCrossThreadLogger);
+            assert!(entries[0].body.contains("STATE CHANGED"));
+            assert_eq!(entries[1].header, EntryHeader::Matchmaking);
+            assert_eq!(entries[1].body, "Matchmaking: GRE connection lost");
+            assert_eq!(entries[2].header, EntryHeader::ConnectionManager);
+            assert_eq!(
+                entries[2].body,
+                "[ConnectionManager] Reconnect result : Error"
+            );
+            assert_eq!(entries[3].header, EntryHeader::UnityCrossThreadLogger);
+            assert_eq!(entries[3].body, "[UnityCrossThreadLogger] Next event");
+        }
+
+        #[test]
+        fn test_connection_manager_accumulates_continuation_lines() {
+            // Corpus shows these entries are single-line in practice, but
+            // verify continuation lines are accumulated if they appear.
+            let mut buf = LineBuffer::new();
+            buf.push_line("[ConnectionManager] Reconnect result : Error");
+            buf.push_line("  extra detail line");
+            buf.push_line("  another detail line");
+
+            assert_eq!(
+                buf.flush(),
+                Some(expected(
+                    EntryHeader::ConnectionManager,
+                    "[ConnectionManager] Reconnect result : Error\n  extra detail line\n  another detail line",
+                )),
+            );
+        }
+
+        #[test]
+        fn test_matchmaking_accumulates_continuation_lines() {
+            let mut buf = LineBuffer::new();
+            buf.push_line("Matchmaking: GRE connection lost");
+            buf.push_line("extra continuation");
+
+            assert_eq!(
+                buf.flush(),
+                Some(expected(
+                    EntryHeader::Matchmaking,
+                    "Matchmaking: GRE connection lost\nextra continuation",
+                )),
+            );
+        }
+
+        #[test]
+        fn test_matchmaking_without_trailing_space_is_not_header() {
+            // The starts_with check requires the trailing space ("Matchmaking: ")
+            // to avoid matching unrelated prefixes that happen to start
+            // with "Matchmaking:". Without the space it should be a
+            // headerless line (discarded at start of stream).
+            let mut buf = LineBuffer::new();
+            assert!(buf.push_line("Matchmaking:compact-no-space").is_none());
+            assert!(buf.is_empty());
+        }
+
+        #[test]
+        fn test_connection_manager_mid_line_is_continuation() {
+            let mut buf = LineBuffer::new();
+            buf.push_line("[UnityCrossThreadLogger] Event");
+            // ConnectionManager bracket pattern in the middle of a line is
+            // NOT a boundary — same rule as other bracketed headers.
+            buf.push_line("some text [ConnectionManager] not a header");
+            assert_eq!(
+                buf.flush(),
+                Some(expected(
+                    EntryHeader::UnityCrossThreadLogger,
+                    "[UnityCrossThreadLogger] Event\n\
+                     some text [ConnectionManager] not a header",
+                )),
+            );
         }
     }
 }
