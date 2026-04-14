@@ -128,6 +128,7 @@ macro_rules! delegate_to_inner {
             Self::MatchConnectionState(e) => e.$method(),
             Self::TcpConnectionClose(e) => e.$method(),
             Self::WebSocketClosed(e) => e.$method(),
+            Self::ConnectionError(e) => e.$method(),
         }
     };
 }
@@ -245,6 +246,19 @@ pub enum GameEvent {
     /// `closeType` semantics (per ADR-011).
     /// Class 1 — interactive dispatch.
     WebSocketClosed(WebSocketClosedEvent),
+
+    /// Connection error event (error-path markers).
+    ///
+    /// Parsed from four JSON-bearing markers under `[UnityCrossThreadLogger]`:
+    /// `TcpConnection.ProcessRead.Exception`,
+    /// `Client.TcpConnection.ProcessFailure`,
+    /// `GREConnection.MatchDoorConnectionError`, and
+    /// `TcpConnection.Close.Exception`. Each variant is discriminated by a
+    /// stable `error_type` string and wraps the full parsed JSON under a
+    /// `payload` key. Feeds the desktop connection health monitor (AC-DET-5);
+    /// the parser is agnostic to inner error-code semantics (per ADR-011).
+    /// Class 1 — interactive dispatch.
+    ConnectionError(ConnectionErrorEvent),
 }
 
 impl GameEvent {
@@ -262,7 +276,8 @@ impl GameEvent {
             | Self::DetailedLoggingStatus(_)
             | Self::MatchConnectionState(_)
             | Self::TcpConnectionClose(_)
-            | Self::WebSocketClosed(_) => PerformanceClass::InteractiveDispatch,
+            | Self::WebSocketClosed(_)
+            | Self::ConnectionError(_) => PerformanceClass::InteractiveDispatch,
             Self::DraftBot(_)
             | Self::DraftHuman(_)
             | Self::DraftComplete(_)
@@ -672,6 +687,33 @@ define_event! {
     WebSocketClosedEvent
 }
 
+define_event! {
+    /// Connection error event (error-path markers).
+    ///
+    /// Parsed from four JSON-bearing error markers under
+    /// `[UnityCrossThreadLogger]`:
+    ///
+    /// | Marker | `error_type` |
+    /// |--------|--------------|
+    /// | `TcpConnection.ProcessRead.Exception` | `tcp_process_read_exception` |
+    /// | `Client.TcpConnection.ProcessFailure` | `tcp_process_failure_socket_error` |
+    /// | `GREConnection.MatchDoorConnectionError` | `gre_match_door_connection_error` |
+    /// | `TcpConnection.Close.Exception` | `tcp_close_exception` |
+    ///
+    /// The payload shape is
+    /// `{"error_type": "<discriminant>", "payload": <parsed>}`, where
+    /// `<parsed>` is the full parsed JSON from the log line preserved
+    /// unchanged. Bare-marker entries (no JSON payload) do not produce this
+    /// event; the paired JSON line on a subsequent entry emits it.
+    ///
+    /// The parser is agnostic to inner error-code semantics — downstream
+    /// consumers match on `error_type` per ADR-011.
+    ///
+    /// Feeds the desktop connection health monitor; see feature spec
+    /// `connection-health-indicator.md` **AC-DET-5**.
+    ConnectionErrorEvent
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -732,6 +774,7 @@ mod tests {
                 payload.clone(),
             )),
             GameEvent::WebSocketClosed(WebSocketClosedEvent::new(meta.clone(), payload.clone())),
+            GameEvent::ConnectionError(ConnectionErrorEvent::new(meta.clone(), payload.clone())),
         ]
     }
 
@@ -968,6 +1011,7 @@ mod tests {
             PerformanceClass::InteractiveDispatch, // MatchConnectionState
             PerformanceClass::InteractiveDispatch, // TcpConnectionClose
             PerformanceClass::InteractiveDispatch, // WebSocketClosed
+            PerformanceClass::InteractiveDispatch, // ConnectionError
         ];
 
         assert_eq!(
@@ -1086,6 +1130,7 @@ mod tests {
             1, // MatchConnectionState
             1, // TcpConnectionClose
             1, // WebSocketClosed
+            1, // ConnectionError
         ];
         assert_eq!(events.len(), expected_numbers.len());
         for (event, expected_num) in events.iter().zip(expected_numbers.iter()) {

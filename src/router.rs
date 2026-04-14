@@ -279,7 +279,8 @@ fn dispatch_to_parsers(entry: &LogEntry, timestamp: Option<DateTime<Utc>>) -> Ve
         .or_else(|| parsers::collection::try_parse(entry, timestamp))
         .or_else(|| parsers::inventory::try_parse(entry, timestamp))
         .or_else(|| parsers::connection_state::try_parse(entry, timestamp))
-        .or_else(|| parsers::connection_close::try_parse(entry, timestamp));
+        .or_else(|| parsers::connection_close::try_parse(entry, timestamp))
+        .or_else(|| parsers::connection_error::try_parse(entry, timestamp));
 
     event.into_iter().collect()
 }
