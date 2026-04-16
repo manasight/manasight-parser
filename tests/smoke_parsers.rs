@@ -207,12 +207,14 @@ fn try_extract_timestamp(body: &str) -> Option<chrono::DateTime<chrono::Utc>> {
 
 /// Returns `true` if the set of claimant parser names represents an expected
 /// overlap rather than a smoke-test failure.
-///
-/// Keep this helper even when the known-overlap set is empty so future
-/// intentional overlaps can be added in one place without changing report
-/// accounting.
-fn is_known_overlap(_claimants: &[&str]) -> bool {
-    false
+/// `<== StartHook` responses contain both `InventoryInfo` and `Decks`/`DeckSummaries`,
+/// so the `inventory` and `collection` parsers legitimately claim the same
+/// entry -- each extracting different data from the shared response.
+fn is_known_overlap(claimants: &[&str]) -> bool {
+    claimants
+        .iter()
+        .all(|name| matches!(*name, "inventory" | "deck_collection"))
+        && claimants.len() >= 2
 }
 
 // File processing
