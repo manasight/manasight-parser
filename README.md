@@ -6,6 +6,21 @@
 
 MTG Arena log file parser — a Rust library crate that reads Arena's `Player.log` and emits typed game events via an async event bus.
 
+## Installation
+
+```sh
+cargo add manasight-parser
+```
+
+Or in `Cargo.toml`:
+
+```toml
+[dependencies]
+manasight-parser = "0.1"
+```
+
+Requires Rust 1.93.0 or later.
+
 ## Architecture
 
 ```text
