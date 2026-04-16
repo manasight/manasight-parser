@@ -120,6 +120,7 @@ macro_rules! delegate_to_inner {
             Self::EventLifecycle(e) => e.$method(),
             Self::Session(e) => e.$method(),
             Self::Rank(e) => e.$method(),
+            Self::DeckCollection(e) => e.$method(),
             Self::Inventory(e) => e.$method(),
             Self::GameResult(e) => e.$method(),
             Self::LogFileRotated(e) => e.$method(),
@@ -183,6 +184,10 @@ pub enum GameEvent {
     /// Rank snapshot (`<== RankGetCombinedRankInfo`).
     /// Class 2 — durable per-event.
     Rank(RankEvent),
+
+    /// Deck snapshot (`<== StartHook` with `DeckSummaries` and `Decks`).
+    /// Class 2 — durable per-event.
+    DeckCollection(DeckCollectionEvent),
 
     /// Inventory snapshot (`<== StartHook` with `InventoryInfo`):
     /// currency, wildcards, etc. Class 2 — durable per-event.
@@ -280,6 +285,7 @@ impl GameEvent {
             | Self::EventLifecycle(_)
             | Self::Session(_)
             | Self::Rank(_)
+            | Self::DeckCollection(_)
             | Self::Inventory(_) => PerformanceClass::DurablePerEvent,
             Self::GameResult(_) => PerformanceClass::PostGameBatch,
         }
@@ -537,6 +543,15 @@ define_event! {
 }
 
 define_event! {
+    /// Deck snapshot.
+    ///
+    /// Parsed from `<== StartHook` responses containing both `DeckSummaries`
+    /// and `Decks`. Correlates per-deck metadata with the associated deck
+    /// list payload when a matching `DeckId` is available.
+    DeckCollectionEvent
+}
+
+define_event! {
     /// Inventory snapshot.
     ///
     /// Parsed from `<== StartHook` responses containing `InventoryInfo`.
@@ -745,6 +760,7 @@ mod tests {
             GameEvent::EventLifecycle(EventLifecycleEvent::new(meta.clone(), payload.clone())),
             GameEvent::Session(SessionEvent::new(meta.clone(), payload.clone())),
             GameEvent::Rank(RankEvent::new(meta.clone(), payload.clone())),
+            GameEvent::DeckCollection(DeckCollectionEvent::new(meta.clone(), payload.clone())),
             GameEvent::Inventory(InventoryEvent::new(meta.clone(), payload.clone())),
             GameEvent::GameResult(GameResultEvent::new(meta.clone(), payload.clone())),
             GameEvent::LogFileRotated(LogFileRotatedEvent::new(meta.clone(), payload.clone())),
@@ -944,6 +960,24 @@ mod tests {
     }
 
     #[test]
+    fn test_deck_collection_event_field_access() {
+        let event = DeckCollectionEvent::new(
+            make_metadata(b"deck collection"),
+            serde_json::json!({
+                "type": "deck_collection_snapshot",
+                "decks": {
+                    "deck-1": {
+                        "DeckId": "deck-1",
+                        "Name": "Reanimator",
+                        "list": {"MainDeck": [{"cardId": 1, "quantity": 4}]}
+                    }
+                }
+            }),
+        );
+        assert_eq!(event.payload()["decks"]["deck-1"]["DeckId"], "deck-1");
+    }
+
+    #[test]
     fn test_inventory_event_field_access() {
         let event = InventoryEvent::new(
             make_metadata(b"inventory"),
@@ -981,6 +1015,7 @@ mod tests {
             PerformanceClass::DurablePerEvent,     // EventLifecycle
             PerformanceClass::DurablePerEvent,     // Session
             PerformanceClass::DurablePerEvent,     // Rank
+            PerformanceClass::DurablePerEvent,     // DeckCollection
             PerformanceClass::DurablePerEvent,     // Inventory
             PerformanceClass::PostGameBatch,       // GameResult
             PerformanceClass::InteractiveDispatch, // LogFileRotated
@@ -1099,6 +1134,7 @@ mod tests {
             2, // EventLifecycle
             2, // Session
             2, // Rank
+            2, // DeckCollection
             2, // Inventory
             3, // GameResult
             1, // LogFileRotated

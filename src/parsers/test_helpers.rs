@@ -105,6 +105,7 @@ define_payload_extractor!(draft_human_payload, DraftHuman);
 define_payload_extractor!(draft_complete_payload, DraftComplete);
 define_payload_extractor!(lifecycle_payload, EventLifecycle);
 define_payload_extractor!(rank_payload, Rank);
+define_payload_extractor!(deck_collection_payload, DeckCollection);
 define_payload_extractor!(inventory_payload, Inventory);
 define_payload_extractor!(match_connection_state_payload, MatchConnectionState);
 define_payload_extractor!(tcp_connection_close_payload, TcpConnectionClose);
