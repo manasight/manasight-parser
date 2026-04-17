@@ -120,7 +120,6 @@ macro_rules! delegate_to_inner {
             Self::EventLifecycle(e) => e.$method(),
             Self::Session(e) => e.$method(),
             Self::Rank(e) => e.$method(),
-            Self::Collection(e) => e.$method(),
             Self::Inventory(e) => e.$method(),
             Self::GameResult(e) => e.$method(),
             Self::LogFileRotated(e) => e.$method(),
@@ -183,10 +182,6 @@ pub enum GameEvent {
     /// Rank snapshot (`<== RankGetCombinedRankInfo`).
     /// Class 2 — durable per-event.
     Rank(RankEvent),
-
-    /// Card collection snapshot (`<== StartHook` with `PlayerCards`).
-    /// Class 2 — durable per-event.
-    Collection(CollectionEvent),
 
     /// Inventory snapshot (`<== StartHook` with `InventoryInfo`):
     /// currency, wildcards, etc. Class 2 — durable per-event.
@@ -284,7 +279,6 @@ impl GameEvent {
             | Self::EventLifecycle(_)
             | Self::Session(_)
             | Self::Rank(_)
-            | Self::Collection(_)
             | Self::Inventory(_) => PerformanceClass::DurablePerEvent,
             Self::GameResult(_) => PerformanceClass::PostGameBatch,
         }
@@ -541,14 +535,6 @@ define_event! {
 }
 
 define_event! {
-    /// Card collection snapshot.
-    ///
-    /// Parsed from `<== StartHook` responses containing `PlayerCards`.
-    /// Enables future deck building features. Best-effort collection.
-    CollectionEvent
-}
-
-define_event! {
     /// Inventory snapshot.
     ///
     /// Parsed from `<== StartHook` responses containing `InventoryInfo`.
@@ -757,7 +743,6 @@ mod tests {
             GameEvent::EventLifecycle(EventLifecycleEvent::new(meta.clone(), payload.clone())),
             GameEvent::Session(SessionEvent::new(meta.clone(), payload.clone())),
             GameEvent::Rank(RankEvent::new(meta.clone(), payload.clone())),
-            GameEvent::Collection(CollectionEvent::new(meta.clone(), payload.clone())),
             GameEvent::Inventory(InventoryEvent::new(meta.clone(), payload.clone())),
             GameEvent::GameResult(GameResultEvent::new(meta.clone(), payload.clone())),
             GameEvent::LogFileRotated(LogFileRotatedEvent::new(meta.clone(), payload.clone())),
@@ -957,15 +942,6 @@ mod tests {
     }
 
     #[test]
-    fn test_collection_event_field_access() {
-        let event = CollectionEvent::new(
-            make_metadata(b"collection"),
-            serde_json::json!({"12345": 4, "67890": 2}),
-        );
-        assert_eq!(event.payload()["12345"], 4);
-    }
-
-    #[test]
     fn test_inventory_event_field_access() {
         let event = InventoryEvent::new(
             make_metadata(b"inventory"),
@@ -1003,7 +979,6 @@ mod tests {
             PerformanceClass::DurablePerEvent,     // EventLifecycle
             PerformanceClass::DurablePerEvent,     // Session
             PerformanceClass::DurablePerEvent,     // Rank
-            PerformanceClass::DurablePerEvent,     // Collection
             PerformanceClass::DurablePerEvent,     // Inventory
             PerformanceClass::PostGameBatch,       // GameResult
             PerformanceClass::InteractiveDispatch, // LogFileRotated
@@ -1122,7 +1097,6 @@ mod tests {
             2, // EventLifecycle
             2, // Session
             2, // Rank
-            2, // Collection
             2, // Inventory
             3, // GameResult
             1, // LogFileRotated

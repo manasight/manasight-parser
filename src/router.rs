@@ -243,10 +243,9 @@ fn extract_timestamp(body: &str) -> Option<DateTime<Utc>> {
 /// 7. Draft complete — draft completion
 /// 8. Event lifecycle — event joins/claims
 /// 9. Rank — rank snapshots
-/// 10. Collection — card collection from `StartHook`
-/// 11. Inventory — inventory from `StartHook`
-/// 12. Match connection state — `STATE CHANGED` transitions
-/// 13. Connection close — `Client.TcpConnection.Close` / `GREConnection.HandleWebSocketClosed`
+/// 10. Inventory — inventory from `StartHook`
+/// 11. Match connection state — `STATE CHANGED` transitions
+/// 12. Connection close — `Client.TcpConnection.Close` / `GREConnection.HandleWebSocketClosed`
 ///
 /// The GRE parser may return multiple events from a single entry
 /// (batched `GameStateMessage` values). All other parsers return at
@@ -276,7 +275,6 @@ fn dispatch_to_parsers(entry: &LogEntry, timestamp: Option<DateTime<Utc>>) -> Ve
         .or_else(|| parsers::draft::complete::try_parse(entry, timestamp))
         .or_else(|| parsers::event_lifecycle::try_parse(entry, timestamp))
         .or_else(|| parsers::rank::try_parse(entry, timestamp))
-        .or_else(|| parsers::collection::try_parse(entry, timestamp))
         .or_else(|| parsers::inventory::try_parse(entry, timestamp))
         .or_else(|| parsers::connection_state::try_parse(entry, timestamp))
         .or_else(|| parsers::connection_close::try_parse(entry, timestamp))
@@ -591,11 +589,11 @@ mod tests {
         }
 
         #[test]
-        fn test_route_collection_event() {
+        fn test_route_start_hook_with_additional_fields_routes_to_inventory() {
             let router = Router::new();
             let payload = serde_json::json!({
-                "PlayerCards": { "98535": 4, "12345": 2 },
-                "InventoryInfo": { "Gems": 100 }
+                "InventoryInfo": { "Gems": 100 },
+                "DeckSummariesV2": []
             });
             let body = format!(
                 "[UnityCrossThreadLogger]2/25/2026 12:00:00 PM\n\
@@ -605,8 +603,7 @@ mod tests {
 
             let results = router.route(&entry);
             assert_eq!(results.len(), 1);
-            // StartHook with PlayerCards goes to Collection (tried before Inventory).
-            assert!(matches!(&results[0], GameEvent::Collection(_)));
+            assert!(matches!(&results[0], GameEvent::Inventory(_)));
         }
 
         #[test]
@@ -623,7 +620,6 @@ mod tests {
 
             let results = router.route(&entry);
             assert_eq!(results.len(), 1);
-            // StartHook with InventoryInfo but no PlayerCards goes to Inventory.
             assert!(matches!(&results[0], GameEvent::Inventory(_)));
         }
     }

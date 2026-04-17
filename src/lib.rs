@@ -49,10 +49,10 @@ pub mod util;
 
 pub use event_bus::Subscriber;
 pub use events::{
-    ClientActionEvent, CollectionEvent, DetailedLoggingStatusEvent, DraftBotEvent,
-    DraftCompleteEvent, DraftHumanEvent, EventLifecycleEvent, EventMetadata, GameEvent,
-    GameResultEvent, GameStateEvent, InventoryEvent, LogFileRotatedEvent, MatchStateEvent,
-    PerformanceClass, RankEvent, SessionEvent,
+    ClientActionEvent, DetailedLoggingStatusEvent, DraftBotEvent, DraftCompleteEvent,
+    DraftHumanEvent, EventLifecycleEvent, EventMetadata, GameEvent, GameResultEvent,
+    GameStateEvent, InventoryEvent, LogFileRotatedEvent, MatchStateEvent, PerformanceClass,
+    RankEvent, SessionEvent,
 };
 pub use sanitize::scrub_raw_log;
 pub use stream::{MtgaEventStream, StreamError};

@@ -2,7 +2,6 @@
 
 pub(crate) mod api_common;
 pub mod client_actions;
-pub mod collection;
 pub mod connection_close;
 pub mod connection_error;
 pub mod connection_state;
