@@ -202,6 +202,19 @@ fn try_extract_timestamp(body: &str) -> Option<chrono::DateTime<chrono::Utc>> {
     None
 }
 
+// Known overlapping parsers
+// ---------------------------------------------------------------------------
+
+/// Returns `true` if the set of claimant parser names represents an expected
+/// overlap rather than a smoke-test failure.
+///
+/// Keep this helper even when the known-overlap set is empty so future
+/// intentional overlaps can be added in one place without changing report
+/// accounting.
+fn is_known_overlap(_claimants: &[&str]) -> bool {
+    false
+}
+
 // File processing
 // ---------------------------------------------------------------------------
 
@@ -305,7 +318,11 @@ fn process_file(path: &Path, parsers: &[NamedParser]) -> FileReport {
         match claimant_count {
             0 => unclaimed += 1,
             1 => {}
-            _ => double_claims += 1,
+            _ => {
+                if !is_known_overlap(&claimant_names) {
+                    double_claims += 1;
+                }
+            }
         }
     }
 
