@@ -96,7 +96,6 @@ cargo run --bin scrub < Player.log > Player-sanitized.log
 | `EventLifecycle` | Event join, claim prize, enter pairing | Durable |
 | `Session` | Login, account identity, logout | Durable |
 | `Rank` | Constructed and limited rank snapshots | Durable |
-| `Collection` | Card collection snapshot | Durable |
 | `Inventory` | Currency, wildcards, boosters, vault progress | Durable |
 | `GameResult` | Game result / batch trigger | Post-game |
 

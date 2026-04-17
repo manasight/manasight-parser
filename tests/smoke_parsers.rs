@@ -202,21 +202,6 @@ fn try_extract_timestamp(body: &str) -> Option<chrono::DateTime<chrono::Utc>> {
     None
 }
 
-// ---------------------------------------------------------------------------
-// Known overlapping parsers
-// ---------------------------------------------------------------------------
-
-/// Returns `true` if the set of claimant parser names represents a known,
-/// expected overlap rather than a bug.
-///
-/// `<== StartHook` responses contain both `InventoryInfo` and `PlayerCards`,
-/// so the `inventory` and `collection` parsers legitimately claim the same
-/// entry -- each extracting different data from the shared response.
-fn is_known_overlap(claimants: &[&str]) -> bool {
-    claimants.len() == 2 && claimants.contains(&"inventory") && claimants.contains(&"collection")
-}
-
-// ---------------------------------------------------------------------------
 // File processing
 // ---------------------------------------------------------------------------
 
@@ -320,11 +305,7 @@ fn process_file(path: &Path, parsers: &[NamedParser]) -> FileReport {
         match claimant_count {
             0 => unclaimed += 1,
             1 => {}
-            _ => {
-                if !is_known_overlap(&claimant_names) {
-                    double_claims += 1;
-                }
-            }
+            _ => double_claims += 1,
         }
     }
 

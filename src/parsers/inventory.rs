@@ -10,7 +10,6 @@
 //! <== StartHook(e3f1a2b4-...)
 //! {
 //!   "InventoryInfo": { "Gems": 1234, "Gold": 5678, ... },
-//!   "PlayerCards": { ... },
 //!   ...
 //! }
 //! ```
@@ -83,8 +82,8 @@ mod tests {
             let body = "[UnityCrossThreadLogger]2/22/2026 11:59:51 AM\n\
                          <== StartHook(e3f1a2b4-5678-9abc-def0-123456789abc)\n\
                          {\n\
-                           \"InventoryInfo\": {\"Gems\": 1234, \"Gold\": 5678},\n\
-                           \"PlayerCards\": {\"98535\": 4}\n\
+                            \"InventoryInfo\": {\"Gems\": 1234, \"Gold\": 5678},\n\
+                            \"DeckSummariesV2\": []\n\
                          }";
             let entry = unity_entry(body);
             let result = try_parse(&entry, Some(test_timestamp()));
@@ -96,6 +95,7 @@ mod tests {
             assert_eq!(payload["type"], "inventory_snapshot");
             assert_eq!(payload["inventory"]["Gems"], 1234);
             assert_eq!(payload["inventory"]["Gold"], 5678);
+            assert!(payload["raw_start_hook"]["DeckSummariesV2"].is_array());
         }
 
         #[test]
@@ -208,7 +208,7 @@ mod tests {
         fn test_try_parse_start_hook_without_inventory_info_returns_none() {
             let body = "[UnityCrossThreadLogger]2/22/2026 12:00:00 PM\n\
                          <== StartHook(no-inv-uuid)\n\
-                         {\"PlayerCards\": {\"98535\": 4}, \"DeckSummariesV2\": []}";
+                         {\"DeckSummariesV2\": [], \"EventDeckCount\": 7}";
             let entry = unity_entry(body);
             assert!(try_parse(&entry, Some(test_timestamp())).is_none());
         }
