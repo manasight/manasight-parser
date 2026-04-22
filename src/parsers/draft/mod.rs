@@ -4,7 +4,7 @@
 //!
 //! | Module | Log Signatures | Event Type |
 //! |--------|---------------|------------|
-//! | [`bot`] | `DraftStatus: "PickNext"`, `BotDraft_DraftPick` | [`DraftBotEvent`](crate::events::DraftBotEvent) |
+//! | [`bot`] | `BotDraftDraftStatus`, `BotDraftDraftPick`, legacy `DraftStatus: "PickNext"` / `BotDraft_DraftPick` | [`DraftBotEvent`](crate::events::DraftBotEvent) |
 //! | [`human`] | `Draft.Notify`, `EventPlayerDraftMakePick`, `LogBusinessEvents` with `PickGrpId` | [`DraftHumanEvent`](crate::events::DraftHumanEvent) |
 //! | [`complete`] | `DraftCompleteDraft` | [`DraftCompleteEvent`](crate::events::DraftCompleteEvent) |
 

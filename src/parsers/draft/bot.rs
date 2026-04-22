@@ -1,8 +1,16 @@
-//! Bot draft parser for Quick Draft (`DraftStatus: "PickNext"` and
-//! `BotDraft_DraftPick`) events.
+//! Bot draft parser for Quick Draft (`BotDraftDraftStatus` and
+//! `BotDraftDraftPick`) events.
 //!
 //! In Quick Draft (bot draft), the player drafts against AI opponents.
 //! Two log signatures capture the draft flow:
+//!
+//! | Direction | Signature | Meaning | Key Fields |
+//! |-----------|-----------|---------|------------|
+//! | Response (`<==`) | `BotDraftDraftStatus` | Initial pack presented (Pack 0, Pick 0) | `Payload` { `EventName`, `DraftStatus`, `PackNumber`, `PickNumber`, `DraftPack` } |
+//! | Request (`==>`) | `BotDraftDraftPick` | Card selected | `request` { `EventName`, `PickInfo` { `CardIds`, `PackNumber`, `PickNumber` } } |
+//! | Response (`<==`) | `BotDraftDraftPick` | Card selected and next pack | `Payload` { `EventName`, `DraftStatus`, `PackNumber`, `PickNumber`, `DraftPack`, `PickedCards` } |
+//!
+//! Legacy log signatures:
 //!
 //! | Signature | Meaning | Key Fields |
 //! |-----------|---------|------------|
@@ -19,27 +27,29 @@ use crate::events::{DraftBotEvent, EventMetadata, GameEvent};
 use crate::log::entry::LogEntry;
 use crate::parsers::api_common;
 
-/// Marker for bot draft pack presentation events.
+/// Marker for bot draft status events.
 ///
-/// When a new pack is presented to the player during Quick Draft, the log
-/// contains a JSON payload with `"DraftStatus": "PickNext"` alongside the
-/// pack contents in `DraftPack`.
-const DRAFT_STATUS_MARKER: &str = "DraftStatus";
+/// This marker is used for the initial pack presentation (Pack 0, Pick 0).
+const BOT_DRAFT_STATUS_MARKER: &str = "BotDraftDraftStatus";
+/// Legacy marker.
+const LEGACY_DRAFT_STATUS_MARKER: &str = "DraftStatus";
 
 /// The status value that indicates a pack is ready to pick from.
 const PICK_NEXT_STATUS: &str = "PickNext";
 
-/// Marker for bot draft pick confirmation events.
+/// Marker for bot draft pick events.
 ///
-/// After the player selects a card, the log emits a `BotDraft_DraftPick`
-/// entry containing `PickInfo` with the selected card and remaining options.
-const BOT_DRAFT_PICK_MARKER: &str = "BotDraft_DraftPick";
+/// This marker is used both for the player's pick (request) and for presenting
+/// subsequent packs (response).
+const BOT_DRAFT_PICK_MARKER: &str = "BotDraftDraftPick";
+// Legacy marker.
+const LEGACY_DRAFT_PICK_MARKER: &str = "BotDraft_DraftPick";
 
 /// Attempts to parse a [`LogEntry`] as a bot draft event.
 ///
 /// Returns `Some(GameEvent::DraftBot(_))` if the entry matches either:
-/// - A `DraftStatus: "PickNext"` pack presentation, or
-/// - A `BotDraft_DraftPick` pick confirmation.
+/// - A pack presentation (`BotDraftDraftStatus` or `BotDraftDraftPick` response), or
+/// - A pick confirmation (`BotDraftDraftPick` request).
 ///
 /// Returns `None` if the entry does not match either signature.
 ///
@@ -52,7 +62,7 @@ pub fn try_parse(
 ) -> Option<GameEvent> {
     let body = &entry.body;
 
-    // Try bot draft pack presentation first (more common during drafting).
+    // Try bot draft pack presentation first.
     if let Some(payload) = try_parse_pack_presentation(body) {
         let metadata = EventMetadata::new(timestamp, body.as_bytes().to_vec());
         return Some(GameEvent::DraftBot(DraftBotEvent::new(metadata, payload)));
@@ -67,7 +77,10 @@ pub fn try_parse(
     None
 }
 
-/// Attempts to parse a `DraftStatus: "PickNext"` pack presentation.
+/// Attempts to parse a `BotDraftDraftStatus` or `BotDraftDraftPick` pack presentation.
+/// Retains legacy `DraftStatus` and `BotDraft_DraftPick` markers for backward compatibility.
+///
+/// Returns `Some(serde_json::Value)` if parsing succeeds, otherwise `None`.
 ///
 /// The log entry body contains a JSON object with:
 /// - `DraftStatus`: must be `"PickNext"`
@@ -76,16 +89,27 @@ pub fn try_parse(
 /// - `PickNumber`: zero-indexed pick number within the pack
 /// - `EventName`: the Arena event identifier (e.g., `"QuickDraft_MKM_20260201"`)
 fn try_parse_pack_presentation(body: &str) -> Option<serde_json::Value> {
-    // Quick bail: both markers must be present in the body text.
-    if !body.contains(DRAFT_STATUS_MARKER) || !body.contains(PICK_NEXT_STATUS) {
-        return None;
-    }
+    // Try new API response format first.
+    let parsed = if api_common::is_api_response(body, BOT_DRAFT_STATUS_MARKER) {
+        let top = api_common::parse_json_from_body(body, BOT_DRAFT_STATUS_MARKER)?;
+        api_common::parse_nested_json(&top, "Payload", BOT_DRAFT_STATUS_MARKER)
+    } else if api_common::is_api_response(body, BOT_DRAFT_PICK_MARKER) {
+        let top = api_common::parse_json_from_body(body, BOT_DRAFT_PICK_MARKER)?;
+        api_common::parse_nested_json(&top, "Payload", BOT_DRAFT_PICK_MARKER)
+    } else {
+        // Legacy format: check for old markers.
+        if (body.contains(LEGACY_DRAFT_PICK_MARKER) || body.contains(LEGACY_DRAFT_STATUS_MARKER))
+            && body.contains(PICK_NEXT_STATUS)
+        {
+            api_common::parse_json_from_body(body, "DraftStatus PickNext")
+        } else {
+            None
+        }
+    }?;
 
-    let parsed = api_common::parse_json_from_body(body, "DraftStatus PickNext")?;
-
-    // Verify this is actually a PickNext status (not just text mentioning it).
-    let status = parsed.get(DRAFT_STATUS_MARKER).and_then(|v| v.as_str())?;
-    if status != PICK_NEXT_STATUS {
+    // Check if this is a pack presentation.
+    let status_val = parsed.get(LEGACY_DRAFT_STATUS_MARKER)?;
+    if status_val.as_str() != Some(PICK_NEXT_STATUS) {
         return None;
     }
 
@@ -99,10 +123,7 @@ fn try_parse_pack_presentation(body: &str) -> Option<serde_json::Value> {
         .and_then(serde_json::Value::as_i64)
         .unwrap_or(0);
 
-    let event_name = parsed
-        .get("EventName")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("");
+    let event_name = api_common::extract_event_name(&parsed);
 
     // DraftPack is an array of card GRP IDs (integers) as strings.
     let draft_pack = extract_draft_pack(&parsed);
@@ -117,7 +138,12 @@ fn try_parse_pack_presentation(body: &str) -> Option<serde_json::Value> {
     }))
 }
 
-/// Attempts to parse a `BotDraft_DraftPick` pick confirmation.
+/// Attempts to parse a `BotDraftDraftPick` pick confirmation.
+/// Retains legacy `BotDraft_DraftPick` marker for backward compatibility.
+///
+/// Returns `Some(serde_json::Value)` if parsing succeeds.
+///
+/// Returns `None` if `BotDraftDraftPick` is an API response, `PickInfo` is missing fields, or if parsing fails.
 ///
 /// The log entry body contains a JSON object (or the marker label followed
 /// by JSON) with `PickInfo` containing:
@@ -125,19 +151,35 @@ fn try_parse_pack_presentation(body: &str) -> Option<serde_json::Value> {
 /// - `PackNumber`: zero-indexed pack number
 /// - `PickNumber`: zero-indexed pick number within the pack
 fn try_parse_draft_pick(body: &str) -> Option<serde_json::Value> {
-    if !body.contains(BOT_DRAFT_PICK_MARKER) {
+    // New API responses bundle the next pack in `Payload` and are handled by
+    // `try_parse_pack_presentation` above. Do not reinterpret response
+    // envelopes as pick confirmations.
+    if api_common::is_api_response(body, BOT_DRAFT_PICK_MARKER) {
         return None;
     }
 
-    let parsed = api_common::parse_json_from_body(body, "BotDraft_DraftPick")?;
+    let mut is_api = false;
+    let parsed = if api_common::is_api_request(body, BOT_DRAFT_PICK_MARKER) {
+        is_api = true;
+        let top = api_common::parse_json_from_body(body, BOT_DRAFT_PICK_MARKER)?;
+        api_common::parse_nested_json(&top, "request", BOT_DRAFT_PICK_MARKER).unwrap_or(top)
+    } else if body.contains(LEGACY_DRAFT_PICK_MARKER) {
+        api_common::parse_json_from_body(body, "BotDraft_DraftPick legacy")?
+    } else {
+        return None;
+    };
 
     // The pick info may be at top level or nested under a `PickInfo` key.
     let pick_info = parsed.get("PickInfo").unwrap_or(&parsed);
 
-    let card_id = pick_info
-        .get("CardId")
-        .and_then(serde_json::Value::as_i64)
-        .unwrap_or(0);
+    // Ignore envelopes that do not actually carry pick fields.
+    if pick_info.get("CardId").is_none()
+        && pick_info.get("PackNumber").is_none()
+        && pick_info.get("PickNumber").is_none()
+        && pick_info.get("CardIds").is_none()
+    {
+        return None;
+    }
 
     let pack_idx = pick_info
         .get("PackNumber")
@@ -149,16 +191,43 @@ fn try_parse_draft_pick(body: &str) -> Option<serde_json::Value> {
         .and_then(serde_json::Value::as_i64)
         .unwrap_or(0);
 
-    // Some entries include the full list of card IDs that were in the pack.
-    let card_ids = pick_info
-        .get("CardIds")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(serde_json::Value::as_i64)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
+    let card_id;
+    let mut card_ids = Vec::new();
+
+    if is_api {
+        // Modern API format: CardIds array contains the actual pick.
+        // The pack data is not present in the request.
+        let selection: Vec<i64> = pick_info
+            .get("CardIds")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| {
+                        v.as_i64()
+                            .or_else(|| v.as_str().and_then(|s| s.parse::<i64>().ok()))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        card_id = selection.first().copied().unwrap_or(0);
+    } else {
+        // Legacy format: CardId is the pick, CardIds array contains the pack data.
+        card_id = pick_info
+            .get("CardId")
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or(0);
+
+        card_ids = pick_info
+            .get("CardIds")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(serde_json::Value::as_i64)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+    }
 
     let event_name = parsed
         .get("EventName")
@@ -207,7 +276,7 @@ mod tests {
         draft_bot_payload, test_timestamp, unity_entry, EntryHeader,
     };
 
-    // -- Pack presentation parsing (DraftStatus: "PickNext") ------------------
+    // -- Pack presentation parsing (DraftStatus: "PickNext", BotDraftDraftStatus, BotDraftDraftPick)
 
     mod pack_presentation {
         use super::*;
@@ -390,9 +459,47 @@ mod tests {
             let entry = unity_entry(body);
             assert!(try_parse(&entry, Some(test_timestamp())).is_none());
         }
+
+        #[test]
+        fn test_try_parse_bot_draft_status_api_response_returns_pack() {
+            let body = "[UnityCrossThreadLogger]<== BotDraftDraftStatus(uuid)\n\
+                         {\n\
+                           \"Payload\": \"{\\\"DraftStatus\\\":\\\"PickNext\\\",\\\"PackNumber\\\":0,\\\"PickNumber\\\":0,\\\"DraftPack\\\":[\\\"1\\\",\\\"2\\\"]}\"\n\
+                         }";
+            let entry = unity_entry(body);
+            let result = try_parse(&entry, Some(test_timestamp()));
+
+            assert!(result.is_some());
+            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            let payload = draft_bot_payload(event);
+
+            assert_eq!(payload["type"], "draft_bot_pack");
+            assert_eq!(payload["pack_number"], 0);
+            assert_eq!(payload["pick_number"], 0);
+            assert_eq!(payload["draft_pack"], serde_json::json!([1, 2]));
+        }
+
+        #[test]
+        fn test_try_parse_bot_draft_pick_api_response_returns_next_pack() {
+            let body = "[UnityCrossThreadLogger]<== BotDraftDraftPick(uuid)\n\
+                         {\n\
+                           \"Payload\": \"{\\\"DraftStatus\\\":\\\"PickNext\\\",\\\"PackNumber\\\":0,\\\"PickNumber\\\":1,\\\"DraftPack\\\":[\\\"3\\\",\\\"4\\\"]}\"\n\
+                         }";
+            let entry = unity_entry(body);
+            let result = try_parse(&entry, Some(test_timestamp()));
+
+            assert!(result.is_some());
+            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            let payload = draft_bot_payload(event);
+
+            assert_eq!(payload["type"], "draft_bot_pack");
+            assert_eq!(payload["pack_number"], 0);
+            assert_eq!(payload["pick_number"], 1);
+            assert_eq!(payload["draft_pack"], serde_json::json!([3, 4]));
+        }
     }
 
-    // -- Draft pick parsing (BotDraft_DraftPick) ------------------------------
+    // -- Draft pick parsing (BotDraft_DraftPick, BotDraftDraftPick) -----------
 
     mod draft_pick {
         use super::*;
@@ -570,6 +677,38 @@ mod tests {
 
             assert_eq!(payload["card_id"], 77777);
         }
+
+        #[test]
+        fn test_try_parse_bot_draft_pick_api_request_returns_pick() {
+            let body = "[UnityCrossThreadLogger]==> BotDraftDraftPick \
+                         {\n\
+                           \"id\": \"uuid\",\n\
+                           \"request\": \"{\\\"PickInfo\\\":{\\\"CardIds\\\":[\\\"98546\\\"],\\\"PackNumber\\\":0,\\\"PickNumber\\\":0}}\"\n\
+                         }";
+            let entry = unity_entry(body);
+            let result = try_parse(&entry, Some(test_timestamp()));
+
+            assert!(result.is_some());
+            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            let payload = draft_bot_payload(event);
+
+            assert_eq!(payload["type"], "draft_bot_pick");
+            assert_eq!(payload["card_id"], 98546);
+            // In the modern API format, CardIds in the request is the selection, not pack data.
+            // As such, the output card_ids (representing pack data) should be empty.
+            assert_eq!(payload["card_ids"], serde_json::json!([]));
+        }
+
+        #[test]
+        fn test_try_parse_bot_draft_pick_api_request_missing_pick_fields_returns_none() {
+            let body = "[UnityCrossThreadLogger]==> BotDraftDraftPick \
+                         {\n\
+                           \"id\": \"uuid\",\n\
+                           \"request\": \"{\\\"PickInfo\\\":{}}\"\n\
+                         }";
+            let entry = unity_entry(body);
+            assert!(try_parse(&entry, Some(test_timestamp())).is_none());
+        }
     }
 
     // -- Metadata preservation -----------------------------------------------
@@ -679,6 +818,46 @@ mod tests {
             // The text mentions DraftStatus but no valid JSON payload.
             let body = "[UnityCrossThreadLogger]DraftStatus is PickNext (note)\n\
                          not valid json here";
+            let entry = unity_entry(body);
+            assert!(try_parse(&entry, Some(test_timestamp())).is_none());
+        }
+
+        #[test]
+        fn test_try_parse_bot_draft_status_api_response_wrong_status_returns_none() {
+            let body = "[UnityCrossThreadLogger]<== BotDraftDraftStatus(uuid)\n\
+                         {\n\
+                           \"Payload\": \"{\\\"DraftStatus\\\":\\\"DraftComplete\\\"}\"\n\
+                         }";
+            let entry = unity_entry(body);
+            assert!(try_parse(&entry, Some(test_timestamp())).is_none());
+        }
+
+        #[test]
+        fn test_try_parse_bot_draft_pick_api_response_wrong_status_returns_none() {
+            let body = "[UnityCrossThreadLogger]<== BotDraftDraftPick(uuid)\n\
+                         {\n\
+                           \"Payload\": \"{\\\"DraftStatus\\\":\\\"DraftComplete\\\"}\"\n\
+                         }";
+            let entry = unity_entry(body);
+            assert!(try_parse(&entry, Some(test_timestamp())).is_none());
+        }
+
+        #[test]
+        fn test_try_parse_bot_draft_pick_api_response_missing_payload_returns_none() {
+            let body = "[UnityCrossThreadLogger]<== BotDraftDraftPick(uuid)\n\
+                         {\n\
+                           \"Result\": \"Success\"\n\
+                         }";
+            let entry = unity_entry(body);
+            assert!(try_parse(&entry, Some(test_timestamp())).is_none());
+        }
+
+        #[test]
+        fn test_try_parse_bot_draft_pick_api_response_malformed_payload_returns_none() {
+            let body = "[UnityCrossThreadLogger]<== BotDraftDraftPick(uuid)\n\
+                         {\n\
+                           \"Payload\": \"not json\"\n\
+                         }";
             let entry = unity_entry(body);
             assert!(try_parse(&entry, Some(test_timestamp())).is_none());
         }

@@ -118,6 +118,30 @@ pub(crate) fn parse_json_from_body(body: &str, context: &str) -> Option<serde_js
     }
 }
 
+/// Extracts and parses a nested JSON string field.
+///
+/// MTG Arena often escapes JSON payloads inside string fields called
+/// `Payload` or `request`. This utility simplifies unescaping and parsing
+/// those nested objects.
+///
+/// Logs a warning when `field` exists as a string but the nested JSON is
+/// malformed. Missing fields and non-string fields still return `None`
+/// silently so callers can use this as a probe.
+pub(crate) fn parse_nested_json(
+    v: &serde_json::Value,
+    field: &str,
+    context: &str,
+) -> Option<serde_json::Value> {
+    let nested = v.get(field)?.as_str()?;
+    match serde_json::from_str(nested) {
+        Ok(parsed) => Some(parsed),
+        Err(e) => {
+            ::log::warn!("{context}: malformed nested JSON in `{field}`: {e}");
+            None
+        }
+    }
+}
+
 /// Extracts an event name from a parsed JSON value.
 ///
 /// MTG Arena is inconsistent about where it stores event names. This helper
@@ -147,15 +171,13 @@ pub(crate) fn extract_event_name(parsed: &serde_json::Value) -> String {
     }
 
     // 3. Try nested string-escaped request field (requests).
-    if let Some(request_str) = parsed.get("request").and_then(serde_json::Value::as_str) {
-        if let Ok(request_json) = serde_json::from_str::<serde_json::Value>(request_str) {
-            if let Some(name) = request_json
-                .get("EventName")
-                .or_else(|| request_json.get("InternalEventName"))
-                .and_then(serde_json::Value::as_str)
-            {
-                return name.to_owned();
-            }
+    if let Some(request_json) = parse_nested_json(parsed, "request", "request") {
+        if let Some(name) = request_json
+            .get("EventName")
+            .or_else(|| request_json.get("InternalEventName"))
+            .and_then(serde_json::Value::as_str)
+        {
+            return name.to_owned();
         }
     }
 
@@ -354,6 +376,36 @@ mod tests {
             let body = "header\n[1, 2, 3]";
             let result = parse_json_from_body(body, "test");
             assert_eq!(result, Some(serde_json::json!([1, 2, 3])));
+        }
+    }
+
+    // -- parse_nested_json -----------------------------------------------------
+    mod nested_json {
+        use super::*;
+
+        #[test]
+        fn test_parse_nested_json_valid_string_returns_json() {
+            let v = serde_json::json!({"Payload": "{\"key\":\"value\"}"});
+            let result = parse_nested_json(&v, "Payload", "test");
+            assert_eq!(result, Some(serde_json::json!({"key": "value"})));
+        }
+
+        #[test]
+        fn test_parse_nested_json_missing_field_returns_none() {
+            let v = serde_json::json!({"Other": "data"});
+            assert!(parse_nested_json(&v, "Payload", "test").is_none());
+        }
+
+        #[test]
+        fn test_parse_nested_json_non_string_returns_none() {
+            let v = serde_json::json!({"Payload": {"key": "value"}});
+            assert!(parse_nested_json(&v, "Payload", "test").is_none());
+        }
+
+        #[test]
+        fn test_parse_nested_json_invalid_json_returns_none() {
+            let v = serde_json::json!({"Payload": "not json"});
+            assert!(parse_nested_json(&v, "Payload", "test").is_none());
         }
     }
 
