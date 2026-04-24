@@ -112,7 +112,7 @@ pub(crate) fn parse_json_from_body(body: &str, context: &str) -> Option<serde_js
     match serde_json::from_str(json_str) {
         Ok(v) => Some(v),
         Err(e) => {
-            ::log::warn!("{context}: malformed JSON payload: {e}");
+            ::log::warn!("Malformed JSON payload: context={context}, error={e}");
             None
         }
     }
@@ -130,13 +130,15 @@ pub(crate) fn parse_json_from_body(body: &str, context: &str) -> Option<serde_js
 pub(crate) fn parse_nested_json(
     v: &serde_json::Value,
     field: &str,
-    context: &str,
+    context: Option<&str>,
 ) -> Option<serde_json::Value> {
     let nested = v.get(field)?.as_str()?;
     match serde_json::from_str(nested) {
         Ok(parsed) => Some(parsed),
         Err(e) => {
-            ::log::warn!("{context}: malformed nested JSON in `{field}`: {e}");
+            if let Some(ctx) = context {
+                ::log::warn!("Malformed nested JSON: context={ctx}, field={field}, error={e}");
+            }
             None
         }
     }
@@ -171,7 +173,7 @@ pub(crate) fn extract_event_name(parsed: &serde_json::Value) -> String {
     }
 
     // 3. Try nested string-escaped request field (requests).
-    if let Some(request_json) = parse_nested_json(parsed, "request", "request") {
+    if let Some(request_json) = parse_nested_json(parsed, "request", None) {
         if let Some(name) = request_json
             .get("EventName")
             .or_else(|| request_json.get("InternalEventName"))
@@ -386,26 +388,26 @@ mod tests {
         #[test]
         fn test_parse_nested_json_valid_string_returns_json() {
             let v = serde_json::json!({"Payload": "{\"key\":\"value\"}"});
-            let result = parse_nested_json(&v, "Payload", "test");
+            let result = parse_nested_json(&v, "Payload", Some("test"));
             assert_eq!(result, Some(serde_json::json!({"key": "value"})));
         }
 
         #[test]
         fn test_parse_nested_json_missing_field_returns_none() {
             let v = serde_json::json!({"Other": "data"});
-            assert!(parse_nested_json(&v, "Payload", "test").is_none());
+            assert!(parse_nested_json(&v, "Payload", Some("test")).is_none());
         }
 
         #[test]
         fn test_parse_nested_json_non_string_returns_none() {
             let v = serde_json::json!({"Payload": {"key": "value"}});
-            assert!(parse_nested_json(&v, "Payload", "test").is_none());
+            assert!(parse_nested_json(&v, "Payload", Some("test")).is_none());
         }
 
         #[test]
         fn test_parse_nested_json_invalid_json_returns_none() {
             let v = serde_json::json!({"Payload": "not json"});
-            assert!(parse_nested_json(&v, "Payload", "test").is_none());
+            assert!(parse_nested_json(&v, "Payload", Some("test")).is_none());
         }
     }
 

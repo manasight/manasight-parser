@@ -92,10 +92,10 @@ fn try_parse_pack_presentation(body: &str) -> Option<serde_json::Value> {
     // Try new API response format first.
     let parsed = if api_common::is_api_response(body, BOT_DRAFT_STATUS_MARKER) {
         let top = api_common::parse_json_from_body(body, BOT_DRAFT_STATUS_MARKER)?;
-        api_common::parse_nested_json(&top, "Payload", BOT_DRAFT_STATUS_MARKER)
+        api_common::parse_nested_json(&top, "Payload", Some(BOT_DRAFT_STATUS_MARKER))
     } else if api_common::is_api_response(body, BOT_DRAFT_PICK_MARKER) {
         let top = api_common::parse_json_from_body(body, BOT_DRAFT_PICK_MARKER)?;
-        api_common::parse_nested_json(&top, "Payload", BOT_DRAFT_PICK_MARKER)
+        api_common::parse_nested_json(&top, "Payload", Some(BOT_DRAFT_PICK_MARKER))
     } else {
         // Legacy format: check for old markers.
         if (body.contains(LEGACY_DRAFT_PICK_MARKER) || body.contains(LEGACY_DRAFT_STATUS_MARKER))
@@ -162,7 +162,7 @@ fn try_parse_draft_pick(body: &str) -> Option<serde_json::Value> {
     let parsed = if api_common::is_api_request(body, BOT_DRAFT_PICK_MARKER) {
         is_api = true;
         let top = api_common::parse_json_from_body(body, BOT_DRAFT_PICK_MARKER)?;
-        api_common::parse_nested_json(&top, "request", BOT_DRAFT_PICK_MARKER).unwrap_or(top)
+        api_common::parse_nested_json(&top, "request", Some(BOT_DRAFT_PICK_MARKER)).unwrap_or(top)
     } else if body.contains(LEGACY_DRAFT_PICK_MARKER) {
         api_common::parse_json_from_body(body, "BotDraft_DraftPick legacy")?
     } else {
