@@ -7,7 +7,7 @@
 //! | Direction | Signature | Meaning | Key Fields |
 //! |-----------|-----------|---------|------------|
 //! | Response (`<==`) | `BotDraftDraftStatus` | Initial pack presented (Pack 0, Pick 0) | `Payload` { `EventName`, `DraftStatus`, `PackNumber`, `PickNumber`, `DraftPack` } |
-//! | Request (`==>`) | `BotDraftDraftPick` | Card selected | `request` { `EventName`, `PickInfo` { `CardIds`, `PackNumber`, `PickNumber` } } |
+//! | Request (`==>`) | `BotDraftDraftPick` | Card selected | `request` { `EventName`, `PickInfo` { `EventName`, `CardIds`, `PackNumber`, `PickNumber` } } |
 //! | Response (`<==`) | `BotDraftDraftPick` | Card selected and next pack | `Payload` { `EventName`, `DraftStatus`, `PackNumber`, `PickNumber`, `DraftPack`, `PickedCards` } |
 //!
 //! Legacy log signatures:
@@ -679,12 +679,8 @@ mod tests {
         }
 
         #[test]
-        fn test_try_parse_bot_draft_pick_api_request_returns_pick() {
-            let body = "[UnityCrossThreadLogger]==> BotDraftDraftPick \
-                         {\n\
-                           \"id\": \"uuid\",\n\
-                           \"request\": \"{\\\"PickInfo\\\":{\\\"CardIds\\\":[\\\"98546\\\"],\\\"PackNumber\\\":0,\\\"PickNumber\\\":0}}\"\n\
-                         }";
+        fn test_try_parse_api_request_returns_pick() {
+            let body = r#"[UnityCrossThreadLogger]==> BotDraftDraftPick {"id":"uuid","request":"{\"PickInfo\":{\"CardIds\":[\"98546\"],\"PackNumber\":0,\"PickNumber\":0}}"}"#;
             let entry = unity_entry(body);
             let result = try_parse(&entry, Some(test_timestamp()));
 
@@ -700,12 +696,47 @@ mod tests {
         }
 
         #[test]
-        fn test_try_parse_bot_draft_pick_api_request_missing_pick_fields_returns_none() {
-            let body = "[UnityCrossThreadLogger]==> BotDraftDraftPick \
-                         {\n\
-                           \"id\": \"uuid\",\n\
-                           \"request\": \"{\\\"PickInfo\\\":{}}\"\n\
-                         }";
+        fn test_try_parse_api_request_returns_event_name() {
+            let body = r#"[UnityCrossThreadLogger]==> BotDraftDraftPick {"id":"uuid","request":"{\"PickInfo\":{\"EventName\":\"QuickDraft_SOS_20260430\",\"CardIds\":[\"98546\"],\"PackNumber\":0,\"PickNumber\":0}}"}"#;
+            let entry = unity_entry(body);
+            let result = try_parse(&entry, Some(test_timestamp()));
+
+            assert!(result.is_some());
+            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            let payload = draft_bot_payload(event);
+
+            assert_eq!(payload["event_name"], "QuickDraft_SOS_20260430");
+        }
+
+        #[test]
+        fn test_try_parse_api_request_fallback_to_request_root() {
+            let body = r#"[UnityCrossThreadLogger]==> BotDraftDraftPick {"id":"uuid","request":"{\"EventName\":\"QuickDraft_SOS_20260430\",\"PickInfo\":{\"CardIds\":[\"98546\"],\"PackNumber\":0,\"PickNumber\":0}}"}"#;
+            let entry = unity_entry(body);
+            let result = try_parse(&entry, Some(test_timestamp()));
+
+            assert!(result.is_some());
+            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            let payload = draft_bot_payload(event);
+
+            assert_eq!(payload["event_name"], "QuickDraft_SOS_20260430");
+        }
+
+        #[test]
+        fn test_try_parse_api_request_missing_event_name_defaults_to_empty() {
+            let body = r#"[UnityCrossThreadLogger]==> BotDraftDraftPick {"id":"uuid","request":"{\"PickInfo\":{\"CardIds\":[\"98546\"],\"PackNumber\":0,\"PickNumber\":0}}"}"#;
+            let entry = unity_entry(body);
+            let result = try_parse(&entry, Some(test_timestamp()));
+
+            assert!(result.is_some());
+            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            let payload = draft_bot_payload(event);
+
+            assert_eq!(payload["event_name"], "");
+        }
+
+        #[test]
+        fn test_try_parse_api_request_missing_pick_fields_returns_none() {
+            let body = r#"[UnityCrossThreadLogger]==> BotDraftDraftPick {"id":"uuid","request":"{\"PickInfo\":{}}"}"#;
             let entry = unity_entry(body);
             assert!(try_parse(&entry, Some(test_timestamp())).is_none());
         }
