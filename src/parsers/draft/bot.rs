@@ -143,7 +143,8 @@ fn try_parse_pack_presentation(body: &str) -> Option<serde_json::Value> {
 ///
 /// Returns `Some(serde_json::Value)` if parsing succeeds.
 ///
-/// Returns `None` if `BotDraftDraftPick` is an API response, `PickInfo` is missing fields, or if parsing fails.
+/// Returns `None` if `BotDraftDraftPick` is an API response, `PickInfo` is
+/// missing fields, `CardId` is missing, or if parsing fails.
 ///
 /// The log entry body contains a JSON object (or the marker label followed
 /// by JSON) with `PickInfo` containing:
@@ -191,10 +192,8 @@ fn try_parse_draft_pick(body: &str) -> Option<serde_json::Value> {
         .and_then(serde_json::Value::as_i64)
         .unwrap_or(0);
 
-    let card_id;
     let mut card_ids = Vec::new();
-
-    if is_api {
+    let card_id = if is_api {
         // Modern API format: CardIds array contains the actual pick.
         // The pack data is not present in the request.
         let selection: Vec<i64> = pick_info
@@ -210,14 +209,9 @@ fn try_parse_draft_pick(body: &str) -> Option<serde_json::Value> {
             })
             .unwrap_or_default();
 
-        card_id = selection.first().copied().unwrap_or(0);
+        *selection.first()?
     } else {
         // Legacy format: CardId is the pick, CardIds array contains the pack data.
-        card_id = pick_info
-            .get("CardId")
-            .and_then(serde_json::Value::as_i64)
-            .unwrap_or(0);
-
         card_ids = pick_info
             .get("CardIds")
             .and_then(|v| v.as_array())
@@ -227,6 +221,14 @@ fn try_parse_draft_pick(body: &str) -> Option<serde_json::Value> {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
+
+        pick_info
+            .get("CardId")
+            .and_then(serde_json::Value::as_i64)?
+    };
+
+    if card_id == 0 {
+        return None;
     }
 
     let event_name = parsed
@@ -618,7 +620,7 @@ mod tests {
         }
 
         #[test]
-        fn test_try_parse_draft_pick_missing_card_id_defaults_to_zero() {
+        fn test_try_parse_draft_pick_missing_card_id_returns_none() {
             let body = "[UnityCrossThreadLogger]BotDraft_DraftPick\n\
                          {\n\
                            \"PickInfo\": {\n\
@@ -629,11 +631,7 @@ mod tests {
             let entry = unity_entry(body);
             let result = try_parse(&entry, Some(test_timestamp()));
 
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
-            let payload = draft_bot_payload(event);
-
-            assert_eq!(payload["card_id"], 0);
+            assert!(result.is_none());
         }
 
         #[test]
@@ -737,6 +735,13 @@ mod tests {
         #[test]
         fn test_try_parse_api_request_missing_pick_fields_returns_none() {
             let body = r#"[UnityCrossThreadLogger]==> BotDraftDraftPick {"id":"uuid","request":"{\"PickInfo\":{}}"}"#;
+            let entry = unity_entry(body);
+            assert!(try_parse(&entry, Some(test_timestamp())).is_none());
+        }
+
+        #[test]
+        fn test_try_parse_api_request_empty_card_ids_returns_none() {
+            let body = r#"[UnityCrossThreadLogger]==> BotDraftDraftPick {"id":"uuid","request":"{\"PickInfo\":{\"CardIds\":[],\"PackNumber\":0,\"PickNumber\":0}}"}"#;
             let entry = unity_entry(body);
             assert!(try_parse(&entry, Some(test_timestamp())).is_none());
         }
