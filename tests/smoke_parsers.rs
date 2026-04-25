@@ -259,9 +259,7 @@ fn process_file(path: &Path, parsers: &[NamedParser]) -> FileReport {
     let mut buffer = LineBuffer::new();
     let mut entries = Vec::new();
     for line in content.lines() {
-        if let Some(entry) = buffer.push_line(line) {
-            entries.push(entry);
-        }
+        entries.extend(buffer.push_line(line));
     }
     if let Some(entry) = buffer.flush() {
         entries.push(entry);
