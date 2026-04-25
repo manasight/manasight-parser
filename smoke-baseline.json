@@ -1,8 +1,8 @@
 {
   "_meta": {
-    "corpus_tag": "manasight-corpus-v15",
+    "corpus_tag": "manasight-corpus-v16",
     "description": "Smoke test baseline -- per-file, per-parser event counts from Level 1 (parser-only) smoke tests.",
-    "generated_from_commit": "2c0c617"
+    "generated_from_commit": "390cf50"
   },
   "files": {
     "session_2026-02-22_0000_ecl-premier-bg-elves.log": {
@@ -20,7 +20,6 @@
       },
       "parsers": {
         "client_actions": 2026,
-        "collection": 0,
         "draft_bot": 0,
         "draft_complete": 0,
         "draft_human": 0,
@@ -53,7 +52,6 @@
       },
       "parsers": {
         "client_actions": 1488,
-        "collection": 0,
         "draft_bot": 0,
         "draft_complete": 2,
         "draft_human": 77,
@@ -84,7 +82,6 @@
       },
       "parsers": {
         "client_actions": 425,
-        "collection": 0,
         "draft_bot": 0,
         "draft_complete": 0,
         "draft_human": 0,
@@ -115,7 +112,6 @@
       },
       "parsers": {
         "client_actions": 236,
-        "collection": 0,
         "draft_bot": 0,
         "draft_complete": 0,
         "draft_human": 0,
@@ -146,7 +142,6 @@
       },
       "parsers": {
         "client_actions": 1157,
-        "collection": 0,
         "draft_bot": 0,
         "draft_complete": 0,
         "draft_human": 0,
@@ -175,7 +170,6 @@
       },
       "parsers": {
         "client_actions": 0,
-        "collection": 0,
         "draft_bot": 0,
         "draft_complete": 2,
         "draft_human": 41,
@@ -206,7 +200,6 @@
       },
       "parsers": {
         "client_actions": 254,
-        "collection": 0,
         "draft_bot": 0,
         "draft_complete": 0,
         "draft_human": 0,
@@ -237,7 +230,6 @@
       },
       "parsers": {
         "client_actions": 740,
-        "collection": 0,
         "draft_bot": 0,
         "draft_complete": 0,
         "draft_human": 0,
@@ -268,7 +260,6 @@
       },
       "parsers": {
         "client_actions": 405,
-        "collection": 0,
         "draft_bot": 0,
         "draft_complete": 0,
         "draft_human": 0,
@@ -291,7 +282,6 @@
       },
       "parsers": {
         "client_actions": 0,
-        "collection": 0,
         "draft_bot": 0,
         "draft_complete": 0,
         "draft_human": 0,
@@ -321,7 +311,6 @@
       },
       "parsers": {
         "client_actions": 393,
-        "collection": 0,
         "draft_bot": 0,
         "draft_complete": 0,
         "draft_human": 0,
@@ -352,7 +341,6 @@
       },
       "parsers": {
         "client_actions": 325,
-        "collection": 0,
         "draft_bot": 0,
         "draft_complete": 0,
         "draft_human": 0,
@@ -383,7 +371,6 @@
       },
       "parsers": {
         "client_actions": 1137,
-        "collection": 0,
         "draft_bot": 0,
         "draft_complete": 0,
         "draft_human": 0,
@@ -414,7 +401,6 @@
       },
       "parsers": {
         "client_actions": 2012,
-        "collection": 0,
         "draft_bot": 0,
         "draft_complete": 0,
         "draft_human": 0,
@@ -445,7 +431,6 @@
       },
       "parsers": {
         "client_actions": 2029,
-        "collection": 0,
         "draft_bot": 0,
         "draft_complete": 0,
         "draft_human": 0,
@@ -475,7 +460,6 @@
       },
       "parsers": {
         "client_actions": 337,
-        "collection": 0,
         "draft_bot": 0,
         "draft_complete": 0,
         "draft_human": 0,
@@ -506,7 +490,6 @@
       },
       "parsers": {
         "client_actions": 521,
-        "collection": 0,
         "draft_bot": 0,
         "draft_complete": 0,
         "draft_human": 0,
@@ -537,7 +520,6 @@
       },
       "parsers": {
         "client_actions": 21,
-        "collection": 0,
         "draft_bot": 0,
         "draft_complete": 0,
         "draft_human": 0,
@@ -567,7 +549,6 @@
       },
       "parsers": {
         "client_actions": 81,
-        "collection": 0,
         "draft_bot": 0,
         "draft_complete": 0,
         "draft_human": 0,
@@ -598,7 +579,6 @@
       },
       "parsers": {
         "client_actions": 48,
-        "collection": 0,
         "draft_bot": 0,
         "draft_complete": 0,
         "draft_human": 0,
@@ -628,7 +608,6 @@
       },
       "parsers": {
         "client_actions": 45,
-        "collection": 0,
         "draft_bot": 0,
         "draft_complete": 0,
         "draft_human": 0,
@@ -659,7 +638,6 @@
       },
       "parsers": {
         "client_actions": 476,
-        "collection": 0,
         "draft_bot": 0,
         "draft_complete": 0,
         "draft_human": 0,
@@ -689,7 +667,6 @@
       },
       "parsers": {
         "client_actions": 117,
-        "collection": 0,
         "draft_bot": 0,
         "draft_complete": 0,
         "draft_human": 0,
@@ -720,7 +697,6 @@
       },
       "parsers": {
         "client_actions": 429,
-        "collection": 0,
         "draft_bot": 0,
         "draft_complete": 0,
         "draft_human": 0,
@@ -751,7 +727,6 @@
       },
       "parsers": {
         "client_actions": 413,
-        "collection": 0,
         "draft_bot": 0,
         "draft_complete": 0,
         "draft_human": 0,
@@ -782,7 +757,6 @@
       },
       "parsers": {
         "client_actions": 199,
-        "collection": 0,
         "draft_bot": 0,
         "draft_complete": 0,
         "draft_human": 0,
@@ -813,7 +787,6 @@
       },
       "parsers": {
         "client_actions": 24,
-        "collection": 0,
         "draft_bot": 0,
         "draft_complete": 0,
         "draft_human": 0,
@@ -828,6 +801,35 @@
       "timestamp_failures": 91,
       "total_entries": 282,
       "unclaimed": 133
+    },
+    "session_2026-04-25_0841_deck-management-store.log": {
+      "double_claims": 0,
+      "event_types": {
+        "ClientAction": 19,
+        "DetailedLoggingStatus": 1,
+        "GameResult": 1,
+        "GameState": 33,
+        "Inventory": 2,
+        "MatchState": 2,
+        "Rank": 2,
+        "Session": 2
+      },
+      "parsers": {
+        "client_actions": 19,
+        "draft_bot": 0,
+        "draft_complete": 0,
+        "draft_human": 0,
+        "event_lifecycle": 0,
+        "gre": 11,
+        "inventory": 2,
+        "match_state": 2,
+        "metadata": 1,
+        "rank": 2,
+        "session": 2
+      },
+      "timestamp_failures": 119,
+      "total_entries": 213,
+      "unclaimed": 174
     }
   }
 }

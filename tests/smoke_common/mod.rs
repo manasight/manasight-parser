@@ -197,9 +197,7 @@ pub fn read_entries(path: &Path) -> Option<Vec<LogEntry>> {
     let mut buffer = LineBuffer::new();
     let mut entries = Vec::new();
     for line in content.lines() {
-        if let Some(entry) = buffer.push_line(line) {
-            entries.push(entry);
-        }
+        entries.extend(buffer.push_line(line));
     }
     if let Some(entry) = buffer.flush() {
         entries.push(entry);
