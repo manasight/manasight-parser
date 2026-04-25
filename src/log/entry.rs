@@ -157,6 +157,16 @@ pub struct LineBuffer {
     current_header: Option<EntryHeader>,
     /// Lines accumulated for the current entry.
     lines: Vec<String>,
+    /// Whether this buffer has ever emitted (or begun accumulating) an entry.
+    ///
+    /// Armed by [`push_line`](Self::push_line) when a real header is detected
+    /// or a metadata line is emitted. Cleared back to `false` by
+    /// [`reset`](Self::reset) so post-rotation orphan lines still surface a
+    /// warning. Used to silence the routine post-flush "orphan discarded"
+    /// warning (Phase 2 of #153 / #161): once any entry has been seen, an
+    /// arriving headerless line is Unity stdout noise rather than a true
+    /// file-start anomaly.
+    has_emitted_anything: bool,
 }
 
 impl LineBuffer {
@@ -174,6 +184,7 @@ impl LineBuffer {
             header_re,
             current_header: None,
             lines: Vec::new(),
+            has_emitted_anything: false,
         }
     }
 
@@ -217,6 +228,9 @@ impl LineBuffer {
                 header: EntryHeader::Metadata,
                 body: line.to_owned(),
             });
+            // Metadata is a successfully emitted entry — subsequent orphan
+            // lines are routine post-flush noise, not a file-start anomaly.
+            self.has_emitted_anything = true;
             return out;
         }
 
@@ -241,18 +255,29 @@ impl LineBuffer {
                     self.lines.push(line.to_owned());
                 }
             }
+            // A real header was seen — arm the flag so subsequent orphans
+            // are silenced.
+            self.has_emitted_anything = true;
             out
         } else if self.current_header.is_some() {
             // Continuation line for the current multi-line entry.
             self.lines.push(line.to_owned());
             Vec::new()
         } else {
-            // Line arrived before any header (or after a single-line flush)
-            // — discard with a warning.
-            ::log::warn!(
-                "Discarding headerless line at start of input: {:?}",
-                truncate_for_log(line, 120),
-            );
+            // Headerless line with no entry in progress. Two cases:
+            //
+            // 1. True file-start / post-rotation anomaly (no header has ever
+            //    been seen): warn — this is what the message is meant to
+            //    flag.
+            // 2. Routine post-flush orphan (Unity stdout noise arriving
+            //    between Arena entries after Phase 1's single-line flush
+            //    landed): silently discard — the warn would be pure noise.
+            if !self.has_emitted_anything {
+                ::log::warn!(
+                    "Discarding headerless line at start of input: {:?}",
+                    truncate_for_log(line, 120),
+                );
+            }
             Vec::new()
         }
     }
@@ -271,10 +296,13 @@ impl LineBuffer {
     /// Resets the buffer, discarding any in-progress entry.
     ///
     /// Useful on file rotation when the previous partial entry should be
-    /// abandoned.
+    /// abandoned. Also re-arms the orphan-warning flag so the first
+    /// post-rotation orphan still surfaces a warning (the rotation case
+    /// the warning was originally meant to detect).
     pub fn reset(&mut self) {
         self.current_header = None;
         self.lines.clear();
+        self.has_emitted_anything = false;
     }
 
     /// Returns `true` if no entry is currently being accumulated.
@@ -1079,6 +1107,186 @@ mod tests {
         #[test]
         fn test_entry_header_metadata_display() {
             assert_eq!(EntryHeader::Metadata.to_string(), "METADATA");
+        }
+    }
+
+    // -- Phase 2 (#161): orphan-warn gating ---------------------------------
+
+    mod orphan_warn_gating {
+        use super::*;
+        use std::sync::{Mutex, OnceLock};
+
+        /// In-test log capture: records every record's level + message so the
+        /// gating tests can assert whether a warn fired.
+        ///
+        /// `log` only allows one global logger per process. We install it
+        /// once via `OnceLock` and serialize the gating tests through a mutex
+        /// so the captured-record buffer can be inspected race-free.
+        struct CaptureLogger {
+            records: Mutex<Vec<(::log::Level, String)>>,
+        }
+
+        impl ::log::Log for CaptureLogger {
+            fn enabled(&self, _metadata: &::log::Metadata<'_>) -> bool {
+                true
+            }
+            fn log(&self, record: &::log::Record<'_>) {
+                let mut guard = match self.records.lock() {
+                    Ok(g) => g,
+                    Err(poisoned) => poisoned.into_inner(),
+                };
+                guard.push((record.level(), record.args().to_string()));
+            }
+            fn flush(&self) {}
+        }
+
+        static LOGGER: OnceLock<&'static CaptureLogger> = OnceLock::new();
+
+        type RecordsRef = &'static Mutex<Vec<(::log::Level, String)>>;
+
+        /// Installs the capture logger (idempotent) and returns a handle to
+        /// the global capture buffer.
+        ///
+        /// The capture buffer accumulates records from every test that runs
+        /// in this process, so callers MUST filter the captured records by a
+        /// per-test sentinel marker — see [`warn_count_matching`]. This
+        /// avoids the parallel-test race that a "clear before each test"
+        /// strategy would introduce.
+        fn install_capture() -> RecordsRef {
+            let logger = LOGGER.get_or_init(|| {
+                let leaked: &'static CaptureLogger = Box::leak(Box::new(CaptureLogger {
+                    records: Mutex::new(Vec::new()),
+                }));
+                // `set_logger` errors if a logger is already installed by
+                // another test setup; in that case our captures will be
+                // silently dropped, which is acceptable here because the
+                // gating logic is also covered by behavioral tests
+                // (`is_empty`, header round-trips) above.
+                let _ = ::log::set_logger(leaked);
+                ::log::set_max_level(::log::LevelFilter::Trace);
+                leaked
+            });
+            &logger.records
+        }
+
+        /// Counts captured warn-level records that contain `marker` in the
+        /// message body.
+        ///
+        /// Tests pass a per-test sentinel string as the orphan input so the
+        /// captured warning's truncated payload contains that sentinel.
+        /// Filtering on the sentinel makes the count race-free even though
+        /// Rust's test harness runs tests in parallel by default and other
+        /// modules' tests share the same global logger.
+        fn warn_count_matching(
+            records: &Mutex<Vec<(::log::Level, String)>>,
+            marker: &str,
+        ) -> usize {
+            let guard = match records.lock() {
+                Ok(g) => g,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            guard
+                .iter()
+                .filter(|(lvl, msg)| {
+                    *lvl == ::log::Level::Warn
+                        && msg.starts_with("Discarding headerless line at start of input")
+                        && msg.contains(marker)
+                })
+                .count()
+        }
+
+        /// Orphan line before any header has been seen still produces the
+        /// existing warning — this is the file-start anomaly the message was
+        /// originally meant to flag.
+        #[test]
+        fn test_push_line_first_orphan_warns() {
+            const MARKER: &str = "P2-MARKER-FIRST-ORPHAN-WARNS-zX9q";
+            let records = install_capture();
+            let mut buf = LineBuffer::new();
+
+            assert!(buf.push_line(MARKER).is_empty());
+
+            assert_eq!(
+                warn_count_matching(records, MARKER),
+                1,
+                "first orphan at file start must warn (rotation/file-start anomaly)",
+            );
+        }
+
+        /// After a single-line entry has flushed, a subsequent headerless
+        /// line is routine Unity stdout noise — silently discard, no warn.
+        #[test]
+        fn test_push_line_post_flush_orphan_silent() {
+            const MARKER: &str = "P2-MARKER-POST-FLUSH-SILENT-kJ7w";
+            let records = install_capture();
+            let mut buf = LineBuffer::new();
+
+            // Single-line flush arms the gating flag.
+            let entries = buf.push_line("[UnityCrossThreadLogger]STATE CHANGED {\"x\":1}");
+            assert_eq!(entries.len(), 1);
+            assert!(buf.is_empty());
+
+            // Unity stdout noise — should be silently dropped.
+            assert!(buf.push_line(MARKER).is_empty());
+
+            assert_eq!(
+                warn_count_matching(records, MARKER),
+                0,
+                "post-flush orphan must be silently discarded (no warn)",
+            );
+        }
+
+        /// `reset()` re-arms the warning so post-rotation orphans still
+        /// surface — the rotation case the warn was originally meant to
+        /// catch.
+        #[test]
+        fn test_push_line_orphan_after_reset_warns() {
+            const MARKER: &str = "P2-MARKER-AFTER-RESET-WARNS-vN2t";
+            let records = install_capture();
+            let mut buf = LineBuffer::new();
+
+            // Flush an entry to arm the flag.
+            assert_eq!(
+                buf.push_line("[UnityCrossThreadLogger]STATE CHANGED {}")
+                    .len(),
+                1,
+            );
+
+            // Simulate file rotation — flag must drop back to false.
+            buf.reset();
+
+            // First orphan after reset must warn again.
+            assert!(buf.push_line(MARKER).is_empty());
+
+            assert_eq!(
+                warn_count_matching(records, MARKER),
+                1,
+                "first orphan after reset must warn (rotation anomaly)",
+            );
+        }
+
+        /// A metadata line (`DETAILED LOGS: ENABLED`) is a successfully
+        /// emitted entry, so subsequent orphan lines are post-flush noise
+        /// and must be silently discarded.
+        #[test]
+        fn test_push_line_orphan_after_metadata_silent() {
+            const MARKER: &str = "P2-MARKER-AFTER-METADATA-SILENT-bH4r";
+            let records = install_capture();
+            let mut buf = LineBuffer::new();
+
+            // Metadata arms the flag.
+            let entries = buf.push_line("DETAILED LOGS: ENABLED");
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].header, EntryHeader::Metadata);
+
+            // Subsequent orphan — silent.
+            assert!(buf.push_line(MARKER).is_empty());
+
+            assert_eq!(
+                warn_count_matching(records, MARKER),
+                0,
+                "orphan after metadata must be silently discarded (no warn)",
+            );
         }
     }
 
