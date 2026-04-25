@@ -28,4 +28,10 @@ entropy = 3.0
   paths = [
     '''tests/fixtures/.*''',
     '''\.env\.example''',
+    # Sanitizer module legitimately discusses tokens — its purpose is to
+    # redact "Token: ..." patterns from raw logs. Test fixtures and
+    # comments demonstrate the patterns being matched.
+    '''^src/sanitize\.rs$''',
+    # GitHub Actions workflows use `key:` for cache keys, not credentials.
+    '''^\.github/workflows/.*\.yml$''',
   ]
