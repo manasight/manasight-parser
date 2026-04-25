@@ -1,6 +1,6 @@
 [package]
 name = "manasight-parser"
-version = "0.1.2"
+version = "0.2.0"
 edition = "2021"
 description = "MTG Arena log file parser — reads Player.log and emits typed game events"
 license = "MIT OR Apache-2.0"
