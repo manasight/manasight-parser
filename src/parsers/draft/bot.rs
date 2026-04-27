@@ -131,8 +131,9 @@ fn try_parse_pack_presentation(body: &str) -> Option<serde_json::Value> {
 /// Returns `Some(serde_json::Value)` if parsing succeeds.
 ///
 /// Returns `None` if the entry is not a `BotDraftDraftPick` request, if the
-/// nested `request` / `PickInfo` payload is missing, if `CardIds` is empty,
-/// or if parsing fails.
+/// nested `request` / `PickInfo` payload is missing, if `CardIds` is empty
+/// or its first entry is `0` (a sentinel for "no card resolved"), or if
+/// parsing fails.
 ///
 /// The log entry body must be an API request whose string-escaped `request`
 /// field contains `PickInfo` with:
@@ -181,6 +182,9 @@ fn try_parse_draft_pick(body: &str) -> Option<serde_json::Value> {
         .unwrap_or_default();
 
     let card_id = *card_ids.first()?;
+    if card_id == 0 {
+        return None;
+    }
 
     let event_name = api_common::extract_event_name(&parsed);
 
@@ -564,6 +568,15 @@ mod tests {
         #[test]
         fn test_try_parse_empty_card_ids_returns_none() {
             let body = r#"[UnityCrossThreadLogger]==> BotDraftDraftPick {"id":"uuid","request":"{\"PickInfo\":{\"CardIds\":[],\"PackNumber\":0,\"PickNumber\":0}}"}"#;
+            let entry = unity_entry(body);
+            assert!(try_parse(&entry, Some(test_timestamp())).is_none());
+        }
+
+        #[test]
+        fn test_try_parse_zero_card_id_returns_none() {
+            // GRP ID 0 is a sentinel for "no card resolved" and is never a
+            // valid MTGA card; the parser must drop these envelopes.
+            let body = r#"[UnityCrossThreadLogger]==> BotDraftDraftPick {"id":"uuid","request":"{\"PickInfo\":{\"CardIds\":[\"0\"],\"PackNumber\":0,\"PickNumber\":0}}"}"#;
             let entry = unity_entry(body);
             assert!(try_parse(&entry, Some(test_timestamp())).is_none());
         }
