@@ -557,13 +557,10 @@ mod tests {
         fn test_route_draft_bot_pack_presentation() {
             let router = Router::new();
             let payload = serde_json::json!({
-                "DraftStatus": "PickNext",
-                "PackNumber": 0,
-                "PickNumber": 0,
-                "DraftPack": ["12345", "67890", "11111"],
-                "EventName": "QuickDraft_MKM_20260201"
+                "CurrentModule": "BotDraft",
+                "Payload":"{\"DraftStatus\":\"PickNext\",\"PackNumber\":0,\"PickNumber\":0,\"DraftPack\":[\"12345\",\"67890\",\"11111\"]}"
             });
-            let body = format!("[UnityCrossThreadLogger]2/25/2026 12:00:00 PM\n{payload}",);
+            let body = format!("[UnityCrossThreadLogger]2/25/2026 12:00:00 PM\n<== BotDraftDraftStatus(uuid)\n{payload}",);
             let entry = unity_entry(&body);
 
             let results = router.route(&entry);

@@ -148,10 +148,12 @@ pub(crate) fn parse_nested_json(
 ///
 /// MTG Arena is inconsistent about where it stores event names. This helper
 /// checks the following locations in order:
-/// 1. Top-level `EventName` or `InternalEventName`.
-/// 2. `Course.InternalEventName` or `Course.EventName` (common in responses).
-/// 3. A nested string-escaped `request` field containing `{"EventName": "..."}`
-///    (common in outbound requests).
+/// 1.  Top-level `EventName` or `InternalEventName`.
+/// 2.  Common nested objects:
+///     a. `Course.InternalEventName` or `Course.EventName` (common in responses).
+///     b. `PickInfo.EventName` (common in bot draft requests).
+/// 3.  A nested string-escaped `request` field containing any of the above
+///     (common in outbound requests).
 pub(crate) fn extract_event_name(parsed: &serde_json::Value) -> String {
     // 1. Try direct top-level fields.
     if let Some(name) = parsed
@@ -162,24 +164,23 @@ pub(crate) fn extract_event_name(parsed: &serde_json::Value) -> String {
         return name.to_owned();
     }
 
-    // 2. Try nested Course object (responses).
-    if let Some(name) = parsed.get("Course").and_then(|course| {
-        course
-            .get("InternalEventName")
-            .or_else(|| course.get("EventName"))
-            .and_then(serde_json::Value::as_str)
-    }) {
-        return name.to_owned();
+    // 2. Try common nested objects.
+    for field in ["Course", "PickInfo"] {
+        if let Some(name) = parsed.get(field).and_then(|obj| {
+            obj.get("InternalEventName")
+                .or_else(|| obj.get("EventName"))
+                .and_then(serde_json::Value::as_str)
+        }) {
+            return name.to_owned();
+        }
     }
 
     // 3. Try nested string-escaped request field (requests).
     if let Some(request_json) = parse_nested_json(parsed, "request", None) {
-        if let Some(name) = request_json
-            .get("EventName")
-            .or_else(|| request_json.get("InternalEventName"))
-            .and_then(serde_json::Value::as_str)
-        {
-            return name.to_owned();
+        // Recursion is safe here as MTGA logs have shallow request nesting.
+        let name = extract_event_name(&request_json);
+        if !name.is_empty() {
+            return name;
         }
     }
 
@@ -453,6 +454,22 @@ mod tests {
                 "request": "{\"EventName\":\"RequestLevel\"}"
             });
             assert_eq!(extract_event_name(&parsed), "TopLevel");
+        }
+
+        #[test]
+        fn test_extract_event_name_pick_info_nested_returns_name() {
+            let parsed = serde_json::json!({
+                "PickInfo": {"EventName": "PickInfoTest"}
+            });
+            assert_eq!(extract_event_name(&parsed), "PickInfoTest");
+        }
+
+        #[test]
+        fn test_extract_event_name_nested_pick_info_in_request_returns_name() {
+            let parsed = serde_json::json!({
+                "request": "{\"PickInfo\":{\"EventName\":\"NestedPickInfo\"}}"
+            });
+            assert_eq!(extract_event_name(&parsed), "NestedPickInfo");
         }
 
         #[test]

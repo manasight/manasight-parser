@@ -159,7 +159,8 @@ pub enum GameEvent {
     /// Class 1 — interactive dispatch.
     MatchState(MatchStateEvent),
 
-    /// Bot draft picks (`DraftStatus: "PickNext"`, `BotDraft_DraftPick`).
+    /// Bot draft events (`<== BotDraftDraftStatus`, `<== BotDraftDraftPick`,
+    /// `==> BotDraftDraftPick`).
     /// Class 2 — durable per-event.
     DraftBot(DraftBotEvent),
 
@@ -486,10 +487,11 @@ define_event! {
 // ---------------------------------------------------------------------------
 
 define_event! {
-    /// Bot draft pick events.
+    /// Bot draft events.
     ///
-    /// Parsed from `DraftStatus: "PickNext"` and `BotDraft_DraftPick` entries.
-    /// Each pick is independently valuable and must survive crashes.
+    /// Parsed from `BotDraftDraftStatus` and `BotDraftDraftPick` request and
+    /// response entries. Each pick is independently valuable and must survive
+    /// crashes.
     DraftBotEvent
 }
 
