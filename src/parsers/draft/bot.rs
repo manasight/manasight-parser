@@ -79,11 +79,14 @@ pub fn try_parse(
 ///
 /// The log entry body must be an API response whose string-escaped `Payload`
 /// field contains:
-/// - `DraftStatus`: must be `"PickNext"`
+/// - `DraftStatus`: must be `"PickNext"` (required; otherwise returns `None`)
 /// - `DraftPack`: array of card GRP IDs available in the pack
-/// - `PackNumber`: zero-indexed pack number (0, 1, 2)
-/// - `PickNumber`: zero-indexed pick number within the pack
-/// - `EventName`: the Arena event identifier (e.g., `"QuickDraft_MKM_20260201"`)
+///
+/// The following are extracted on a best-effort basis and default when absent:
+/// - `PackNumber`: zero-indexed pack number (defaults to `0`)
+/// - `PickNumber`: zero-indexed pick number within the pack (defaults to `0`)
+/// - `EventName`: the Arena event identifier, e.g., `"QuickDraft_MKM_20260201"`
+///   (defaults to `""`)
 fn try_parse_pack_presentation(body: &str) -> Option<serde_json::Value> {
     let parsed = if api_common::is_api_response(body, DRAFT_STATUS_MARKER) {
         let top = api_common::parse_json_from_body(body, DRAFT_STATUS_MARKER)?;
@@ -390,7 +393,7 @@ mod tests {
         }
 
         #[test]
-        fn test_try_parse_draft_pick_with_event_name_in_request_root() {
+        fn test_try_parse_draft_pick_event_name_in_request_root_returns_name() {
             let body = r#"[UnityCrossThreadLogger]==> BotDraftDraftPick {"id":"uuid","request":"{\"EventName\":\"QuickDraft_SOS_20260430\",\"PickInfo\":{\"CardIds\":[\"12345\"],\"PackNumber\":0,\"PickNumber\":0}}"}"#;
             let entry = unity_entry(body);
             let result = try_parse(&entry, Some(test_timestamp()));
@@ -403,7 +406,7 @@ mod tests {
         }
 
         #[test]
-        fn test_try_parse_draft_pick_with_event_name_in_pick_info() {
+        fn test_try_parse_draft_pick_event_name_in_pick_info_returns_name() {
             let body = r#"[UnityCrossThreadLogger]==> BotDraftDraftPick {"id":"uuid","request":"{\"PickInfo\":{\"EventName\":\"QuickDraft_SOS_20260430\",\"CardIds\":[\"12345\"],\"PackNumber\":0,\"PickNumber\":0}}"}"#;
             let entry = unity_entry(body);
             let result = try_parse(&entry, Some(test_timestamp()));
