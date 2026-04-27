@@ -1,8 +1,8 @@
 {
   "_meta": {
-    "corpus_tag": "manasight-corpus-v16",
+    "corpus_tag": "manasight-corpus-v17",
     "description": "Smoke test baseline -- per-file, per-parser event counts from Level 1 (parser-only) smoke tests.",
-    "generated_from_commit": "390cf50"
+    "generated_from_commit": "c3b9457"
   },
   "files": {
     "session_2026-02-22_0000_ecl-premier-bg-elves.log": {
@@ -220,6 +220,7 @@
       "event_types": {
         "ClientAction": 740,
         "DetailedLoggingStatus": 1,
+        "DraftBot": 78,
         "EventLifecycle": 3,
         "GameResult": 1,
         "GameState": 1334,
@@ -230,7 +231,7 @@
       },
       "parsers": {
         "client_actions": 740,
-        "draft_bot": 0,
+        "draft_bot": 78,
         "draft_complete": 0,
         "draft_human": 0,
         "event_lifecycle": 3,
@@ -243,7 +244,7 @@
       },
       "timestamp_failures": 112,
       "total_entries": 1843,
-      "unclaimed": 188
+      "unclaimed": 110
     },
     "session_2026-03-11_2124_trad-standard-bo3.log": {
       "double_claims": 0,
@@ -830,6 +831,36 @@
       "timestamp_failures": 119,
       "total_entries": 213,
       "unclaimed": 174
+    },
+    "session_2026-04-26_2209.log": {
+      "double_claims": 0,
+      "event_types": {
+        "ClientAction": 1086,
+        "DetailedLoggingStatus": 1,
+        "EventLifecycle": 8,
+        "GameResult": 6,
+        "GameState": 1809,
+        "Inventory": 7,
+        "MatchState": 12,
+        "Rank": 7,
+        "Session": 9
+      },
+      "parsers": {
+        "client_actions": 1086,
+        "draft_bot": 0,
+        "draft_complete": 0,
+        "draft_human": 0,
+        "event_lifecycle": 8,
+        "gre": 755,
+        "inventory": 7,
+        "match_state": 12,
+        "metadata": 1,
+        "rank": 7,
+        "session": 9
+      },
+      "timestamp_failures": 189,
+      "total_entries": 2153,
+      "unclaimed": 268
     }
   }
 }
