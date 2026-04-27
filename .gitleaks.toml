@@ -6,9 +6,32 @@ title = "manasight-parser gitleaks config"
 [extend]
 useDefault = true
 
+# Custom rule: catch hardcoded values assigned to *_PASSWORD / *_SECRET /
+# *_TOKEN / API_KEY style variables. Default rules don't fire on this pattern.
+[[rules]]
+id = "hardcoded-credential-assignment"
+description = "Hardcoded password/secret/token/api-key assigned to a variable"
+regex = '''(?i)(?:password|passwd|secret|token|api[_-]?key)\s*[:=]\s*['"]([^$<{][^"']{7,})['"]'''
+keywords = [
+  "password",
+  "passwd",
+  "secret",
+  "token",
+  "api_key",
+  "apikey",
+  "api-key",
+]
+entropy = 3.0
+
 [allowlist]
   description = "Global allowlist"
   paths = [
     '''tests/fixtures/.*''',
     '''\.env\.example''',
+    # Sanitizer module legitimately discusses tokens — its purpose is to
+    # redact "Token: ..." patterns from raw logs. Test fixtures and
+    # comments demonstrate the patterns being matched.
+    '''^src/sanitize\.rs$''',
+    # GitHub Actions workflows use `key:` for cache keys, not credentials.
+    '''^\.github/workflows/.*\.yml$''',
   ]
