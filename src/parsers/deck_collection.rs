@@ -65,7 +65,7 @@ pub fn try_parse(
 
     let parsed = api_common::parse_json_from_body(body, "StartHook deck collection")?;
     let deck_summaries = parsed.get(DECK_SUMMARIES_FIELD)?.as_array()?;
-    let decks = parsed.get(DECKS_FIELD)?;
+    let decks = parsed.get(DECKS_FIELD)?.as_object()?;
 
     let payload = serde_json::json!({
         "type": "deck_collection_snapshot",
@@ -82,16 +82,12 @@ pub fn try_parse(
 /// Correlates `DeckSummaries` entries with `Decks` payloads by `DeckId`.
 fn correlate_decks(
     deck_summaries: &[serde_json::Value],
-    decks: &serde_json::Value,
+    decks: &serde_json::Map<String, serde_json::Value>,
 ) -> serde_json::Value {
-    let Some(deck_map) = decks.as_object() else {
-        return serde_json::Value::Object(serde_json::Map::new());
-    };
-
     serde_json::Value::Object(
         deck_summaries
             .iter()
-            .filter_map(|summary| correlate_summary(summary, deck_map))
+            .filter_map(|summary| correlate_summary(summary, decks))
             .collect(),
     )
 }
@@ -107,10 +103,7 @@ fn correlate_summary(
         .and_then(serde_json::Value::as_str)?
         .to_string();
 
-    let deck = deck_map
-        .get(&deck_id)
-        .cloned()
-        .unwrap_or(serde_json::Value::Null);
+    let deck = deck_map.get(&deck_id).cloned()?;
 
     let mut enriched = summary.clone();
     enriched.insert("list".to_string(), deck);
@@ -168,16 +161,16 @@ mod tests {
         }
 
         #[test]
-        fn test_try_parse_skips_summary_without_deck_id() {
+        fn test_try_parse_skips_orphaned_summary() {
             let body = "[UnityCrossThreadLogger]2/22/2026 11:59:51 AM\n\
                          <== StartHook(deck-uuid)\n\
                          {\n\
                            \"DeckSummaries\": [\n\
-                             {\"Name\": \"Missing ID\"},\n\
-                             {\"DeckId\": \"deck-2\", \"Name\": \"Artifacts\"}\n\
-                           ],\n\
-                           \"Decks\": {\n\
-                             \"deck-2\": {\"MainDeck\": [{\"cardId\": 2, \"quantity\": 3}]}\n\
+                              {\"DeckId\": \"deck-1\", \"Name\": \"Orphaned\"},\n\
+                              {\"DeckId\": \"deck-2\", \"Name\": \"Artifacts\"}\n\
+                            ],\n\
+                            \"Decks\": {\n\
+                              \"deck-2\": {\"MainDeck\": [{\"cardId\": 2, \"quantity\": 3}]}\n\
                            }\n\
                          }";
             let entry = unity_entry(body);
@@ -188,7 +181,37 @@ mod tests {
             let payload = deck_collection_payload(event);
 
             assert!(payload["decks"].get("deck-2").is_some());
-            assert!(payload["decks"].get("Missing ID").is_none());
+            assert!(payload["decks"].get("deck-1").is_none());
+        }
+
+        #[test]
+        fn test_try_parse_emits_only_non_null_lists() {
+            let body = "[UnityCrossThreadLogger]2/22/2026 11:59:51 AM\n\
+                         <== StartHook(deck-uuid)\n\
+                         {\n\
+                           \"DeckSummaries\": [\n\
+                             {\"DeckId\": \"deck-1\", \"Name\": \"Reanimator\"},\n\
+                             {\"DeckId\": \"deck-2\", \"Name\": \"Artifacts\"}\n\
+                           ],\n\
+                           \"Decks\": {\n\
+                             \"deck-1\": {\"MainDeck\": [{\"cardId\": 1, \"quantity\": 4}]},\n\
+                             \"deck-2\": {\"MainDeck\": [{\"cardId\": 2, \"quantity\": 3}]}\n\
+                           }\n\
+                         }";
+            let entry = unity_entry(body);
+            let result = try_parse(&entry, Some(test_timestamp()));
+
+            assert!(result.is_some());
+            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            let payload = deck_collection_payload(event);
+            let decks = payload["decks"]
+                .as_object()
+                .unwrap_or_else(|| unreachable!());
+
+            assert!(!decks.is_empty());
+            assert!(decks
+                .values()
+                .all(|deck| deck.get("list").is_some_and(|value| !value.is_null())));
         }
 
         #[test]
@@ -268,6 +291,15 @@ mod tests {
             let body = "[UnityCrossThreadLogger]2/22/2026 12:00:00 PM\n\
                          <== StartHook(non-array-uuid)\n\
                          {\"DeckSummaries\": {\"DeckId\": \"deck-1\"}, \"Decks\": {\"deck-1\": {}}}";
+            let entry = unity_entry(body);
+            assert!(try_parse(&entry, Some(test_timestamp())).is_none());
+        }
+
+        #[test]
+        fn test_try_parse_non_object_decks_returns_none() {
+            let body = "[UnityCrossThreadLogger]2/22/2026 12:00:00 PM\n\
+                         <== StartHook(non-object-uuid)\n\
+                         {\"DeckSummaries\": [{\"DeckId\": \"deck-1\"}], \"Decks\": []}";
             let entry = unity_entry(body);
             assert!(try_parse(&entry, Some(test_timestamp())).is_none());
         }
