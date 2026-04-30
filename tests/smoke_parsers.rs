@@ -63,6 +63,10 @@ struct FileReport {
     gsm_diff_deleted_present: usize,
     /// Total `diff_deleted_instance_ids` count across all GSM events.
     gsm_diff_deleted_total: usize,
+    /// Number of emitted `DeckCollection` events seen in the file.
+    deck_collection_events: usize,
+    /// Number of raw-to-parsed `DeckCollection` invariant violations.
+    deck_collection_invariant_violations: usize,
 }
 
 impl FileReport {
@@ -161,6 +165,82 @@ impl GsmFieldStats {
 }
 
 // ---------------------------------------------------------------------------
+// DeckCollection field tracking
+// ---------------------------------------------------------------------------
+
+/// Tracks corpus-derived payload invariants for `DeckCollection` events.
+#[derive(Default)]
+struct DeckCollectionStats {
+    events: usize,
+    invariant_violations: usize,
+}
+
+impl DeckCollectionStats {
+    /// Updates stats from a single `DeckCollection` event payload.
+    fn track(&mut self, payload: &serde_json::Value) {
+        self.events += 1;
+
+        let Some(raw_deck_summaries) = payload
+            .get("raw_start_hook")
+            .and_then(|value| value.get("DeckSummaries"))
+            .and_then(|value| value.as_array())
+        else {
+            self.invariant_violations += 1;
+            return;
+        };
+
+        let Some(raw_decks) = payload
+            .get("raw_start_hook")
+            .and_then(|value| value.get("Decks"))
+            .and_then(|value| value.as_object())
+        else {
+            self.invariant_violations += 1;
+            return;
+        };
+
+        let Some(parsed_decks) = payload.get("decks").and_then(|value| value.as_object()) else {
+            self.invariant_violations += 1;
+            return;
+        };
+
+        if raw_deck_summaries.len() != parsed_decks.len() {
+            self.invariant_violations += raw_deck_summaries.len().max(parsed_decks.len());
+        }
+
+        for summary in raw_deck_summaries {
+            let Some(summary_obj) = summary.as_object() else {
+                self.invariant_violations += 1;
+                continue;
+            };
+
+            let Some(deck_id) = summary_obj
+                .get("DeckId")
+                .and_then(serde_json::Value::as_str)
+            else {
+                self.invariant_violations += 1;
+                continue;
+            };
+
+            if !raw_decks.contains_key(deck_id) {
+                self.invariant_violations += 1;
+            }
+
+            let Some(parsed_deck) = parsed_decks.get(deck_id) else {
+                self.invariant_violations += 1;
+                continue;
+            };
+
+            if parsed_deck
+                .get("list")
+                .is_none_or(serde_json::Value::is_null)
+            {
+                self.invariant_violations += 1;
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Timestamp extraction
 // ---------------------------------------------------------------------------
 
@@ -243,6 +323,8 @@ fn error_report(filename: String, parsers: &[NamedParser]) -> FileReport {
         gsm_timers_total: 0,
         gsm_diff_deleted_present: 0,
         gsm_diff_deleted_total: 0,
+        deck_collection_events: 0,
+        deck_collection_invariant_violations: 0,
     }
 }
 
@@ -277,6 +359,7 @@ fn process_file(path: &Path, parsers: &[NamedParser]) -> FileReport {
     let mut double_claims: usize = 0;
     let mut timestamp_failures: usize = 0;
     let mut gsm_stats = GsmFieldStats::default();
+    let mut deck_collection_stats = DeckCollectionStats::default();
 
     for entry in &entries {
         let timestamp = try_extract_timestamp(&entry.body);
@@ -303,6 +386,10 @@ fn process_file(path: &Path, parsers: &[NamedParser]) -> FileReport {
                         // Track GSM field presence for GameState events.
                         if let GameEvent::GameState(ref gs) = event {
                             gsm_stats.track(gs.payload());
+                        }
+
+                        if let GameEvent::DeckCollection(ref deck_collection) = event {
+                            deck_collection_stats.track(deck_collection.payload());
                         }
 
                         *event_type_counts.entry(event_type_name(event)).or_insert(0) += 1;
@@ -344,6 +431,35 @@ fn process_file(path: &Path, parsers: &[NamedParser]) -> FileReport {
         gsm_timers_total: gsm_stats.timers_total,
         gsm_diff_deleted_present: gsm_stats.diff_deleted_present,
         gsm_diff_deleted_total: gsm_stats.diff_deleted_total,
+        deck_collection_events: deck_collection_stats.events,
+        deck_collection_invariant_violations: deck_collection_stats.invariant_violations,
+    }
+}
+
+fn write_deck_collection_report(out: &mut String, report: &FileReport) {
+    let _ = writeln!(out, "  DeckCollection payloads:");
+    let _ = writeln!(
+        out,
+        "    {:<16} {:>6}",
+        "events:", report.deck_collection_events,
+    );
+    let _ = writeln!(
+        out,
+        "    {:<16} {:>6}",
+        "invariants:", report.deck_collection_invariant_violations,
+    );
+}
+
+fn write_event_type_breakdown(out: &mut String, report: &FileReport) {
+    let _ = writeln!(out, "  Event type breakdown:");
+    let mut sorted_types: Vec<(&&'static str, &usize)> = report.event_type_counts.iter().collect();
+    sorted_types.sort_by_key(|(name, _)| **name);
+    for (type_name, count) in &sorted_types {
+        let label = format!("    {type_name}:");
+        let _ = writeln!(out, "  {label:<18} {count:>6}");
+    }
+    if sorted_types.is_empty() {
+        let _ = writeln!(out, "    (none)");
     }
 }
 
@@ -387,17 +503,7 @@ fn format_report(reports: &[FileReport]) -> String {
             total_panics += stats.panics;
         }
 
-        let _ = writeln!(out, "  Event type breakdown:");
-        let mut sorted_types: Vec<(&&'static str, &usize)> =
-            report.event_type_counts.iter().collect();
-        sorted_types.sort_by_key(|(name, _)| **name);
-        for (type_name, count) in &sorted_types {
-            let label = format!("    {type_name}:");
-            let _ = writeln!(out, "  {label:<18} {count:>6}");
-        }
-        if sorted_types.is_empty() {
-            let _ = writeln!(out, "    (none)");
-        }
+        write_event_type_breakdown(&mut out, report);
 
         let _ = writeln!(out, "  {:<18} {:>6}", "unclaimed:", report.unclaimed);
         let _ = writeln!(
@@ -450,6 +556,7 @@ fn format_report(reports: &[FileReport]) -> String {
             "    {:<16} {:>6} GSMs, {:>6} total",
             "present:", report.gsm_diff_deleted_present, report.gsm_diff_deleted_total,
         );
+        write_deck_collection_report(&mut out, report);
         let _ = writeln!(out);
 
         total_double_claims += report.double_claims;
@@ -550,6 +657,10 @@ fn smoke_test_real_logs() {
         .map(|(_, s)| s.panics)
         .sum();
     let total_double_claims: usize = reports.iter().map(|r| r.double_claims).sum();
+    let total_deck_collection_invariant_violations: usize = reports
+        .iter()
+        .map(|r| r.deck_collection_invariant_violations)
+        .sum();
 
     assert_eq!(
         read_errors, 0,
@@ -562,6 +673,10 @@ fn smoke_test_real_logs() {
     assert_eq!(
         total_double_claims, 0,
         "double claims detected -- see report above"
+    );
+    assert_eq!(
+        total_deck_collection_invariant_violations, 0,
+        "DeckCollection invariant violations detected -- see report above"
     );
 
     // --- Ratchet / Bless ---
