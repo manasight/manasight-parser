@@ -146,30 +146,25 @@ pub fn try_parse(
         return Vec::new();
     };
 
-    // Try ConnectResp first (highest priority, emitted once at game start).
+    // Build the ordered event list: ConnectResp (if present) followed by all
+    // sibling GameStateMessage / QueuedGameStateMessage entries in source-array
+    // order. Arena bundles `[ConnectResp, DieRollResultsResp, GSM]` in 2/7
+    // captured ConnectResps, and the GSM in those bundles hydrates initial
+    // library/hand state. The previous early-return after ConnectResp silently
+    // dropped those siblings.
+    let mut events = Vec::new();
     if let Some(connect_resp_msg) = find_message_by_type(messages, CONNECT_RESP_TYPE) {
         let payload = connect_resp::build_connect_resp_payload(connect_resp_msg, &parsed);
         let metadata = EventMetadata::new(timestamp, body.as_bytes().to_vec());
-        return vec![GameEvent::GameState(GameStateEvent::new(metadata, payload))];
+        events.push(GameEvent::GameState(GameStateEvent::new(metadata, payload)));
     }
 
     // Iterate ALL GameStateMessage and QueuedGameStateMessage entries.
     // Arena batches multiple GSMs into a single greToClientMessages array;
     // processing only the first silently discards the majority of updates.
-    let mut events = Vec::new();
     for msg in messages {
-        let msg_type = msg.get("type").and_then(serde_json::Value::as_str);
-        if let Some(GAME_STATE_MESSAGE_TYPE | QUEUED_GAME_STATE_MESSAGE_TYPE) = msg_type {
-            let metadata = EventMetadata::new(timestamp, body.as_bytes().to_vec());
-            if game_result::is_game_over(msg) && !game_result::is_match_complete(msg) {
-                let payload = game_result::build_game_result_payload(msg);
-                events.push(GameEvent::GameResult(GameResultEvent::new(
-                    metadata, payload,
-                )));
-            } else if !game_result::is_game_over(msg) {
-                let payload = game_state::build_game_state_message_payload(msg);
-                events.push(GameEvent::GameState(GameStateEvent::new(metadata, payload)));
-            }
+        if let Some(event) = emit_gsm_event(msg, body, timestamp) {
+            events.push(event);
         }
     }
 
@@ -192,6 +187,47 @@ pub fn try_parse(
     // Unrecognized GRE message type — log and skip.
     ::log::debug!("greToClientEvent: no recognized message type found");
     Vec::new()
+}
+
+/// Builds a single [`GameEvent`] from a `GameStateMessage` /
+/// `QueuedGameStateMessage` entry, returning `None` for any other GRE message
+/// type (e.g. `ConnectResp`, `DieRollResultsResp`, noise types).
+///
+/// Encapsulates the GameResult-vs-GameState branch: when the embedded
+/// `gameInfo.stage == GameStage_GameOver` and `matchState != MatchState_MatchComplete`,
+/// emits a [`GameEvent::GameResult`] (Class 3 batch trigger); when the stage is
+/// `GameStage_GameOver` with `matchState == MatchState_MatchComplete`, returns
+/// `None` so the duplicate match-complete signal is suppressed.
+fn emit_gsm_event(
+    msg: &serde_json::Value,
+    body: &str,
+    timestamp: Option<chrono::DateTime<chrono::Utc>>,
+) -> Option<GameEvent> {
+    let msg_type = msg.get("type").and_then(serde_json::Value::as_str)?;
+    if !matches!(
+        msg_type,
+        GAME_STATE_MESSAGE_TYPE | QUEUED_GAME_STATE_MESSAGE_TYPE
+    ) {
+        return None;
+    }
+
+    let metadata = EventMetadata::new(timestamp, body.as_bytes().to_vec());
+    if game_result::is_game_over(msg) {
+        if game_result::is_match_complete(msg) {
+            // Suppress the duplicate match-complete signal — the prior
+            // game-complete entry in the same batch already produced the
+            // GameResult event.
+            None
+        } else {
+            let payload = game_result::build_game_result_payload(msg);
+            Some(GameEvent::GameResult(GameResultEvent::new(
+                metadata, payload,
+            )))
+        }
+    } else {
+        let payload = game_state::build_game_state_message_payload(msg);
+        Some(GameEvent::GameState(GameStateEvent::new(metadata, payload)))
+    }
 }
 
 // ---------------------------------------------------------------------------

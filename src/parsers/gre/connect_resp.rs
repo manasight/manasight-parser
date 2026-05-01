@@ -490,6 +490,46 @@ mod tests {
         }
     }
 
+    // -- Bundled batch (ConnectResp + sibling GSM) ----------------------------
+
+    mod bundled_batch {
+        use super::*;
+
+        /// Wire-shape inspiration: corpus session
+        /// `2026-02-22_0000_ecl-premier-bg-elves` line 22433. The
+        /// `greToClientMessages` array carries `[ConnectResp,
+        /// DieRollResultsResp, GameStateMessage]`. The parser must emit the
+        /// `ConnectResp` event first, followed by the GSM in source-array
+        /// order; the unhandled `DieRollResultsResp` is dropped.
+        #[test]
+        fn test_try_parse_connect_resp_bundled_with_gsm_emits_two_events() {
+            let body = connect_resp_with_bundled_gsm_body();
+            let entry = unity_entry(&body);
+            let results = try_parse(&entry, Some(test_timestamp()));
+            assert_eq!(results.len(), 2);
+        }
+
+        #[test]
+        fn test_try_parse_connect_resp_bundled_with_gsm_first_event_is_connect_resp() {
+            let body = connect_resp_with_bundled_gsm_body();
+            let entry = unity_entry(&body);
+            let results = try_parse(&entry, Some(test_timestamp()));
+            assert_eq!(results.len(), 2);
+            let first = game_state_payload(&results[0]);
+            assert_eq!(first["type"], "connect_resp");
+        }
+
+        #[test]
+        fn test_try_parse_connect_resp_bundled_with_gsm_second_event_is_gsm() {
+            let body = connect_resp_with_bundled_gsm_body();
+            let entry = unity_entry(&body);
+            let results = try_parse(&entry, Some(test_timestamp()));
+            assert_eq!(results.len(), 2);
+            let second = game_state_payload(&results[1]);
+            assert_eq!(second["type"], "game_state_message");
+        }
+    }
+
     // -- Internal helpers ----------------------------------------------------
 
     mod card_id_helpers {

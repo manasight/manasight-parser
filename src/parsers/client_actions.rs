@@ -299,6 +299,11 @@ fn build_select_n_resp_payload(
 /// - `deck.deckCards` — array of card GRP IDs in the main deck
 /// - `deck.sideboardCards` — array of card GRP IDs in the sideboard
 ///
+/// Spec: AC-LIFE-1 (deck-tracker-overlay) — Bo3 G2/G3 transitions reset the
+/// deck tracker by capturing this payload during sideboarding. The post-
+/// sideboard `deckCards` becomes the next game's library snapshot before the
+/// new GRE `ConnectResp` arrives.
+///
 /// The output payload has the shape:
 ///
 /// ```json
@@ -786,6 +791,82 @@ mod tests {
             assert_eq!(payload["type"], "submit_deck_resp");
             assert_eq!(payload["deck_cards"], serde_json::json!([]));
             assert_eq!(payload["sideboard_cards"], serde_json::json!([]));
+        } else {
+            return Err("Expected GameEvent::ClientAction".into());
+        }
+        Ok(())
+    }
+
+    /// Bo3-shaped `SubmitDeckResp` with 60 main + 15 sideboard cards.
+    ///
+    /// Wire-shape inspired by corpus session
+    /// `2026-03-11_2124_trad-standard-bo3.log.gz` (3 `SubmitDeckResp`
+    /// occurrences across the Bo3 match). Drives spec AC-LIFE-1: the parser
+    /// must round-trip the post-sideboard deck submission so Group B's
+    /// lifecycle layer can reset the deck tracker between G1 and G2/G3.
+    #[test]
+    fn test_try_parse_submit_deck_resp_bo3_shaped_round_trip() -> TestResult {
+        // 60-card main deck (Bo3 minimum): 19 lands + 41 spells, with a few
+        // 4-of playsets to mirror real constructed decks.
+        let deck_cards: Vec<i64> = (0..19)
+            .map(|_| 95815_i64) // 19x basic land
+            .chain([51307_i64; 3]) // 3x utility spell
+            .chain([92065_i64]) // 1x singleton
+            .chain([86715_i64; 2]) // 2x curve filler
+            .chain([91549_i64; 4]) // 4x core threat
+            .chain([92073_i64; 2])
+            .chain([92081_i64; 4])
+            .chain([92089_i64; 4])
+            .chain([92090_i64; 4])
+            .chain([92102_i64])
+            .chain([96598_i64; 3])
+            .chain([96608_i64; 4])
+            .chain([97544_i64])
+            .chain([97823_i64; 4])
+            .chain([97964_i64; 4])
+            .collect();
+        assert_eq!(deck_cards.len(), 60, "main deck must be 60 cards for Bo3");
+
+        // 15-card sideboard (Bo3 maximum).
+        let sideboard_cards: Vec<i64> = (0..15).map(|i| 70000_i64 + i).collect();
+        assert_eq!(
+            sideboard_cards.len(),
+            15,
+            "sideboard must be 15 cards for Bo3"
+        );
+
+        let inner = serde_json::json!({
+            "type": "ClientMessageType_SubmitDeckResp",
+            "submitDeckResp": {
+                "deck": {
+                    "deckCards": deck_cards,
+                    "sideboardCards": sideboard_cards
+                }
+            },
+            "gameStateId": 196,
+            "respId": 318
+        });
+        let body = wrap_client_to_gre(&inner);
+        let entry = unity_entry(&body);
+        let result = try_parse(&entry, Some(test_timestamp()));
+
+        assert!(result.is_some());
+        if let Some(GameEvent::ClientAction(event)) = &result {
+            let payload = event.payload();
+            assert_eq!(payload["type"], "submit_deck_resp");
+
+            let parsed_deck = payload["deck_cards"]
+                .as_array()
+                .ok_or("deck_cards missing or not an array")?;
+            assert_eq!(parsed_deck.len(), 60);
+
+            let parsed_sideboard = payload["sideboard_cards"]
+                .as_array()
+                .ok_or("sideboard_cards missing or not an array")?;
+            assert_eq!(parsed_sideboard.len(), 15);
+
+            assert_eq!(payload["game_state_id"], 196);
+            assert_eq!(payload["resp_id"], 318);
         } else {
             return Err("Expected GameEvent::ClientAction".into());
         }

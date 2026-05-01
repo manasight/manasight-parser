@@ -452,6 +452,85 @@ pub(super) fn batched_dual_game_over_body() -> String {
     )
 }
 
+/// Helper: build a GRE event body modeled on the bundled batch shape captured
+/// in corpus session `2026-02-22_0000_ecl-premier-bg-elves` line 22433:
+/// `[GREMessageType_ConnectResp, GREMessageType_DieRollResultsResp,
+/// GREMessageType_GameStateMessage]` in a single `greToClientMessages` array.
+///
+/// Used to verify the parser emits the `ConnectResp` event followed by the
+/// sibling GSM in source-array order, dropping only the unhandled
+/// `DieRollResultsResp`. R2 corpus inspection found this shape in 2/7 captured
+/// `ConnectResp` entries.
+pub(super) fn connect_resp_with_bundled_gsm_body() -> String {
+    format!(
+        "[UnityCrossThreadLogger]greToClientEvent\n{}",
+        serde_json::json!({
+            "greToClientEvent": {
+                "greToClientMessages": [
+                    {
+                        "type": "GREMessageType_ConnectResp",
+                        "systemSeatIds": [1, 2],
+                        "msgId": 2,
+                        "gameStateId": 0,
+                        "connectResp": {
+                            "status": "ConnectionStatus_Success",
+                            "deckMessage": {
+                                "deckCards": [
+                                    98421, 98502, 98485, 98408, 98408, 98404,
+                                    98317, 98514, 98442, 98558, 98579, 98506
+                                ],
+                                "sideboardCards": [98499, 98439, 98457]
+                            },
+                            "settings": {
+                                "autoPassOption": "AutoPassOption_ResolveMyStackEffects"
+                            }
+                        }
+                    },
+                    {
+                        "type": "GREMessageType_DieRollResultsResp",
+                        "systemSeatIds": [1, 2],
+                        "msgId": 3,
+                        "dieRollResultsResp": {
+                            "playerDieRolls": [
+                                {"systemSeatId": 1, "rollValue": 9},
+                                {"systemSeatId": 2, "rollValue": 11}
+                            ]
+                        }
+                    },
+                    {
+                        "type": "GREMessageType_GameStateMessage",
+                        "systemSeatIds": [2],
+                        "msgId": 4,
+                        "gameStateId": 1,
+                        "gameStateMessage": {
+                            "type": "GameStateType_Full",
+                            "gameStateId": 1,
+                            "gameInfo": {
+                                "matchID": "27011c79-bundled-batch",
+                                "gameNumber": 1,
+                                "stage": "GameStage_Start",
+                                "type": "GameType_Duel",
+                                "matchState": "MatchState_GameInProgress",
+                                "mulliganType": "MulliganType_London"
+                            },
+                            "zones": [
+                                {
+                                    "zoneId": 32,
+                                    "type": "ZoneType_Library",
+                                    "visibility": "Visibility_Hidden",
+                                    "ownerSeatId": 1,
+                                    "objectInstanceIds": [120, 121, 122, 123, 124]
+                                }
+                            ],
+                            "gameObjects": []
+                        }
+                    }
+                ]
+            }
+        })
+    )
+}
+
 /// Helper: build a `GameStateMessage` with an empty `gameStateMessage`
 /// (no zones, no objects, no game info).
 pub(super) fn empty_game_state_message_body() -> String {
