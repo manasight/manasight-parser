@@ -42,6 +42,13 @@ const ANNOTATION_TYPE_USER_ACTION_TAKEN: &str = "AnnotationType_UserActionTaken"
 /// Annotation type for scry decisions (top/bottom card placement).
 const ANNOTATION_TYPE_SCRY: &str = "AnnotationType_Scry";
 
+/// Annotation type for library shuffles (reissues every library instanceId).
+const ANNOTATION_TYPE_SHUFFLE: &str = "AnnotationType_Shuffle";
+
+/// Annotation type for persistent instance designation
+/// (companion, conjured, drafted, plus uncharacterized state flags).
+const ANNOTATION_TYPE_DESIGNATION: &str = "AnnotationType_Designation";
+
 /// Extracts persistent annotations from the `gameStateMessage.persistentAnnotations` array.
 ///
 /// Persistent annotations accumulate across game state updates (unlike
@@ -84,6 +91,11 @@ pub(super) fn extract_persistent_annotations(
 /// - **`AnnotationType_ManaPaid`**: `mana_payment_id`, `color`
 /// - **`AnnotationType_UserActionTaken`**: `action_type`, `ability_grp_id`
 /// - **`AnnotationType_Scry`**: `top_ids`, `bottom_ids`
+/// - **`AnnotationType_Shuffle`**: `old_ids`, `new_ids`
+/// - **`AnnotationType_Designation`**: `instance_id`, `designation_type`, plus
+///   any of `conjuration_type`, `source_grpid`, `grpid`, `value`, `controller_id`
+///   that are present in `details` (permissive — no branching on
+///   `DesignationType` value, so undocumented variants pass through cleanly).
 /// - **All other types**: passed through with base fields only.
 ///
 /// Returns an empty `Vec` when `annotations` is absent or empty.
@@ -234,6 +246,8 @@ fn add_type_specific_fields(
         ANNOTATION_TYPE_MANA_PAID => add_mana_paid_fields(obj, details),
         ANNOTATION_TYPE_USER_ACTION_TAKEN => add_user_action_fields(obj, details),
         ANNOTATION_TYPE_SCRY => add_scry_fields(obj, details),
+        ANNOTATION_TYPE_SHUFFLE => add_shuffle_fields(obj, details),
+        ANNOTATION_TYPE_DESIGNATION => add_designation_fields(obj, details),
         _ => {}
     }
 }
@@ -386,6 +400,70 @@ fn add_scry_fields(
         "bottom_ids".into(),
         serde_json::json!(detail_int_array(details, "bottomIds")),
     );
+}
+
+fn add_shuffle_fields(
+    obj: &mut serde_json::Map<String, serde_json::Value>,
+    details: &[serde_json::Value],
+) {
+    obj.insert(
+        "old_ids".into(),
+        serde_json::json!(detail_int_array(details, "OldIds")),
+    );
+    obj.insert(
+        "new_ids".into(),
+        serde_json::json!(detail_int_array(details, "NewIds")),
+    );
+}
+
+/// Adds Designation fields to an annotation result.
+///
+/// Always emits `instance_id` (from the existing `affected_ids[0]` on the
+/// result object) and `designation_type` (from `details.DesignationType`).
+/// Then conditionally emits each of `conjuration_type`, `source_grpid`,
+/// `grpid`, `value`, `controller_id` — but only when the corresponding
+/// source key is present in `details`.
+///
+/// The implementation is intentionally permissive: every optional key is
+/// looked up unconditionally via the existing `detail_int` / `detail_str`
+/// helpers and inserted only when found. Never branches on the
+/// `DesignationType` value — undocumented variants pass through cleanly
+/// with whatever fields they happen to carry.
+fn add_designation_fields(
+    obj: &mut serde_json::Map<String, serde_json::Value>,
+    details: &[serde_json::Value],
+) {
+    // instance_id mirrors affected_ids[0] for convenience. The
+    // affected_ids array is already populated on the result object by
+    // extract_single_annotation before this helper runs.
+    let instance_id = obj
+        .get("affected_ids")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|arr| arr.first())
+        .and_then(serde_json::Value::as_i64)
+        .unwrap_or(0);
+    obj.insert("instance_id".into(), serde_json::json!(instance_id));
+
+    obj.insert(
+        "designation_type".into(),
+        serde_json::json!(detail_int(details, "DesignationType").unwrap_or(0)),
+    );
+
+    if let Some(ct) = detail_str(details, "conjuration_type") {
+        obj.insert("conjuration_type".into(), serde_json::json!(ct));
+    }
+    if let Some(sg) = detail_int(details, "source_grpid") {
+        obj.insert("source_grpid".into(), serde_json::json!(sg));
+    }
+    if let Some(g) = detail_int(details, "grpid") {
+        obj.insert("grpid".into(), serde_json::json!(g));
+    }
+    if let Some(v) = detail_int(details, "value") {
+        obj.insert("value".into(), serde_json::json!(v));
+    }
+    if let Some(c) = detail_int(details, "ControllerId") {
+        obj.insert("controller_id".into(), serde_json::json!(c));
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1495,6 +1573,382 @@ mod tests {
             let ann = &payload["annotations"][0];
             assert_eq!(ann["top_ids"], serde_json::json!([230]));
             assert_eq!(ann["bottom_ids"], serde_json::json!([]));
+        }
+    }
+
+    mod shuffle_extraction {
+        use super::*;
+
+        /// Standalone library shuffle: 32-element `OldIds` and `NewIds` arrays
+        /// (sourced from `session_2026-02-22_0000_ecl-premier-bg-elves` line 5828).
+        /// Every library card receives a fresh `instanceId`; arrays are equal length.
+        #[test]
+        fn test_shuffle_old_and_new_ids_full_library() {
+            let old_ids: Vec<i64> = vec![
+                166, 167, 168, 169, 170, 171, 172, 173, 174, 175, 176, 177, 178, 179, 180, 181,
+                182, 183, 184, 186, 187, 188, 189, 190, 191, 192, 193, 194, 195, 196, 197, 198,
+            ];
+            let new_ids: Vec<i64> = vec![
+                205, 206, 207, 208, 209, 210, 211, 212, 213, 214, 215, 216, 217, 218, 219, 220,
+                221, 222, 223, 224, 225, 226, 227, 228, 229, 230, 231, 232, 233, 234, 235, 236,
+            ];
+            let body = format!(
+                "[UnityCrossThreadLogger]greToClientEvent\n{}",
+                serde_json::json!({
+                    "greToClientEvent": {
+                        "greToClientMessages": [{
+                            "type": "GREMessageType_GameStateMessage",
+                            "msgId": 40,
+                            "gameStateId": 100,
+                            "gameStateMessage": {
+                                "annotations": [{
+                                    "id": 121,
+                                    "affectorId": 202,
+                                    "affectedIds": [2],
+                                    "type": ["AnnotationType_Shuffle"],
+                                    "details": [
+                                        { "key": "OldIds", "type": "KeyValuePairValueType_int32", "valueInt32": old_ids },
+                                        { "key": "NewIds", "type": "KeyValuePairValueType_int32", "valueInt32": new_ids }
+                                    ]
+                                }]
+                            }
+                        }]
+                    }
+                })
+            );
+            let entry = unity_entry(&body);
+            let event = try_parse(&entry, Some(test_timestamp()))
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| unreachable!());
+            let payload = game_state_payload(&event);
+
+            let ann = &payload["annotations"][0];
+            assert_eq!(ann["type"], "AnnotationType_Shuffle");
+
+            let old = ann["old_ids"].as_array().unwrap_or_else(|| unreachable!());
+            let new = ann["new_ids"].as_array().unwrap_or_else(|| unreachable!());
+            assert_eq!(old.len(), 32);
+            assert_eq!(new.len(), 32);
+            assert_eq!(old.len(), new.len());
+            assert_eq!(old[0], 166);
+            assert_eq!(new[0], 205);
+            assert_eq!(old[31], 198);
+            assert_eq!(new[31], 236);
+        }
+
+        /// Scry annotation followed by Shuffle annotation in the same
+        /// `annotations` array. Both must be extracted independently with
+        /// their own type-specific fields.
+        #[test]
+        fn test_scry_then_shuffle_co_occurrence() {
+            let body = format!(
+                "[UnityCrossThreadLogger]greToClientEvent\n{}",
+                serde_json::json!({
+                    "greToClientEvent": {
+                        "greToClientMessages": [{
+                            "type": "GREMessageType_GameStateMessage",
+                            "msgId": 41,
+                            "gameStateId": 101,
+                            "gameStateMessage": {
+                                "annotations": [
+                                    {
+                                        "id": 50,
+                                        "affectorId": 286,
+                                        "affectedIds": [240],
+                                        "type": ["AnnotationType_Scry"],
+                                        "details": [
+                                            { "key": "topIds", "type": "KeyValuePairValueType_int32", "valueInt32": [240, 241] },
+                                            { "key": "bottomIds", "type": "KeyValuePairValueType_int32", "valueInt32": [242] }
+                                        ]
+                                    },
+                                    {
+                                        "id": 51,
+                                        "affectorId": 286,
+                                        "affectedIds": [2],
+                                        "type": ["AnnotationType_Shuffle"],
+                                        "details": [
+                                            { "key": "OldIds", "type": "KeyValuePairValueType_int32", "valueInt32": [240, 241, 242] },
+                                            { "key": "NewIds", "type": "KeyValuePairValueType_int32", "valueInt32": [300, 301, 302] }
+                                        ]
+                                    }
+                                ]
+                            }
+                        }]
+                    }
+                })
+            );
+            let entry = unity_entry(&body);
+            let event = try_parse(&entry, Some(test_timestamp()))
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| unreachable!());
+            let payload = game_state_payload(&event);
+
+            let scry = &payload["annotations"][0];
+            assert_eq!(scry["type"], "AnnotationType_Scry");
+            assert_eq!(scry["top_ids"], serde_json::json!([240, 241]));
+            assert_eq!(scry["bottom_ids"], serde_json::json!([242]));
+            // Scry must not pick up shuffle fields.
+            assert!(scry.get("old_ids").is_none());
+            assert!(scry.get("new_ids").is_none());
+
+            let shuffle = &payload["annotations"][1];
+            assert_eq!(shuffle["type"], "AnnotationType_Shuffle");
+            assert_eq!(shuffle["old_ids"], serde_json::json!([240, 241, 242]));
+            assert_eq!(shuffle["new_ids"], serde_json::json!([300, 301, 302]));
+            // Shuffle must not pick up scry fields.
+            assert!(shuffle.get("top_ids").is_none());
+            assert!(shuffle.get("bottom_ids").is_none());
+        }
+    }
+
+    mod designation_extraction {
+        use super::*;
+
+        /// Type=7 companion (Yorion) — observed in `session_2026-04-30_0000`.
+        /// `details` carries `DesignationType=7` and `grpid` (companion grpId).
+        /// No `conjuration_type` or `source_grpid`.
+        #[test]
+        fn test_designation_type_7_companion() {
+            let body = format!(
+                "[UnityCrossThreadLogger]greToClientEvent\n{}",
+                serde_json::json!({
+                    "greToClientEvent": {
+                        "greToClientMessages": [{
+                            "type": "GREMessageType_GameStateMessage",
+                            "msgId": 42,
+                            "gameStateId": 102,
+                            "gameStateMessage": {
+                                "persistentAnnotations": [{
+                                    "id": 12,
+                                    "affectorId": 1,
+                                    "affectedIds": [55],
+                                    "type": ["AnnotationType_Designation"],
+                                    "details": [
+                                        { "key": "DesignationType", "type": "KeyValuePairValueType_int32", "valueInt32": [7] },
+                                        { "key": "grpid", "type": "KeyValuePairValueType_int32", "valueInt32": [85582] }
+                                    ]
+                                }]
+                            }
+                        }]
+                    }
+                })
+            );
+            let entry = unity_entry(&body);
+            let event = try_parse(&entry, Some(test_timestamp()))
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| unreachable!());
+            let payload = game_state_payload(&event);
+
+            let ann = &payload["persistent_annotations"][0];
+            assert_eq!(ann["type"], "AnnotationType_Designation");
+            assert_eq!(ann["instance_id"], 55);
+            assert_eq!(ann["designation_type"], 7);
+            assert_eq!(ann["grpid"], 85582);
+            // type=7 has no conjuration_type or source_grpid.
+            assert!(ann.get("conjuration_type").is_none());
+            assert!(ann.get("source_grpid").is_none());
+            assert!(ann.get("value").is_none());
+            assert!(ann.get("controller_id").is_none());
+        }
+
+        /// Type=26 conjured — observed in `session_2026-04-29_2128`.
+        /// `details` carries `DesignationType=26`, `source_grpid=94195`,
+        /// `conjuration_type="conjured"`.
+        #[test]
+        fn test_designation_type_26_conjured() {
+            let body = format!(
+                "[UnityCrossThreadLogger]greToClientEvent\n{}",
+                serde_json::json!({
+                    "greToClientEvent": {
+                        "greToClientMessages": [{
+                            "type": "GREMessageType_GameStateMessage",
+                            "msgId": 43,
+                            "gameStateId": 103,
+                            "gameStateMessage": {
+                                "persistentAnnotations": [{
+                                    "id": 600,
+                                    "affectorId": 335,
+                                    "affectedIds": [351],
+                                    "type": ["AnnotationType_Designation"],
+                                    "details": [
+                                        { "key": "DesignationType", "type": "KeyValuePairValueType_int32", "valueInt32": [26] },
+                                        { "key": "source_grpid", "type": "KeyValuePairValueType_int32", "valueInt32": [94195] },
+                                        { "key": "conjuration_type", "type": "KeyValuePairValueType_string", "valueString": ["conjured"] }
+                                    ]
+                                }]
+                            }
+                        }]
+                    }
+                })
+            );
+            let entry = unity_entry(&body);
+            let event = try_parse(&entry, Some(test_timestamp()))
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| unreachable!());
+            let payload = game_state_payload(&event);
+
+            let ann = &payload["persistent_annotations"][0];
+            assert_eq!(ann["type"], "AnnotationType_Designation");
+            assert_eq!(ann["instance_id"], 351);
+            assert_eq!(ann["designation_type"], 26);
+            assert_eq!(ann["source_grpid"], 94195);
+            assert_eq!(ann["conjuration_type"], "conjured");
+            // type=26 has no grpid or value.
+            assert!(ann.get("grpid").is_none());
+            assert!(ann.get("value").is_none());
+            assert!(ann.get("controller_id").is_none());
+        }
+
+        /// Type=26 drafted — observed in `session_2026-04-29_2201`.
+        /// Same shape as `conjured` but with `conjuration_type="drafted"`
+        /// and a different `source_grpid`.
+        #[test]
+        fn test_designation_type_26_drafted() {
+            let body = format!(
+                "[UnityCrossThreadLogger]greToClientEvent\n{}",
+                serde_json::json!({
+                    "greToClientEvent": {
+                        "greToClientMessages": [{
+                            "type": "GREMessageType_GameStateMessage",
+                            "msgId": 44,
+                            "gameStateId": 104,
+                            "gameStateMessage": {
+                                "persistentAnnotations": [{
+                                    "id": 700,
+                                    "affectorId": 335,
+                                    "affectedIds": [400],
+                                    "type": ["AnnotationType_Designation"],
+                                    "details": [
+                                        { "key": "DesignationType", "type": "KeyValuePairValueType_int32", "valueInt32": [26] },
+                                        { "key": "source_grpid", "type": "KeyValuePairValueType_int32", "valueInt32": [98812] },
+                                        { "key": "conjuration_type", "type": "KeyValuePairValueType_string", "valueString": ["drafted"] }
+                                    ]
+                                }]
+                            }
+                        }]
+                    }
+                })
+            );
+            let entry = unity_entry(&body);
+            let event = try_parse(&entry, Some(test_timestamp()))
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| unreachable!());
+            let payload = game_state_payload(&event);
+
+            let ann = &payload["persistent_annotations"][0];
+            assert_eq!(ann["type"], "AnnotationType_Designation");
+            assert_eq!(ann["instance_id"], 400);
+            assert_eq!(ann["designation_type"], 26);
+            assert_eq!(ann["source_grpid"], 98812);
+            assert_eq!(ann["conjuration_type"], "drafted");
+        }
+
+        /// Type=12 persistent variant — observed in `session_2026-04-29_2128`.
+        /// `details` carries `DesignationType=12` plus `value` (int32; the
+        /// same persistent annotation `id` reappears with an updated `value`
+        /// across successive diffs). Doubles as the persistent-annotation
+        /// regression test.
+        #[test]
+        fn test_designation_type_12_persistent_value() {
+            let body = format!(
+                "[UnityCrossThreadLogger]greToClientEvent\n{}",
+                serde_json::json!({
+                    "greToClientEvent": {
+                        "greToClientMessages": [{
+                            "type": "GREMessageType_GameStateMessage",
+                            "msgId": 45,
+                            "gameStateId": 105,
+                            "gameStateMessage": {
+                                "persistentAnnotations": [{
+                                    "id": 472,
+                                    "affectorId": 1,
+                                    "affectedIds": [160],
+                                    "type": ["AnnotationType_Designation"],
+                                    "details": [
+                                        { "key": "DesignationType", "type": "KeyValuePairValueType_int32", "valueInt32": [12] },
+                                        { "key": "value", "type": "KeyValuePairValueType_int32", "valueInt32": [1] }
+                                    ]
+                                }]
+                            }
+                        }]
+                    }
+                })
+            );
+            let entry = unity_entry(&body);
+            let event = try_parse(&entry, Some(test_timestamp()))
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| unreachable!());
+            let payload = game_state_payload(&event);
+
+            let ann = &payload["persistent_annotations"][0];
+            assert_eq!(ann["type"], "AnnotationType_Designation");
+            assert_eq!(ann["instance_id"], 160);
+            assert_eq!(ann["designation_type"], 12);
+            assert_eq!(ann["value"], 1);
+            // type=12 has no grpid, source_grpid, conjuration_type, or controller_id.
+            assert!(ann.get("grpid").is_none());
+            assert!(ann.get("source_grpid").is_none());
+            assert!(ann.get("conjuration_type").is_none());
+            assert!(ann.get("controller_id").is_none());
+        }
+
+        /// Type=23 unknown variant pass-through — observed across multiple
+        /// sessions (e.g. `session_2026-02-23_0000_standard-bo1`).
+        /// `details` carries `DesignationType=23` and `ControllerId` (seat ID).
+        ///
+        /// Locks in the regression-proof permissive contract: the extractor
+        /// must emit `instance_id`, `designation_type`, and `controller_id`
+        /// without erroring on the undocumented `DesignationType` value, and
+        /// without branching on the value.
+        #[test]
+        fn test_designation_type_23_controller_pass_through() {
+            let body = format!(
+                "[UnityCrossThreadLogger]greToClientEvent\n{}",
+                serde_json::json!({
+                    "greToClientEvent": {
+                        "greToClientMessages": [{
+                            "type": "GREMessageType_GameStateMessage",
+                            "msgId": 46,
+                            "gameStateId": 106,
+                            "gameStateMessage": {
+                                "persistentAnnotations": [{
+                                    "id": 281,
+                                    "affectorId": 292,
+                                    "affectedIds": [292],
+                                    "type": ["AnnotationType_Designation"],
+                                    "details": [
+                                        { "key": "DesignationType", "type": "KeyValuePairValueType_int32", "valueInt32": [23] },
+                                        { "key": "ControllerId", "type": "KeyValuePairValueType_int32", "valueInt32": [2] }
+                                    ]
+                                }]
+                            }
+                        }]
+                    }
+                })
+            );
+            let entry = unity_entry(&body);
+            let event = try_parse(&entry, Some(test_timestamp()))
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| unreachable!());
+            let payload = game_state_payload(&event);
+
+            let ann = &payload["persistent_annotations"][0];
+            assert_eq!(ann["type"], "AnnotationType_Designation");
+            assert_eq!(ann["instance_id"], 292);
+            assert_eq!(ann["designation_type"], 23);
+            assert_eq!(ann["controller_id"], 2);
+            // type=23 has no grpid/source_grpid/conjuration_type/value.
+            assert!(ann.get("grpid").is_none());
+            assert!(ann.get("source_grpid").is_none());
+            assert!(ann.get("conjuration_type").is_none());
+            assert!(ann.get("value").is_none());
         }
     }
 
