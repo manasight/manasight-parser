@@ -2,7 +2,7 @@
   "_meta": {
     "corpus_tag": "manasight-corpus-v22",
     "description": "Smoke test baseline -- per-file, per-parser event counts from Level 1 (parser-only) smoke tests.",
-    "generated_from_commit": "0f634dd"
+    "generated_from_commit": "af57c46"
   },
   "files": {
     "session_2026-02-22_0000_ecl-premier-bg-elves.log": {
@@ -20,6 +20,7 @@
       },
       "parsers": {
         "client_actions": 2026,
+        "deck_collection": 0,
         "draft_bot": 0,
         "draft_complete": 0,
         "draft_human": 0,
@@ -52,6 +53,7 @@
       },
       "parsers": {
         "client_actions": 1488,
+        "deck_collection": 0,
         "draft_bot": 0,
         "draft_complete": 2,
         "draft_human": 77,
@@ -82,6 +84,7 @@
       },
       "parsers": {
         "client_actions": 425,
+        "deck_collection": 0,
         "draft_bot": 0,
         "draft_complete": 0,
         "draft_human": 0,
@@ -112,6 +115,7 @@
       },
       "parsers": {
         "client_actions": 236,
+        "deck_collection": 0,
         "draft_bot": 0,
         "draft_complete": 0,
         "draft_human": 0,
@@ -142,6 +146,7 @@
       },
       "parsers": {
         "client_actions": 1157,
+        "deck_collection": 0,
         "draft_bot": 0,
         "draft_complete": 0,
         "draft_human": 0,
@@ -170,6 +175,7 @@
       },
       "parsers": {
         "client_actions": 0,
+        "deck_collection": 0,
         "draft_bot": 0,
         "draft_complete": 2,
         "draft_human": 41,
@@ -200,6 +206,7 @@
       },
       "parsers": {
         "client_actions": 254,
+        "deck_collection": 0,
         "draft_bot": 0,
         "draft_complete": 0,
         "draft_human": 0,
@@ -231,6 +238,7 @@
       },
       "parsers": {
         "client_actions": 740,
+        "deck_collection": 0,
         "draft_bot": 78,
         "draft_complete": 0,
         "draft_human": 0,
@@ -261,6 +269,7 @@
       },
       "parsers": {
         "client_actions": 405,
+        "deck_collection": 0,
         "draft_bot": 0,
         "draft_complete": 0,
         "draft_human": 0,
@@ -283,6 +292,7 @@
       },
       "parsers": {
         "client_actions": 0,
+        "deck_collection": 0,
         "draft_bot": 0,
         "draft_complete": 0,
         "draft_human": 0,
@@ -312,6 +322,7 @@
       },
       "parsers": {
         "client_actions": 393,
+        "deck_collection": 0,
         "draft_bot": 0,
         "draft_complete": 0,
         "draft_human": 0,
@@ -342,6 +353,7 @@
       },
       "parsers": {
         "client_actions": 325,
+        "deck_collection": 0,
         "draft_bot": 0,
         "draft_complete": 0,
         "draft_human": 0,
@@ -372,6 +384,7 @@
       },
       "parsers": {
         "client_actions": 1137,
+        "deck_collection": 0,
         "draft_bot": 0,
         "draft_complete": 0,
         "draft_human": 0,
@@ -402,6 +415,7 @@
       },
       "parsers": {
         "client_actions": 2012,
+        "deck_collection": 0,
         "draft_bot": 0,
         "draft_complete": 0,
         "draft_human": 0,
@@ -432,6 +446,7 @@
       },
       "parsers": {
         "client_actions": 2029,
+        "deck_collection": 0,
         "draft_bot": 0,
         "draft_complete": 0,
         "draft_human": 0,
@@ -461,6 +476,7 @@
       },
       "parsers": {
         "client_actions": 337,
+        "deck_collection": 0,
         "draft_bot": 0,
         "draft_complete": 0,
         "draft_human": 0,
@@ -491,6 +507,7 @@
       },
       "parsers": {
         "client_actions": 521,
+        "deck_collection": 0,
         "draft_bot": 0,
         "draft_complete": 0,
         "draft_human": 0,
@@ -521,6 +538,7 @@
       },
       "parsers": {
         "client_actions": 21,
+        "deck_collection": 0,
         "draft_bot": 0,
         "draft_complete": 0,
         "draft_human": 0,
@@ -550,6 +568,7 @@
       },
       "parsers": {
         "client_actions": 81,
+        "deck_collection": 0,
         "draft_bot": 0,
         "draft_complete": 0,
         "draft_human": 0,
@@ -580,6 +599,7 @@
       },
       "parsers": {
         "client_actions": 48,
+        "deck_collection": 0,
         "draft_bot": 0,
         "draft_complete": 0,
         "draft_human": 0,
@@ -609,6 +629,7 @@
       },
       "parsers": {
         "client_actions": 45,
+        "deck_collection": 0,
         "draft_bot": 0,
         "draft_complete": 0,
         "draft_human": 0,
@@ -639,6 +660,7 @@
       },
       "parsers": {
         "client_actions": 476,
+        "deck_collection": 0,
         "draft_bot": 0,
         "draft_complete": 0,
         "draft_human": 0,
@@ -668,6 +690,7 @@
       },
       "parsers": {
         "client_actions": 117,
+        "deck_collection": 0,
         "draft_bot": 0,
         "draft_complete": 0,
         "draft_human": 0,
@@ -698,6 +721,7 @@
       },
       "parsers": {
         "client_actions": 429,
+        "deck_collection": 0,
         "draft_bot": 0,
         "draft_complete": 0,
         "draft_human": 0,
@@ -728,6 +752,7 @@
       },
       "parsers": {
         "client_actions": 413,
+        "deck_collection": 0,
         "draft_bot": 0,
         "draft_complete": 0,
         "draft_human": 0,
@@ -758,6 +783,7 @@
       },
       "parsers": {
         "client_actions": 199,
+        "deck_collection": 0,
         "draft_bot": 0,
         "draft_complete": 0,
         "draft_human": 0,
@@ -777,6 +803,7 @@
       "double_claims": 0,
       "event_types": {
         "ClientAction": 24,
+        "DeckCollection": 4,
         "DetailedLoggingStatus": 1,
         "EventLifecycle": 4,
         "GameResult": 3,
@@ -788,6 +815,7 @@
       },
       "parsers": {
         "client_actions": 24,
+        "deck_collection": 4,
         "draft_bot": 0,
         "draft_complete": 0,
         "draft_human": 0,
@@ -807,6 +835,7 @@
       "double_claims": 0,
       "event_types": {
         "ClientAction": 19,
+        "DeckCollection": 2,
         "DetailedLoggingStatus": 1,
         "GameResult": 1,
         "GameState": 33,
@@ -817,6 +846,7 @@
       },
       "parsers": {
         "client_actions": 19,
+        "deck_collection": 2,
         "draft_bot": 0,
         "draft_complete": 0,
         "draft_human": 0,
@@ -836,6 +866,7 @@
       "double_claims": 0,
       "event_types": {
         "ClientAction": 1086,
+        "DeckCollection": 7,
         "DetailedLoggingStatus": 1,
         "EventLifecycle": 8,
         "GameResult": 6,
@@ -847,6 +878,7 @@
       },
       "parsers": {
         "client_actions": 1086,
+        "deck_collection": 7,
         "draft_bot": 0,
         "draft_complete": 0,
         "draft_human": 0,
@@ -866,6 +898,7 @@
       "double_claims": 0,
       "event_types": {
         "ClientAction": 1183,
+        "DeckCollection": 4,
         "DetailedLoggingStatus": 1,
         "EventLifecycle": 2,
         "GameResult": 3,
@@ -877,6 +910,7 @@
       },
       "parsers": {
         "client_actions": 1183,
+        "deck_collection": 4,
         "draft_bot": 0,
         "draft_complete": 0,
         "draft_human": 0,
@@ -896,6 +930,7 @@
       "double_claims": 0,
       "event_types": {
         "ClientAction": 826,
+        "DeckCollection": 3,
         "DetailedLoggingStatus": 1,
         "GameResult": 2,
         "GameState": 1145,
@@ -906,6 +941,7 @@
       },
       "parsers": {
         "client_actions": 826,
+        "deck_collection": 3,
         "draft_bot": 0,
         "draft_complete": 0,
         "draft_human": 0,
@@ -925,6 +961,7 @@
       "double_claims": 0,
       "event_types": {
         "ClientAction": 695,
+        "DeckCollection": 2,
         "DetailedLoggingStatus": 1,
         "GameResult": 1,
         "GameState": 597,
@@ -935,6 +972,7 @@
       },
       "parsers": {
         "client_actions": 695,
+        "deck_collection": 2,
         "draft_bot": 0,
         "draft_complete": 0,
         "draft_human": 0,
@@ -954,6 +992,7 @@
       "double_claims": 0,
       "event_types": {
         "ClientAction": 919,
+        "DeckCollection": 9,
         "DetailedLoggingStatus": 1,
         "GameResult": 8,
         "GameState": 2229,
@@ -964,6 +1003,7 @@
       },
       "parsers": {
         "client_actions": 919,
+        "deck_collection": 9,
         "draft_bot": 0,
         "draft_complete": 0,
         "draft_human": 0,
@@ -983,6 +1023,7 @@
       "double_claims": 0,
       "event_types": {
         "ClientAction": 359,
+        "DeckCollection": 2,
         "DetailedLoggingStatus": 1,
         "GameResult": 1,
         "GameState": 654,
@@ -993,6 +1034,7 @@
       },
       "parsers": {
         "client_actions": 359,
+        "deck_collection": 2,
         "draft_bot": 0,
         "draft_complete": 0,
         "draft_human": 0,
