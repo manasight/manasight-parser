@@ -204,7 +204,7 @@ impl DeckCollectionStats {
         };
 
         if raw_deck_summaries.len() != parsed_decks.len() {
-            self.invariant_violations += raw_deck_summaries.len().max(parsed_decks.len());
+            self.invariant_violations += 1;
         }
 
         for summary in raw_deck_summaries {

@@ -50,6 +50,13 @@ const DECKS_FIELD: &str = "Decks";
 /// `<== StartHook` response containing both `DeckSummaries` and `Decks`, or
 /// `None` otherwise.
 ///
+/// Each `DeckSummaries` entry is correlated with its `Decks` payload by
+/// `DeckId`. Summaries whose `DeckId` is missing or absent from the `Decks`
+/// map are silently dropped from the emitted event, so the correlated deck
+/// count may be smaller than the input `DeckSummaries` array. The full,
+/// uncorrelated payload is preserved under `raw_start_hook` for consumers
+/// that need to detect or recover dropped entries.
+///
 /// The `timestamp` is `None` when the log entry header did not contain a
 /// parseable timestamp. It is passed through to [`EventMetadata`] so
 /// downstream consumers can distinguish real vs missing timestamps.
