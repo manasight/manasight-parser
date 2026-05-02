@@ -1,8 +1,8 @@
 {
   "_meta": {
-    "corpus_tag": "manasight-corpus-v23",
+    "corpus_tag": "manasight-corpus-v24",
     "description": "Smoke test baseline -- per-file, per-parser event counts from Level 1 (parser-only) smoke tests.",
-    "generated_from_commit": "a6f40e4"
+    "generated_from_commit": "bbbce04"
   },
   "files": {
     "session_2026-02-22_0000_ecl-premier-bg-elves.log": {
@@ -1081,6 +1081,91 @@
       "timestamp_failures": 67,
       "total_entries": 145,
       "unclaimed": 101
+    },
+    "session_2026-05-01_1657_sealed-purchase.log": {
+      "double_claims": 0,
+      "event_types": {
+        "DeckCollection": 1,
+        "DetailedLoggingStatus": 1,
+        "EventLifecycle": 1,
+        "Inventory": 1,
+        "Rank": 1
+      },
+      "parsers": {
+        "client_actions": 0,
+        "deck_collection": 1,
+        "draft_bot": 0,
+        "draft_complete": 0,
+        "draft_human": 0,
+        "event_lifecycle": 1,
+        "gre": 0,
+        "inventory": 1,
+        "match_state": 0,
+        "metadata": 1,
+        "rank": 1,
+        "session": 0
+      },
+      "timestamp_failures": 28,
+      "total_entries": 47,
+      "unclaimed": 43
+    },
+    "session_2026-05-01_1715_sealed-deckbuild.log": {
+      "double_claims": 0,
+      "event_types": {
+        "DeckCollection": 1,
+        "DetailedLoggingStatus": 1,
+        "Inventory": 1,
+        "Rank": 1
+      },
+      "parsers": {
+        "client_actions": 0,
+        "deck_collection": 1,
+        "draft_bot": 0,
+        "draft_complete": 0,
+        "draft_human": 0,
+        "event_lifecycle": 0,
+        "gre": 0,
+        "inventory": 1,
+        "match_state": 0,
+        "metadata": 1,
+        "rank": 1,
+        "session": 0
+      },
+      "timestamp_failures": 31,
+      "total_entries": 52,
+      "unclaimed": 49
+    },
+    "session_2026-05-01_1751_sealed-matches.log": {
+      "double_claims": 0,
+      "event_types": {
+        "ClientAction": 770,
+        "DeckCollection": 3,
+        "DetailedLoggingStatus": 1,
+        "EventLifecycle": 2,
+        "GameResult": 2,
+        "GameState": 1450,
+        "Inventory": 3,
+        "MatchState": 4,
+        "Rank": 3,
+        "Session": 2
+      },
+      "parsers": {
+        "client_actions": 770,
+        "deck_collection": 3,
+        "draft_bot": 0,
+        "draft_complete": 0,
+        "draft_human": 0,
+        "event_lifecycle": 2,
+        "gre": 749,
+        "inventory": 3,
+        "match_state": 4,
+        "metadata": 1,
+        "rank": 3,
+        "session": 2
+      },
+      "timestamp_failures": 69,
+      "total_entries": 1636,
+      "unclaimed": 102
     }
   }
 }
