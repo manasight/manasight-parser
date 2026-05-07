@@ -13,6 +13,7 @@ use super::turn_info::extract_turn_info;
 /// ```json
 /// {
 ///   "type": "game_state_message",
+///   "game_state_type": "GameStateType_Full",
 ///   "msg_id": 5,
 ///   "game_state_id": 42,
 ///   "zones": [ { "zone_id": 1, "zone_type": "ZoneType_Hand", ... }, ... ],
@@ -56,6 +57,14 @@ pub(super) fn build_game_state_message_payload(gre_msg: &serde_json::Value) -> s
         "game_state_message"
     };
 
+    // Inner gameStateMessage.type is the GameStateType_Full / GameStateType_Diff
+    // discriminator. Always emit; None serializes to JSON null so the key is
+    // always present in the payload regardless of source presence.
+    let game_state_type = gsm
+        .and_then(|g| g.get("type"))
+        .and_then(serde_json::Value::as_str)
+        .map(String::from);
+
     // Extract zones from gameStateMessage.zones[].
     let zones = extract_zones(gsm);
 
@@ -93,6 +102,7 @@ pub(super) fn build_game_state_message_payload(gre_msg: &serde_json::Value) -> s
 
     serde_json::json!({
         "type": payload_type,
+        "game_state_type": game_state_type,
         "msg_id": msg_id,
         "game_state_id": game_state_id,
         "zones": zones,
@@ -1795,5 +1805,97 @@ mod tests {
         assert_eq!(obj["object_type"], "GameObjectType_Card");
         assert!(obj.get("object_source_grp_id").is_none());
         assert!(obj.get("parent_id").is_none());
+    }
+
+    // -- game_state_type discriminator extraction -----------------------------
+
+    mod game_state_type_extraction {
+        use super::*;
+
+        /// Helper: extract the `game_state_message`-typed payload from a
+        /// possibly multi-event parse result.
+        fn first_game_state_payload(body: &str) -> serde_json::Value {
+            let entry = unity_entry(body);
+            try_parse(&entry, Some(test_timestamp()))
+                .into_iter()
+                .find_map(|e| {
+                    if matches!(e, crate::events::GameEvent::GameState(_)) {
+                        Some(game_state_payload(&e).clone())
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_else(|| unreachable!())
+        }
+
+        #[test]
+        fn test_game_state_type_full_emits_string() {
+            let body = format!(
+                "[UnityCrossThreadLogger]greToClientEvent\n{}",
+                serde_json::json!({
+                    "greToClientEvent": {
+                        "greToClientMessages": [{
+                            "type": "GREMessageType_GameStateMessage",
+                            "msgId": 50,
+                            "gameStateId": 200,
+                            "gameStateMessage": {
+                                "type": "GameStateType_Full",
+                                "zones": [],
+                                "gameObjects": []
+                            }
+                        }]
+                    }
+                })
+            );
+            let payload = first_game_state_payload(&body);
+            assert_eq!(payload["game_state_type"], "GameStateType_Full");
+            assert_eq!(payload["type"], "game_state_message");
+        }
+
+        #[test]
+        fn test_game_state_type_diff_emits_string() {
+            let body = diff_game_state_message_body();
+            let payload = first_game_state_payload(&body);
+            assert_eq!(payload["game_state_type"], "GameStateType_Diff");
+            assert_eq!(payload["type"], "game_state_message");
+        }
+
+        #[test]
+        fn test_game_state_type_missing_emits_null() {
+            // game_state_message_body has no inner gameStateMessage.type field.
+            let body = game_state_message_body();
+            let payload = first_game_state_payload(&body);
+            assert!(
+                payload
+                    .get("game_state_type")
+                    .is_some_and(serde_json::Value::is_null),
+                "expected key present and JSON null, got {:?}",
+                payload.get("game_state_type")
+            );
+        }
+
+        #[test]
+        fn test_game_state_type_queued_variant_with_full_inner_type() {
+            let body = format!(
+                "[UnityCrossThreadLogger]greToClientEvent\n{}",
+                serde_json::json!({
+                    "greToClientEvent": {
+                        "greToClientMessages": [{
+                            "type": "GREMessageType_QueuedGameStateMessage",
+                            "msgId": 51,
+                            "gameStateId": 201,
+                            "gameStateMessage": {
+                                "type": "GameStateType_Full",
+                                "zones": [],
+                                "gameObjects": []
+                            }
+                        }]
+                    }
+                })
+            );
+            let payload = first_game_state_payload(&body);
+            assert_eq!(payload["type"], "queued_game_state_message");
+            assert_eq!(payload["game_state_type"], "GameStateType_Full");
+        }
     }
 }

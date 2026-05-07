@@ -143,6 +143,39 @@ pub(super) fn game_state_message_body() -> String {
     )
 }
 
+/// Helper: build a `GameStateMessage` body with the inner
+/// `gameStateMessage.type` populated as `"GameStateType_Diff"`.
+///
+/// Mirrors `game_state_message_body` but tags the inner GSM as a Diff
+/// (incremental) update — used to exercise the `game_state_type`
+/// discriminator extraction.
+pub(super) fn diff_game_state_message_body() -> String {
+    format!(
+        "[UnityCrossThreadLogger]greToClientEvent\n{}",
+        serde_json::json!({
+            "greToClientEvent": {
+                "greToClientMessages": [{
+                    "type": "GREMessageType_GameStateMessage",
+                    "msgId": 6,
+                    "gameStateId": 43,
+                    "gameStateMessage": {
+                        "type": "GameStateType_Diff",
+                        "zones": [
+                            {
+                                "zoneId": 31,
+                                "type": "ZoneType_Hand",
+                                "ownerSeatId": 1,
+                                "objectInstanceIds": [201, 202]
+                            }
+                        ],
+                        "gameObjects": []
+                    }
+                }]
+            }
+        })
+    )
+}
+
 /// Helper: build a `QueuedGameStateMessage` body.
 pub(super) fn queued_game_state_message_body() -> String {
     format!(
