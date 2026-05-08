@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.2] - 2026-05-07
+
+### Changed
+
+- `Makefile` added with `precommit`, `precommit-trivial`, `coverage`, and `fmt` targets
+- CI `check` job updated to call `make precommit` instead of inlining gate steps
+- CLAUDE.md pre-commit checklist updated to reference `make precommit`
+
 ## [0.2.1] - 2026-04-30
 
 ### Added

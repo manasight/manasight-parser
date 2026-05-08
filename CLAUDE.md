@@ -46,14 +46,16 @@ cargo build
 
 ## 3. Pre-Commit Checklist (CRITICAL)
 
-- [ ] Code formatted: `cargo fmt --all`
-- [ ] Format verified: `cargo fmt --all -- --check`
-- [ ] Clippy clean: `cargo clippy --all-targets --all-features -- -D warnings`
-- [ ] Tests pass: `cargo test --all-features`
+- [ ] Pre-commit checks pass: `make precommit`
 - [ ] No `.unwrap()` in production code
 - [ ] No `dbg!()`, `todo!()`, or `println!()` in production code
 - [ ] **New/updated tests** for every code change
 - [ ] All files staged: `git add :/ && git status`
+
+Helpers (not gates):
+- `make fmt` auto-formats Rust code
+- `make precommit-trivial` runs the formatting floor only (used by /sequential-issues trivial-iteration skip)
+- `make coverage` runs `cargo tarpaulin` for coverage reporting
 
 ---
 
