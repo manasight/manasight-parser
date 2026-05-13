@@ -376,7 +376,7 @@ impl FileTailer {
     ///
     /// Reads all new bytes appended since the last poll, splits them
     /// into lines, and feeds each line into the [`LineBuffer`]. Any
-    /// complete log entries (flushed by a new header boundary) are
+    /// complete log entries (flushed by empty-line delimiters) are
     /// collected and returned.
     ///
     /// A partial line at the end of the read (not terminated by a
@@ -457,14 +457,12 @@ impl FileTailer {
     /// Flushes any remaining buffered entries from the line buffer.
     ///
     /// Call this when the input stream ends (EOF or file rotation) to
-    /// retrieve any accumulated entries that have not yet been flushed
-    /// by a subsequent header boundary.
+    /// retrieve any accumulated entry that has not yet been flushed
+    /// by an empty-line delimiter.
     ///
-    /// Returns a `Vec` because flushing a partial line that is itself
-    /// a log entry header can produce two entries: the previously
-    /// buffered entry (flushed by the new header) and the new header's
-    /// own entry (drained from the line buffer or, for single-line
-    /// headers, emitted directly by `push_line`).
+    /// Returns a `Vec` so the caller can append both entries produced by a
+    /// final partial line and the remaining buffered entry, though the line
+    /// buffer itself drains at most one entry.
     pub fn flush(&mut self) -> Vec<LogEntry> {
         let mut entries = Vec::new();
 
@@ -474,8 +472,7 @@ impl FileTailer {
             entries.extend(self.line_buffer.push_line(&line));
         }
 
-        // Drain any remaining buffered entry (always at most one, since
-        // single-line entries are emitted directly by `push_line`).
+        // Drain any remaining buffered entry.
         if let Some(entry) = self.line_buffer.flush() {
             entries.push(entry);
         }

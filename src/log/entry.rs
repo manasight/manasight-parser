@@ -1,24 +1,17 @@
-//! Log entry prefix identification and multi-line JSON accumulation.
+//! Log entry prefix identification and empty-line-delimited accumulation.
 //!
-//! Detects log entry boundaries using the `[UnityCrossThreadLogger]`,
-//! `[Client GRE]`, `[ConnectionManager]`, and `Matchmaking:` header patterns,
-//! then accumulates subsequent lines until the next header boundary to form
-//! complete raw entries.
+//! Detects the start of log entries using the `[UnityCrossThreadLogger]`,
+//! `[Client GRE]`, `[ConnectionManager]`, `Matchmaking:`, and metadata
+//! patterns, then accumulates subsequent lines until Arena's empty-line block
+//! delimiter to form complete raw entries.
 //!
-//! # Header classification (Phase 1 of #153)
+//! # Entry delimiters
 //!
-//! Each detected header is classified as either single-line or multi-line:
-//!
-//! - **Single-line**: `[UnityCrossThreadLogger]` followed by anything other
-//!   than a date digit (e.g., alpha labels like `STATE CHANGED`,
-//!   `Client.SceneChange`, or `==>` API request markers),
-//!   `[ConnectionManager]…`, and `Matchmaking:…`. These entries are
-//!   flushed in the same [`LineBuffer::push_line`] call that received them
-//!   — no continuation accumulation.
-//! - **Multi-line**: `[UnityCrossThreadLogger]<digit>` (date-prefixed API
-//!   responses, match events) and `[Client GRE]…`. These entries
-//!   accumulate continuation lines until the next header boundary, matching
-//!   the historical behavior.
+//! MTG Arena writes log entries in bursts and terminates each logical entry
+//! with an empty line. [`LineBuffer`] therefore treats a recognized header as
+//! the start of an entry and an empty line as the flush point. Header-looking
+//! lines inside an in-progress entry are preserved as continuation lines; they
+//! do not split the entry.
 //!
 //! # Data flow
 //!
@@ -26,11 +19,9 @@
 //! File Tailer ──(raw lines)──▸ LineBuffer ──(complete entries)──▸ Router
 //! ```
 //!
-//! The [`LineBuffer`] receives individual lines from the file tailer. When a
-//! new log entry header is detected, it flushes the previously accumulated
-//! lines as a complete [`LogEntry`] and either emits the new entry
-//! immediately (single-line class) or begins accumulating it (multi-line
-//! class).
+//! The [`LineBuffer`] receives individual lines from the file tailer. When an
+//! empty line is received, it flushes the currently accumulated lines as a
+//! complete [`LogEntry`].
 
 use regex::Regex;
 
@@ -113,7 +104,7 @@ pub struct LogEntry {
 /// After the input stream ends (EOF or file rotation), call
 /// [`flush`](Self::flush) to retrieve any remaining buffered entry.
 pub struct LineBuffer {
-    /// Compiled regex for detecting log entry header boundaries.
+    /// Compiled regex for detecting log entry starts.
     header_re: Regex,
     /// Header of the entry currently being accumulated, if any.
     current_header: Option<EntryHeader>,

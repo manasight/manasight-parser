@@ -1,13 +1,12 @@
-//! Integration test for Phase 1 (#160) of #153.
+//! Integration test for the empty-line delimiter behavior from #181.
 //!
 //! Replays a real (sanitized) corpus log slice through `LineBuffer` and
 //! asserts the bug-fix invariants on real Arena data:
 //!
-//! - Every single-line header (per the corpus-verified classification rule)
-//!   is emitted by the same `push_line()` call that received it — never
-//!   deferred to a subsequent header.
-//! - Single-line entry bodies do not contain accumulated continuation/Unity
-//!   stdout noise lines.
+//! - Every entry terminated by an empty line is emitted by the same
+//!   `push_line()` call that received the delimiter.
+//! - Entry bodies preserve the exact header and continuation lines up to the
+//!   delimiter.
 //!
 //! The fixture is checked into `tests/fixtures/flush_timing_corpus_slice.log`
 //! and read via `include_str!`, so this test runs unconditionally on every
@@ -28,35 +27,84 @@ fn fixture_lines() -> Vec<&'static str> {
         .collect()
 }
 
-/// Every single-line header line in the fixture must produce at least one
-/// `LogEntry` from the same `push_line` call that received it. The newly
-/// emitted entry must always be the LAST entry in the call's return — when
-/// a prior multi-line entry is being flushed alongside, it precedes the new
-/// single-line entry.
-/// Every header line in the fixture must eventually produce a `LogEntry`
-/// when the subsequent blank line is encountered.
+/// Returns `true` if the given line starts a log entry under the empty-line
+/// delimiter model. Used to track the pending body that must be emitted by
+/// the next blank line in the same `push_line` call.
+fn is_entry_start(line: &str) -> bool {
+    line.starts_with("[UnityCrossThreadLogger]")
+        || line.starts_with("[ConnectionManager]")
+        || line.starts_with("Matchmaking: ")
+        || line.starts_with("[Client GRE]")
+        || line.starts_with("DETAILED LOGS: ")
+}
+
+/// Every blank-line delimiter in the fixture must emit the pending entry in
+/// that same `push_line` call, with the exact body accumulated so far.
 #[test]
 fn test_headers_are_emitted_on_blank_lines() {
     let mut buf = LineBuffer::new();
     let mut all_entries = Vec::new();
+    let mut pending_body: Vec<&str> = Vec::new();
+
     for (idx, line) in fixture_lines().iter().enumerate() {
         let entries = buf.push_line(line);
-        all_entries.extend(entries);
 
-        // If we just pushed a blank line, we should have emitted something
-        // if there was a header pending.
-        if line.is_empty() && idx > 0 {
-            // This is a bit coarse but ensures the blank line delimiter is working.
+        if line.is_empty() {
+            if pending_body.is_empty() {
+                assert!(
+                    entries.is_empty(),
+                    "blank line at fixture line {idx} emitted with no pending entry: {entries:?}",
+                );
+            } else {
+                let expected_body = pending_body.join("\n");
+                assert_eq!(
+                    entries.len(),
+                    1,
+                    "blank line at fixture line {idx} must emit exactly one pending entry",
+                );
+                assert_eq!(
+                    entries[0].body, expected_body,
+                    "blank line at fixture line {idx} emitted the wrong entry body",
+                );
+                pending_body.clear();
+            }
+        } else if pending_body.is_empty() {
+            if is_entry_start(line) {
+                pending_body.push(line);
+            }
+            assert!(
+                entries.is_empty(),
+                "non-delimiter line at fixture line {idx} emitted early: {entries:?}",
+            );
+        } else {
+            pending_body.push(line);
+            assert!(
+                entries.is_empty(),
+                "continuation line at fixture line {idx} emitted before delimiter: {entries:?}",
+            );
+        }
+
+        all_entries.extend(entries);
+    }
+
+    if pending_body.is_empty() {
+        assert!(buf.flush().is_none());
+    } else {
+        let expected_body = pending_body.join("\n");
+        let flushed = buf.flush();
+        assert!(
+            flushed.is_some(),
+            "fixture ended with a pending entry that should flush at EOF",
+        );
+        if let Some(entry) = flushed {
+            assert_eq!(entry.body, expected_body);
+            all_entries.push(entry);
         }
     }
-    all_entries.extend(buf.flush());
 
-    // Basic sanity: we should have at least some entries.
     assert!(!all_entries.is_empty());
 }
 
-/// Single-line entries must have bodies equal to the header line — never
-/// containing accumulated continuation or Unity stdout noise.
 /// Entries must contain their header line and any subsequent continuation
 /// lines until the blank line delimiter.
 #[test]
