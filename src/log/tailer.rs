@@ -847,9 +847,9 @@ mod tests {
             // Structured entries are terminated by a blank line.
             writeln!(f, "[UnityCrossThreadLogger]1/1/2025 Event1")?;
             writeln!(f, "{{\"key\": \"value\"}}")?;
-            writeln!(f, "")?; // Blank line triggers flush
+            writeln!(f)?; // Blank line triggers flush
             writeln!(f, "[UnityCrossThreadLogger]1/1/2025 Event2")?;
-            writeln!(f, "")?; // Blank line triggers flush
+            writeln!(f)?; // Blank line triggers flush
             f.flush()?;
 
             let entries = tailer.poll().await?;
@@ -909,10 +909,7 @@ mod tests {
             let mut tailer = FileTailer::open(f.path()).await?;
 
             // Write content with CRLF line endings and a blank line.
-            write!(
-                f,
-                "[UnityCrossThreadLogger]1/1/2025 Event1\r\n\r\n"
-            )?;
+            write!(f, "[UnityCrossThreadLogger]1/1/2025 Event1\r\n\r\n")?;
             f.flush()?;
 
             let entries = tailer.poll().await?;

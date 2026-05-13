@@ -72,7 +72,7 @@ fn test_entry_bodies_contain_headers() {
         // Every entry body should start with a known header or be a metadata line.
         let first_line = entry.body.lines().next().unwrap_or("");
         assert!(
-            first_line.starts_with("[")
+            first_line.starts_with('[')
                 || first_line.starts_with("Matchmaking: ")
                 || first_line.starts_with("DETAILED LOGS: "),
             "entry body does not start with a valid header: {:?}",
