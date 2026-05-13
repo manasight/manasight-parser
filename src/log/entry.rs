@@ -98,62 +98,24 @@ pub struct LogEntry {
     pub body: String,
 }
 
-/// Internal classification of a header line for flush-timing decisions.
-///
-/// See module-level docs for the full classification rule.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum HeaderClass {
-    /// The entry is self-contained — flush immediately.
-    SingleLine,
-    /// The entry may span multiple lines — accumulate until the next header.
-    MultiLine,
-}
-
-/// Accumulates raw lines and produces complete [`LogEntry`] values when a
-/// new header boundary is detected.
+/// Accumulates raw lines and produces complete [`LogEntry`] values when an
+/// empty line boundary is detected.
 ///
 /// # Usage
 ///
 /// Feed lines one at a time via [`push_line`](Self::push_line). Each call
-/// returns a `Vec<LogEntry>` containing zero, one, or two complete entries:
+/// returns a `Vec<LogEntry>` containing zero or one complete entries:
 ///
-/// - **Zero entries**: continuation line for an in-progress multi-line entry,
-///   or a headerless line discarded with a warning.
-/// - **One entry**: either a multi-line entry being flushed by a new
-///   single-line entry's arrival, or a single-line entry emitted alone when
-///   no prior entry was in progress.
-/// - **Two entries**: a multi-line entry being flushed *plus* the new
-///   single-line entry that triggered the flush, both emitted from one call.
+/// - **Zero entries**: continuation line for an in-progress entry, or a
+///   headerless line discarded with a warning.
+/// - **One entry**: an entry being flushed by an empty line.
 ///
 /// After the input stream ends (EOF or file rotation), call
 /// [`flush`](Self::flush) to retrieve any remaining buffered entry.
-///
-/// # Example
-///
-/// ```
-/// use manasight_parser::log::entry::LineBuffer;
-///
-/// let mut buf = LineBuffer::new();
-///
-/// // First header (multi-line, date-prefixed) — nothing to flush yet.
-/// assert!(buf.push_line("[UnityCrossThreadLogger]1/1/2025 12:00:00 PM").is_empty());
-///
-/// // Continuation line — still accumulating.
-/// assert!(buf.push_line(r#"{"key": "value"}"#).is_empty());
-///
-/// // A single-line header arrives — flushes the multi-line entry AND
-/// // emits the single-line entry, both in one call.
-/// let entries = buf.push_line("[UnityCrossThreadLogger]STATE CHANGED");
-/// assert_eq!(entries.len(), 2);
-/// ```
 pub struct LineBuffer {
     /// Compiled regex for detecting log entry header boundaries.
     header_re: Regex,
     /// Header of the entry currently being accumulated, if any.
-    ///
-    /// Only ever populated for multi-line entries. Single-line entries are
-    /// emitted immediately and never set this field — leaving the buffer in
-    /// an idle state after every single-line flush.
     current_header: Option<EntryHeader>,
     /// Lines accumulated for the current entry.
     lines: Vec<String>,
@@ -162,10 +124,7 @@ pub struct LineBuffer {
     /// Armed by [`push_line`](Self::push_line) when a real header is detected
     /// or a metadata line is emitted. Cleared back to `false` by
     /// [`reset`](Self::reset) so post-rotation orphan lines still surface a
-    /// warning. Used to silence the routine post-flush "orphan discarded"
-    /// warning (Phase 2 of #153 / #161): once any entry has been seen, an
-    /// arriving headerless line is Unity stdout noise rather than a true
-    /// file-start anomaly.
+    /// warning.
     has_emitted_anything: bool,
 }
 
@@ -190,94 +149,53 @@ impl LineBuffer {
 
     /// Feeds a single line into the buffer.
     ///
-    /// Returns a `Vec<LogEntry>` containing 0, 1, or 2 complete entries
-    /// — see the [type-level documentation](Self) for the full semantics.
+    /// Returns a `Vec<LogEntry>` containing 0 or 1 complete entries.
     ///
-    /// # Header classification
+    /// # Empty Line Delimiters
     ///
-    /// When `line` matches a known header pattern, it is classified as either
-    /// single-line or multi-line (see module-level docs). Single-line
-    /// headers (`[UnityCrossThreadLogger]<non-digit>`, `[ConnectionManager]…`,
-    /// `Matchmaking:…`) flush any prior multi-line entry and emit the new
-    /// entry in the same call. Multi-line headers
-    /// (`[UnityCrossThreadLogger]<digit>`, `[Client GRE]…`) flush any prior
-    /// entry and begin a fresh accumulation.
-    ///
-    /// Metadata lines (`DETAILED LOGS: ENABLED` / `DISABLED`) are
-    /// self-contained — treated as single-line entries that flush any prior
-    /// in-progress entry alongside themselves.
-    ///
-    /// Lines that arrive before any header has been seen are discarded with
-    /// a warning log — this handles partial entries at the start of a file
-    /// or after rotation.
+    /// MTG Arena reliably terminates structured log entries with an empty
+    /// line. When `line` is empty, any in-progress entry is flushed and
+    /// emitted.
     ///
     /// # Input contract
     ///
     /// Callers must strip any trailing `\r` (Windows CRLF) before invoking
     /// this method. [`crate::log::tailer::FileTailer::poll`] already does
-    /// this; direct callers in tests must do the same to keep classification
-    /// well-defined.
+    /// this.
     pub fn push_line(&mut self, line: &str) -> Vec<LogEntry> {
-        // Check for metadata lines first — these are self-contained.
-        if Self::is_metadata_line(line) {
+        // Check if this is a block terminator
+        if line.trim().is_empty() {
             let mut out = Vec::new();
-            if let Some(prior) = self.take_entry() {
-                out.push(prior);
+            if let Some(entry) = self.take_entry() {
+                out.push(entry);
+                self.has_emitted_anything = true;
             }
-            out.push(LogEntry {
-                header: EntryHeader::Metadata,
-                body: line.to_owned(),
-            });
-            // Metadata is a successfully emitted entry — subsequent orphan
-            // lines are routine post-flush noise, not a file-start anomaly.
-            self.has_emitted_anything = true;
             return out;
         }
 
-        if let Some(header) = self.detect_header(line) {
-            let class = Self::classify_header(header, line);
-            let mut out = Vec::new();
-            if let Some(prior) = self.take_entry() {
-                out.push(prior);
-            }
-            match class {
-                HeaderClass::SingleLine => {
-                    // Emit the new entry immediately; leave the buffer idle
-                    // so Phase 2 (#161) can distinguish post-flush orphans.
-                    out.push(LogEntry {
-                        header,
-                        body: line.to_owned(),
-                    });
-                }
-                HeaderClass::MultiLine => {
-                    // Begin accumulating the new multi-line entry.
-                    self.current_header = Some(header);
-                    self.lines.push(line.to_owned());
+        if self.current_header.is_none() {
+            // Looking for the start of a new block
+            if Self::is_metadata_line(line) {
+                self.current_header = Some(EntryHeader::Metadata);
+                self.lines.push(line.to_owned());
+                self.has_emitted_anything = true;
+            } else if let Some(header) = self.detect_header(line) {
+                self.current_header = Some(header);
+                self.lines.push(line.to_owned());
+                self.has_emitted_anything = true;
+            } else {
+                // Headerless line with no entry in progress.
+                if !self.has_emitted_anything {
+                    ::log::warn!(
+                        "Discarding headerless line at start of input: {:?}",
+                        truncate_for_log(line, 120),
+                    );
                 }
             }
-            // A real header was seen — arm the flag so subsequent orphans
-            // are silenced.
-            self.has_emitted_anything = true;
-            out
-        } else if self.current_header.is_some() {
-            // Continuation line for the current multi-line entry.
-            self.lines.push(line.to_owned());
             Vec::new()
         } else {
-            // Headerless line with no entry in progress. Two cases:
-            //
-            // 1. True file-start / post-rotation anomaly (no header has ever
-            //    been seen): warn — this is what the message is meant to
-            //    flag.
-            // 2. Routine post-flush orphan (Unity stdout noise arriving
-            //    between Arena entries after Phase 1's single-line flush
-            //    landed): silently discard — the warn would be pure noise.
-            if !self.has_emitted_anything {
-                ::log::warn!(
-                    "Discarding headerless line at start of input: {:?}",
-                    truncate_for_log(line, 120),
-                );
-            }
+            // Continuation line for the current entry
+            self.lines.push(line.to_owned());
             Vec::new()
         }
     }
@@ -340,44 +258,6 @@ impl LineBuffer {
             return Some(EntryHeader::Matchmaking);
         }
         None
-    }
-
-    /// Classifies a header line as single-line or multi-line.
-    ///
-    /// Rule (corpus-verified across 27 sessions / 37,593 entries; see #153
-    /// analysis comment):
-    ///
-    /// - `[UnityCrossThreadLogger]` followed by an ASCII digit → multi-line
-    ///   (date-prefixed API responses and match events).
-    /// - `[UnityCrossThreadLogger]` followed by anything else → single-line
-    ///   (alpha labels and `==>` request markers).
-    /// - `[Client GRE]` → multi-line (current behavior preserved; corpus
-    ///   has zero coverage of this header).
-    /// - `[ConnectionManager]…` → single-line.
-    /// - `Matchmaking:…` → single-line.
-    fn classify_header(header: EntryHeader, line: &str) -> HeaderClass {
-        match header {
-            EntryHeader::UnityCrossThreadLogger => {
-                // Look at the first byte after the closing bracket.
-                let after = line
-                    .strip_prefix("[UnityCrossThreadLogger]")
-                    .unwrap_or(line);
-                if after.bytes().next().is_some_and(|b| b.is_ascii_digit()) {
-                    HeaderClass::MultiLine
-                } else {
-                    HeaderClass::SingleLine
-                }
-            }
-            EntryHeader::ClientGre => HeaderClass::MultiLine,
-            // ConnectionManager and Matchmaking are corpus-confirmed
-            // single-line. Metadata (`DETAILED LOGS: …`) is handled directly
-            // in `push_line` and never reaches this function — but it must
-            // appear here because `EntryHeader` is non_exhaustive, and a
-            // single-line classification is the safe default.
-            EntryHeader::ConnectionManager | EntryHeader::Matchmaking | EntryHeader::Metadata => {
-                HeaderClass::SingleLine
-            }
-        }
     }
 
     /// Takes the current entry out of the buffer, leaving it empty.
@@ -456,20 +336,19 @@ mod tests {
         use super::*;
 
         #[test]
-        fn test_push_line_first_multi_line_header_returns_empty() {
+        fn test_push_line_header_returns_empty() {
             let mut buf = LineBuffer::new();
-            // Date-prefixed UCTL = multi-line; nothing to flush yet.
             assert!(buf
                 .push_line("[UnityCrossThreadLogger]1/1/2025 12:00:00 Event")
                 .is_empty());
         }
 
         #[test]
-        fn test_push_line_second_multi_line_header_flushes_first_entry() {
+        fn test_push_line_empty_line_flushes_entry() {
             let mut buf = LineBuffer::new();
             buf.push_line("[UnityCrossThreadLogger]1/1/2025 Event1");
             assert_eq!(
-                buf.push_line("[Client GRE] 1/1/2025 Event2"),
+                buf.push_line(""),
                 vec![expected(
                     EntryHeader::UnityCrossThreadLogger,
                     "[UnityCrossThreadLogger]1/1/2025 Event1",
@@ -484,12 +363,10 @@ mod tests {
             buf.push_line(r#"{"key": "value"}"#);
             buf.push_line(r#"{"more": "data"}"#);
             assert_eq!(
-                buf.push_line("[UnityCrossThreadLogger]1/1/2025 Event2"),
+                buf.push_line(""),
                 vec![expected(
                     EntryHeader::UnityCrossThreadLogger,
-                    "[UnityCrossThreadLogger]1/1/2025 Event1\n\
-                     {\"key\": \"value\"}\n\
-                     {\"more\": \"data\"}",
+                    "[UnityCrossThreadLogger]1/1/2025 Event1\n{\"key\": \"value\"}\n{\"more\": \"data\"}",
                 )],
             );
         }
@@ -499,211 +376,44 @@ mod tests {
             let mut buf = LineBuffer::new();
             buf.push_line("[Client GRE] GreMessage");
             assert_eq!(
-                buf.flush(),
-                Some(expected(EntryHeader::ClientGre, "[Client GRE] GreMessage")),
-            );
-        }
-
-        /// Regression: `[Client GRE]` continues to accumulate continuation
-        /// lines after Phase 1 (multi-line classification preserved).
-        #[test]
-        fn test_push_line_client_gre_header_accumulates() {
-            let mut buf = LineBuffer::new();
-            buf.push_line("[Client GRE] GreToClientEvent");
-            buf.push_line("{");
-            buf.push_line(r#"  "key": "value""#);
-            buf.push_line("}");
-            assert_eq!(
-                buf.flush(),
-                Some(expected(
-                    EntryHeader::ClientGre,
-                    "[Client GRE] GreToClientEvent\n{\n  \"key\": \"value\"\n}",
-                )),
+                buf.push_line(""),
+                vec![expected(EntryHeader::ClientGre, "[Client GRE] GreMessage")],
             );
         }
 
         #[test]
-        fn test_push_line_alternating_multi_line_headers() {
+        fn test_push_line_multiple_entries() {
             let mut buf = LineBuffer::new();
             buf.push_line("[UnityCrossThreadLogger]1/1/2025 Event1");
 
             assert_eq!(
-                buf.push_line("[Client GRE] Event2"),
+                buf.push_line(""),
                 vec![expected(
                     EntryHeader::UnityCrossThreadLogger,
                     "[UnityCrossThreadLogger]1/1/2025 Event1",
                 )],
             );
 
+            buf.push_line("[Client GRE] Event2");
             assert_eq!(
-                buf.push_line("[UnityCrossThreadLogger]1/1/2025 Event3"),
+                buf.push_line(""),
                 vec![expected(EntryHeader::ClientGre, "[Client GRE] Event2")],
             );
-
-            assert_eq!(
-                buf.flush(),
-                Some(expected(
-                    EntryHeader::UnityCrossThreadLogger,
-                    "[UnityCrossThreadLogger]1/1/2025 Event3",
-                )),
-            );
         }
-    }
 
-    // -- LineBuffer: single-line flush (Phase 1 of #153) -------------------
-
-    mod single_line_flush {
-        use super::*;
-
-        /// `[UnityCrossThreadLogger]` followed by an alpha label (e.g.,
-        /// `STATE CHANGED`) is single-line — emit immediately, leave the
-        /// buffer idle.
         #[test]
-        fn test_push_line_single_line_uctl_label_flushes_immediately() {
+        fn test_push_line_multiple_headers_accumulate() {
+            // If a second header arrives without a blank line, it just gets added to the body
             let mut buf = LineBuffer::new();
-            let entries = buf.push_line(
-                "[UnityCrossThreadLogger]STATE CHANGED \
-                 {\"old\":\"None\",\"new\":\"ConnectedToMatchDoor\"}",
-            );
+            buf.push_line("[UnityCrossThreadLogger]1/1/2025 Event1");
+            buf.push_line("[Client GRE] Event2");
             assert_eq!(
-                entries,
+                buf.push_line(""),
                 vec![expected(
                     EntryHeader::UnityCrossThreadLogger,
-                    "[UnityCrossThreadLogger]STATE CHANGED \
-                     {\"old\":\"None\",\"new\":\"ConnectedToMatchDoor\"}",
+                    "[UnityCrossThreadLogger]1/1/2025 Event1\n[Client GRE] Event2",
                 )],
             );
-            assert!(
-                buf.is_empty(),
-                "buffer must be idle after a single-line flush",
-            );
-        }
-
-        /// `[UnityCrossThreadLogger]==>` API request markers are single-line.
-        #[test]
-        fn test_push_line_single_line_uctl_arrow_flushes_immediately() {
-            let mut buf = LineBuffer::new();
-            let entries = buf.push_line(
-                "[UnityCrossThreadLogger]==> GraphGetGraphState \
-                 {\"id\":\"abc\",\"request\":\"{}\"}",
-            );
-            assert_eq!(entries.len(), 1);
-            assert_eq!(entries[0].header, EntryHeader::UnityCrossThreadLogger);
-            assert!(buf.is_empty());
-        }
-
-        /// `[UnityCrossThreadLogger]Client.SceneChange {…}` exercises a
-        /// nested-bracket case where the continuation-detection logic must
-        /// not be confused by the inner `{` body.
-        #[test]
-        fn test_push_line_single_line_uctl_nested_bracket_flushes_immediately() {
-            let mut buf = LineBuffer::new();
-            let entries = buf.push_line(
-                "[UnityCrossThreadLogger]Client.SceneChange \
-                 {\"fromSceneName\":\"Home\",\"toSceneName\":\"Draft\"}",
-            );
-            assert_eq!(entries.len(), 1);
-            assert_eq!(entries[0].header, EntryHeader::UnityCrossThreadLogger);
-            assert!(buf.is_empty());
-        }
-
-        /// `[ConnectionManager]…` is single-line.
-        #[test]
-        fn test_push_line_single_line_connection_manager_flushes_immediately() {
-            let mut buf = LineBuffer::new();
-            let entries = buf.push_line("[ConnectionManager] Reconnect succeeded");
-            assert_eq!(
-                entries,
-                vec![expected(
-                    EntryHeader::ConnectionManager,
-                    "[ConnectionManager] Reconnect succeeded",
-                )],
-            );
-            assert!(buf.is_empty());
-        }
-
-        /// `Matchmaking:…` is single-line.
-        #[test]
-        fn test_push_line_single_line_matchmaking_flushes_immediately() {
-            let mut buf = LineBuffer::new();
-            let entries = buf.push_line("Matchmaking: GRE connection lost");
-            assert_eq!(
-                entries,
-                vec![expected(
-                    EntryHeader::Matchmaking,
-                    "Matchmaking: GRE connection lost",
-                )],
-            );
-            assert!(buf.is_empty());
-        }
-
-        /// Multi-line headers (`[UnityCrossThreadLogger]<digit>`) keep
-        /// accumulating continuation lines until the next header — regression
-        /// guard for API-response handling.
-        #[test]
-        fn test_push_line_multi_line_date_header_accumulates() {
-            let mut buf = LineBuffer::new();
-            assert!(buf
-                .push_line("[UnityCrossThreadLogger]3/11/2026 6:08:24 PM")
-                .is_empty());
-            assert!(buf.push_line("<== EventGetCoursesV2(abc-123)").is_empty());
-            assert!(buf.push_line(r#"{"Courses":[]}"#).is_empty());
-
-            // Next header (a single-line UCTL alpha label) flushes the
-            // multi-line entry AND emits itself — both in one call.
-            let entries = buf.push_line("[UnityCrossThreadLogger]Client.SceneChange {}");
-            assert_eq!(entries.len(), 2);
-            assert_eq!(entries[0].header, EntryHeader::UnityCrossThreadLogger);
-            assert_eq!(
-                entries[0].body,
-                "[UnityCrossThreadLogger]3/11/2026 6:08:24 PM\n\
-                 <== EventGetCoursesV2(abc-123)\n\
-                 {\"Courses\":[]}",
-            );
-            assert_eq!(entries[1].header, EntryHeader::UnityCrossThreadLogger);
-            assert_eq!(
-                entries[1].body,
-                "[UnityCrossThreadLogger]Client.SceneChange {}",
-            );
-        }
-
-        /// Unity stdout noise that arrives *after* a single-line flush is
-        /// orphaned (the buffer is idle) and discarded — it must not be
-        /// absorbed into the prior entry's body.
-        #[test]
-        fn test_push_line_post_single_line_orphan_discarded() {
-            let mut buf = LineBuffer::new();
-            // Single-line header — buffer goes idle immediately after.
-            let first = buf.push_line("[UnityCrossThreadLogger]STATE CHANGED {\"x\":1}");
-            assert_eq!(first.len(), 1);
-            assert!(buf.is_empty());
-
-            // Unity stdout noise → orphan, discarded.
-            let noise = buf.push_line("PreviousPlayBladeVisualState is being set ...");
-            assert!(noise.is_empty());
-            assert!(buf.is_empty());
-
-            // Next header — emit cleanly with no contamination from the noise.
-            let next = buf.push_line("[UnityCrossThreadLogger]Connecting to matchId abc");
-            assert_eq!(next.len(), 1);
-            assert!(!next[0].body.contains("PreviousPlayBladeVisualState"));
-        }
-
-        /// A multi-line entry being flushed by a single-line header must
-        /// emit BOTH entries from one `push_line` call.
-        #[test]
-        fn test_push_line_multi_line_then_single_line_emits_two() {
-            let mut buf = LineBuffer::new();
-            buf.push_line("[UnityCrossThreadLogger]3/11/2026 6:08:24 PM");
-            buf.push_line("<== Foo(123)");
-
-            let entries = buf.push_line("[ConnectionManager] Reconnect failed");
-            assert_eq!(entries.len(), 2);
-            assert_eq!(entries[0].header, EntryHeader::UnityCrossThreadLogger);
-            assert!(entries[0].body.contains("<== Foo(123)"));
-            assert_eq!(entries[1].header, EntryHeader::ConnectionManager);
-            assert_eq!(entries[1].body, "[ConnectionManager] Reconnect failed");
-            assert!(buf.is_empty());
         }
     }
 
@@ -720,26 +430,11 @@ mod tests {
             // After discarding, the next header should still work.
             buf.push_line("[UnityCrossThreadLogger]1/1/2025 Real entry");
             assert_eq!(
-                buf.flush(),
-                Some(expected(
+                buf.push_line(""),
+                vec![expected(
                     EntryHeader::UnityCrossThreadLogger,
                     "[UnityCrossThreadLogger]1/1/2025 Real entry",
-                )),
-            );
-        }
-
-        #[test]
-        fn test_push_line_empty_line_as_continuation() {
-            let mut buf = LineBuffer::new();
-            buf.push_line("[UnityCrossThreadLogger]1/1/2025 Event");
-            buf.push_line("");
-            buf.push_line("continuation");
-            assert_eq!(
-                buf.flush(),
-                Some(expected(
-                    EntryHeader::UnityCrossThreadLogger,
-                    "[UnityCrossThreadLogger]1/1/2025 Event\n\ncontinuation",
-                )),
+                )],
             );
         }
     }
@@ -756,7 +451,7 @@ mod tests {
         }
 
         #[test]
-        fn test_flush_returns_buffered_multi_line_entry() {
+        fn test_flush_returns_buffered_entry() {
             let mut buf = LineBuffer::new();
             buf.push_line("[UnityCrossThreadLogger]1/1/2025 Event");
             assert_eq!(
@@ -822,8 +517,8 @@ mod tests {
             buf.reset();
             buf.push_line("[Client GRE] New");
             assert_eq!(
-                buf.flush(),
-                Some(expected(EntryHeader::ClientGre, "[Client GRE] New")),
+                buf.push_line(""),
+                vec![expected(EntryHeader::ClientGre, "[Client GRE] New")],
             );
         }
     }
@@ -840,18 +535,17 @@ mod tests {
         }
 
         #[test]
-        fn test_is_empty_false_after_multi_line_header() {
+        fn test_is_empty_false_after_header() {
             let mut buf = LineBuffer::new();
             buf.push_line("[UnityCrossThreadLogger]1/1/2025 Event");
             assert!(!buf.is_empty());
         }
 
-        /// Single-line entries leave the buffer idle — invariant relied on
-        /// by Phase 2 (#161).
         #[test]
-        fn test_is_empty_true_after_single_line_flush() {
+        fn test_is_empty_true_after_empty_line_flush() {
             let mut buf = LineBuffer::new();
             buf.push_line("[UnityCrossThreadLogger]STATE CHANGED");
+            buf.push_line("");
             assert!(buf.is_empty());
         }
 
@@ -881,11 +575,11 @@ mod tests {
             let mut buf = LineBuffer::default();
             buf.push_line("[UnityCrossThreadLogger]1/1/2025 Event");
             assert_eq!(
-                buf.flush(),
-                Some(expected(
+                buf.push_line(""),
+                vec![expected(
                     EntryHeader::UnityCrossThreadLogger,
                     "[UnityCrossThreadLogger]1/1/2025 Event",
-                )),
+                )],
             );
         }
     }
@@ -902,12 +596,11 @@ mod tests {
             // Header pattern in the middle of a line is NOT a boundary.
             buf.push_line("some text [UnityCrossThreadLogger] not a header");
             assert_eq!(
-                buf.flush(),
-                Some(expected(
+                buf.push_line(""),
+                vec![expected(
                     EntryHeader::UnityCrossThreadLogger,
-                    "[UnityCrossThreadLogger]1/1/2025 Event\n\
-                     some text [UnityCrossThreadLogger] not a header",
-                )),
+                    "[UnityCrossThreadLogger]1/1/2025 Event\nsome text [UnityCrossThreadLogger] not a header",
+                )],
             );
         }
 
@@ -916,9 +609,9 @@ mod tests {
             let mut buf = LineBuffer::new();
             buf.push_line("[UnityCrossThreadLogger]1/1/2025 Event");
             buf.push_line("[UnityMainThreadLogger] not a valid header");
-            let result = buf.flush();
-            assert!(result.is_some());
-            if let Some(e) = result {
+            let result = buf.push_line("");
+            assert_eq!(result.len(), 1);
+            if let Some(e) = result.first() {
                 assert!(e.body.contains("[UnityMainThreadLogger]"));
             }
         }
@@ -929,28 +622,12 @@ mod tests {
             buf.push_line("[UnityCrossThreadLogger]1/1/2025 Event");
             buf.push_line("[]");
             assert_eq!(
-                buf.flush(),
-                Some(expected(
-                    EntryHeader::UnityCrossThreadLogger,
-                    "[UnityCrossThreadLogger]1/1/2025 Event\n[]",
-                )),
-            );
-        }
-
-        #[test]
-        fn test_header_with_nothing_after_bracket() {
-            let mut buf = LineBuffer::new();
-            // `[UnityCrossThreadLogger]` with no trailing content classifies
-            // as single-line (no leading digit) — emit and go idle.
-            let entries = buf.push_line("[UnityCrossThreadLogger]");
-            assert_eq!(
-                entries,
+                buf.push_line(""),
                 vec![expected(
                     EntryHeader::UnityCrossThreadLogger,
-                    "[UnityCrossThreadLogger]",
+                    "[UnityCrossThreadLogger]1/1/2025 Event\n[]",
                 )],
             );
-            assert!(buf.is_empty());
         }
     }
 
@@ -977,36 +654,11 @@ mod tests {
             buf.push_line(r"  ]");
             buf.push_line("}");
 
-            // [Client GRE] (multi-line) flushes the UnityCrossThreadLogger entry.
-            let unity_entries = buf.push_line("[Client GRE] Next event");
+            let unity_entries = buf.push_line("");
             assert_eq!(unity_entries.len(), 1);
             assert_eq!(unity_entries[0].header, EntryHeader::UnityCrossThreadLogger);
             assert!(unity_entries[0].body.contains("greToClientMessages"));
             assert!(unity_entries[0].body.contains("GameStateMessage"));
-
-            // Another header flushes the Client GRE entry.
-            assert_eq!(
-                buf.push_line("[UnityCrossThreadLogger]1/15/2025 After"),
-                vec![expected(EntryHeader::ClientGre, "[Client GRE] Next event")],
-            );
-        }
-
-        #[test]
-        fn test_many_single_line_entries_in_sequence() {
-            let mut buf = LineBuffer::new();
-            let mut entries = Vec::new();
-
-            for i in 0..5 {
-                // Single-line UCTL alpha labels — each flushes immediately.
-                entries.extend(buf.push_line(&format!("[UnityCrossThreadLogger]Event{i}")));
-            }
-            entries.extend(buf.flush());
-
-            assert_eq!(entries.len(), 5);
-            for (i, e) in entries.iter().enumerate() {
-                assert_eq!(e.header, EntryHeader::UnityCrossThreadLogger);
-                assert_eq!(e.body, format!("[UnityCrossThreadLogger]Event{i}"));
-            }
         }
     }
 
@@ -1020,65 +672,30 @@ mod tests {
             let mut buf = LineBuffer::new();
             let result = buf.push_line("DETAILED LOGS: ENABLED");
 
+            assert!(
+                result.is_empty(),
+                "metadata lines now require empty line to flush"
+            );
+            let result = buf.push_line("");
+
             assert_eq!(
                 result,
                 vec![expected(EntryHeader::Metadata, "DETAILED LOGS: ENABLED")],
             );
-            // Buffer should be empty after — metadata is self-contained.
             assert!(buf.is_empty());
         }
 
         #[test]
         fn test_push_line_detailed_logs_disabled_as_first_line() {
             let mut buf = LineBuffer::new();
-            let result = buf.push_line("DETAILED LOGS: DISABLED");
+            buf.push_line("DETAILED LOGS: DISABLED");
+            let result = buf.push_line("");
 
             assert_eq!(
                 result,
                 vec![expected(EntryHeader::Metadata, "DETAILED LOGS: DISABLED")],
             );
             assert!(buf.is_empty());
-        }
-
-        /// Metadata after an in-progress multi-line entry flushes the prior
-        /// entry AND emits the metadata entry — both in one call.
-        #[test]
-        fn test_push_line_metadata_flushes_buffered_entry() {
-            let mut buf = LineBuffer::new();
-            buf.push_line("[UnityCrossThreadLogger]1/1/2025 Event1");
-
-            let entries = buf.push_line("DETAILED LOGS: ENABLED");
-            assert_eq!(
-                entries,
-                vec![
-                    expected(
-                        EntryHeader::UnityCrossThreadLogger,
-                        "[UnityCrossThreadLogger]1/1/2025 Event1",
-                    ),
-                    expected(EntryHeader::Metadata, "DETAILED LOGS: ENABLED"),
-                ],
-            );
-            // Buffer is idle after — metadata is self-contained.
-            assert!(buf.is_empty());
-        }
-
-        #[test]
-        fn test_push_line_metadata_then_header_flushes_metadata() {
-            let mut buf = LineBuffer::new();
-            buf.push_line("DETAILED LOGS: ENABLED");
-
-            // Next multi-line header — nothing to flush (metadata was emitted
-            // immediately on its own call).
-            assert!(buf
-                .push_line("[UnityCrossThreadLogger]1/1/2025 Event")
-                .is_empty());
-            assert_eq!(
-                buf.flush(),
-                Some(expected(
-                    EntryHeader::UnityCrossThreadLogger,
-                    "[UnityCrossThreadLogger]1/1/2025 Event",
-                )),
-            );
         }
 
         #[test]
@@ -1093,8 +710,8 @@ mod tests {
         #[test]
         fn test_push_line_metadata_with_leading_trailing_whitespace() {
             let mut buf = LineBuffer::new();
-            // Whitespace around the exact text should still match.
-            let result = buf.push_line("  DETAILED LOGS: ENABLED  ");
+            buf.push_line("  DETAILED LOGS: ENABLED  ");
+            let result = buf.push_line("");
             assert_eq!(result.len(), 1);
             assert_eq!(result[0].header, EntryHeader::Metadata);
         }
@@ -1116,12 +733,6 @@ mod tests {
         use super::*;
         use std::sync::{Mutex, OnceLock};
 
-        /// In-test log capture: records every record's level + message so the
-        /// gating tests can assert whether a warn fired.
-        ///
-        /// `log` only allows one global logger per process. We install it
-        /// once via `OnceLock` and serialize the gating tests through a mutex
-        /// so the captured-record buffer can be inspected race-free.
         struct CaptureLogger {
             records: Mutex<Vec<(::log::Level, String)>>,
         }
@@ -1144,24 +755,11 @@ mod tests {
 
         type RecordsRef = &'static Mutex<Vec<(::log::Level, String)>>;
 
-        /// Installs the capture logger (idempotent) and returns a handle to
-        /// the global capture buffer.
-        ///
-        /// The capture buffer accumulates records from every test that runs
-        /// in this process, so callers MUST filter the captured records by a
-        /// per-test sentinel marker — see [`warn_count_matching`]. This
-        /// avoids the parallel-test race that a "clear before each test"
-        /// strategy would introduce.
         fn install_capture() -> RecordsRef {
             let logger = LOGGER.get_or_init(|| {
                 let leaked: &'static CaptureLogger = Box::leak(Box::new(CaptureLogger {
                     records: Mutex::new(Vec::new()),
                 }));
-                // `set_logger` errors if a logger is already installed by
-                // another test setup; in that case our captures will be
-                // silently dropped, which is acceptable here because the
-                // gating logic is also covered by behavioral tests
-                // (`is_empty`, header round-trips) above.
                 let _ = ::log::set_logger(leaked);
                 ::log::set_max_level(::log::LevelFilter::Trace);
                 leaked
@@ -1169,14 +767,6 @@ mod tests {
             &logger.records
         }
 
-        /// Counts captured warn-level records that contain `marker` in the
-        /// message body.
-        ///
-        /// Tests pass a per-test sentinel string as the orphan input so the
-        /// captured warning's truncated payload contains that sentinel.
-        /// Filtering on the sentinel makes the count race-free even though
-        /// Rust's test harness runs tests in parallel by default and other
-        /// modules' tests share the same global logger.
         fn warn_count_matching(
             records: &Mutex<Vec<(::log::Level, String)>>,
             marker: &str,
@@ -1195,9 +785,6 @@ mod tests {
                 .count()
         }
 
-        /// Orphan line before any header has been seen still produces the
-        /// existing warning — this is the file-start anomaly the message was
-        /// originally meant to flag.
         #[test]
         fn test_push_line_first_orphan_warns() {
             const MARKER: &str = "P2-MARKER-FIRST-ORPHAN-WARNS-zX9q";
@@ -1213,20 +800,17 @@ mod tests {
             );
         }
 
-        /// After a single-line entry has flushed, a subsequent headerless
-        /// line is routine Unity stdout noise — silently discard, no warn.
         #[test]
         fn test_push_line_post_flush_orphan_silent() {
             const MARKER: &str = "P2-MARKER-POST-FLUSH-SILENT-kJ7w";
             let records = install_capture();
             let mut buf = LineBuffer::new();
 
-            // Single-line flush arms the gating flag.
-            let entries = buf.push_line("[UnityCrossThreadLogger]STATE CHANGED {\"x\":1}");
+            buf.push_line(r#"[UnityCrossThreadLogger]STATE CHANGED {"x":1}"#);
+            let entries = buf.push_line(""); // flush arms the gating flag
             assert_eq!(entries.len(), 1);
             assert!(buf.is_empty());
 
-            // Unity stdout noise — should be silently dropped.
             assert!(buf.push_line(MARKER).is_empty());
 
             assert_eq!(
@@ -1236,26 +820,17 @@ mod tests {
             );
         }
 
-        /// `reset()` re-arms the warning so post-rotation orphans still
-        /// surface — the rotation case the warn was originally meant to
-        /// catch.
         #[test]
         fn test_push_line_orphan_after_reset_warns() {
             const MARKER: &str = "P2-MARKER-AFTER-RESET-WARNS-vN2t";
             let records = install_capture();
             let mut buf = LineBuffer::new();
 
-            // Flush an entry to arm the flag.
-            assert_eq!(
-                buf.push_line("[UnityCrossThreadLogger]STATE CHANGED {}")
-                    .len(),
-                1,
-            );
+            buf.push_line("[UnityCrossThreadLogger]STATE CHANGED {}");
+            assert_eq!(buf.push_line("").len(), 1);
 
-            // Simulate file rotation — flag must drop back to false.
             buf.reset();
 
-            // First orphan after reset must warn again.
             assert!(buf.push_line(MARKER).is_empty());
 
             assert_eq!(
@@ -1265,21 +840,17 @@ mod tests {
             );
         }
 
-        /// A metadata line (`DETAILED LOGS: ENABLED`) is a successfully
-        /// emitted entry, so subsequent orphan lines are post-flush noise
-        /// and must be silently discarded.
         #[test]
         fn test_push_line_orphan_after_metadata_silent() {
             const MARKER: &str = "P2-MARKER-AFTER-METADATA-SILENT-bH4r";
             let records = install_capture();
             let mut buf = LineBuffer::new();
 
-            // Metadata arms the flag.
-            let entries = buf.push_line("DETAILED LOGS: ENABLED");
+            buf.push_line("DETAILED LOGS: ENABLED");
+            let entries = buf.push_line("");
             assert_eq!(entries.len(), 1);
             assert_eq!(entries[0].header, EntryHeader::Metadata);
 
-            // Subsequent orphan — silent.
             assert!(buf.push_line(MARKER).is_empty());
 
             assert_eq!(
@@ -1305,8 +876,6 @@ mod tests {
 
         #[test]
         fn test_as_str_matchmaking() {
-            // The `Matchmaking:` prefix keeps the colon — this matches how
-            // the line appears in Arena's actual log.
             assert_eq!(EntryHeader::Matchmaking.as_str(), "Matchmaking:");
         }
 
@@ -1324,134 +893,25 @@ mod tests {
         }
 
         #[test]
-        fn test_connection_manager_header_mid_stream_flushes_unity() {
+        fn test_push_line_connection_manager_header_detected() {
             let mut buf = LineBuffer::new();
-            buf.push_line("[UnityCrossThreadLogger]1/1/2025 Event1");
-
-            let entries = buf.push_line("[ConnectionManager] Reconnect result : Error");
+            buf.push_line("[ConnectionManager] Hello");
             assert_eq!(
-                entries,
-                vec![
-                    expected(
-                        EntryHeader::UnityCrossThreadLogger,
-                        "[UnityCrossThreadLogger]1/1/2025 Event1",
-                    ),
-                    expected(
-                        EntryHeader::ConnectionManager,
-                        "[ConnectionManager] Reconnect result : Error",
-                    ),
-                ],
-            );
-            // ConnectionManager is single-line — buffer is idle.
-            assert!(buf.is_empty());
-        }
-
-        #[test]
-        fn test_matchmaking_header_mid_stream_flushes_unity() {
-            let mut buf = LineBuffer::new();
-            buf.push_line("[UnityCrossThreadLogger]1/1/2025 Event1");
-
-            let entries = buf.push_line("Matchmaking: GRE connection lost");
-            assert_eq!(
-                entries,
-                vec![
-                    expected(
-                        EntryHeader::UnityCrossThreadLogger,
-                        "[UnityCrossThreadLogger]1/1/2025 Event1",
-                    ),
-                    expected(EntryHeader::Matchmaking, "Matchmaking: GRE connection lost",),
-                ],
-            );
-            assert!(buf.is_empty());
-        }
-
-        #[test]
-        fn test_connection_manager_as_first_line_emits_immediately() {
-            // Single-line semantics: the ConnectionManager entry is emitted
-            // by the same `push_line` call that received it.
-            let mut buf = LineBuffer::new();
-            let entries = buf.push_line("[ConnectionManager] Reconnect succeeded");
-            assert_eq!(
-                entries,
+                buf.push_line(""),
                 vec![expected(
                     EntryHeader::ConnectionManager,
-                    "[ConnectionManager] Reconnect succeeded",
+                    "[ConnectionManager] Hello"
                 )],
             );
-            assert!(buf.is_empty());
         }
 
         #[test]
-        fn test_matchmaking_as_first_line_emits_immediately() {
+        fn test_push_line_matchmaking_header_detected() {
             let mut buf = LineBuffer::new();
-            let entries = buf.push_line("Matchmaking: GRE connection lost");
+            buf.push_line("Matchmaking: Hello");
             assert_eq!(
-                entries,
-                vec![expected(
-                    EntryHeader::Matchmaking,
-                    "Matchmaking: GRE connection lost",
-                )],
-            );
-            assert!(buf.is_empty());
-        }
-
-        #[test]
-        fn test_four_way_interleave_yields_four_entries() {
-            // Realistic corpus-derived pattern from issues #528/#529:
-            // Unity STATE CHANGED → Matchmaking: GRE connection lost →
-            // ConnectionManager Reconnect result → Unity (next event).
-            // All four are single-line, so each `push_line` returns 1 entry.
-            let mut buf = LineBuffer::new();
-            let mut entries = Vec::new();
-
-            entries.extend(buf.push_line(
-                "[UnityCrossThreadLogger]STATE CHANGED \
-                 {\"old\":\"Playing\",\"new\":\"Disconnected\"}",
-            ));
-            entries.extend(buf.push_line("Matchmaking: GRE connection lost"));
-            entries.extend(buf.push_line("[ConnectionManager] Reconnect result : Error"));
-            entries.extend(buf.push_line("[UnityCrossThreadLogger]Next event"));
-            entries.extend(buf.flush());
-
-            assert_eq!(entries.len(), 4);
-            assert_eq!(entries[0].header, EntryHeader::UnityCrossThreadLogger);
-            assert!(entries[0].body.contains("STATE CHANGED"));
-            assert_eq!(entries[1].header, EntryHeader::Matchmaking);
-            assert_eq!(entries[1].body, "Matchmaking: GRE connection lost");
-            assert_eq!(entries[2].header, EntryHeader::ConnectionManager);
-            assert_eq!(
-                entries[2].body,
-                "[ConnectionManager] Reconnect result : Error"
-            );
-            assert_eq!(entries[3].header, EntryHeader::UnityCrossThreadLogger);
-            assert_eq!(entries[3].body, "[UnityCrossThreadLogger]Next event");
-        }
-
-        #[test]
-        fn test_matchmaking_without_trailing_space_is_not_header() {
-            // The starts_with check requires the trailing space ("Matchmaking: ")
-            // to avoid matching unrelated prefixes that happen to start
-            // with "Matchmaking:". Without the space it should be a
-            // headerless line (discarded at start of stream).
-            let mut buf = LineBuffer::new();
-            assert!(buf.push_line("Matchmaking:compact-no-space").is_empty());
-            assert!(buf.is_empty());
-        }
-
-        #[test]
-        fn test_connection_manager_mid_line_is_continuation() {
-            let mut buf = LineBuffer::new();
-            buf.push_line("[UnityCrossThreadLogger]1/1/2025 Event");
-            // ConnectionManager bracket pattern in the middle of a line is
-            // NOT a boundary — same rule as other bracketed headers.
-            buf.push_line("some text [ConnectionManager] not a header");
-            assert_eq!(
-                buf.flush(),
-                Some(expected(
-                    EntryHeader::UnityCrossThreadLogger,
-                    "[UnityCrossThreadLogger]1/1/2025 Event\n\
-                     some text [ConnectionManager] not a header",
-                )),
+                buf.push_line(""),
+                vec![expected(EntryHeader::Matchmaking, "Matchmaking: Hello")],
             );
         }
     }

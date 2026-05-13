@@ -668,16 +668,17 @@ mod tests {
 
         #[tokio::test]
         async fn test_open_from_start_reads_existing_content() -> TestResult {
-            // Date-prefixed UCTL = multi-line; first header buffers, second flushes.
+            // Each entry is followed by an empty line delimiter.
             let f = temp_log(
-                "[UnityCrossThreadLogger]1/1/2025 Event1\n\
-                 [UnityCrossThreadLogger]1/1/2025 Event2\n",
+                "[UnityCrossThreadLogger]1/1/2025 Event1\n\n\
+                 [UnityCrossThreadLogger]1/1/2025 Event2\n\n",
             )?;
             let mut tailer = FileTailer::open_from_start(f.path()).await?;
             let entries = tailer.poll().await?;
-            // First header doesn't flush; second header flushes first entry.
-            assert_eq!(entries.len(), 1);
+            // Both entries are flushed immediately by their blank lines.
+            assert_eq!(entries.len(), 2);
             assert!(entries[0].body.contains("Event1"));
+            assert!(entries[1].body.contains("Event2"));
             Ok(())
         }
     }
@@ -690,14 +691,13 @@ mod tests {
         #[tokio::test]
         async fn test_run_once_reads_entire_file() -> TestResult {
             let f = temp_log(
-                "[UnityCrossThreadLogger] Event1\n\
-                 [UnityCrossThreadLogger] Event2\n\
-                 [UnityCrossThreadLogger] Event3\n",
+                "[UnityCrossThreadLogger] Event1\n\n\
+                 [UnityCrossThreadLogger] Event2\n\n\
+                 [UnityCrossThreadLogger] Event3\n\n",
             )?;
             let mut tailer = FileTailer::open_from_start(f.path()).await?;
             let entries = tailer.run_once().await?;
-            // 3 headers: Event1 flushed by Event2, Event2 flushed by Event3,
-            // Event3 flushed by run_once's flush().
+            // Each entry is flushed by its trailing blank line.
             assert_eq!(entries.len(), 3);
             assert!(entries[0].body.contains("Event1"));
             assert!(entries[1].body.contains("Event2"));
@@ -726,12 +726,10 @@ mod tests {
 
         #[tokio::test]
         async fn test_run_once_multiline_entry() -> TestResult {
-            // Date-prefixed UCTL = multi-line; the JSON line is accumulated as
-            // a continuation until the next header arrives.
             let f = temp_log(
                 "[UnityCrossThreadLogger]1/1/2025 Event1\n\
-                 {\"key\": \"value\"}\n\
-                 [UnityCrossThreadLogger]1/1/2025 Event2\n",
+                 {\"key\": \"value\"}\n\n\
+                 [UnityCrossThreadLogger]1/1/2025 Event2\n\n",
             )?;
             let mut tailer = FileTailer::open_from_start(f.path()).await?;
             let entries = tailer.run_once().await?;
@@ -743,8 +741,8 @@ mod tests {
         #[tokio::test]
         async fn test_run_once_works_with_open_from_start() -> TestResult {
             let f = temp_log(
-                "[UnityCrossThreadLogger] Event1\n\
-                 [UnityCrossThreadLogger] Event2\n",
+                "[UnityCrossThreadLogger] Event1\n\n\
+                 [UnityCrossThreadLogger] Event2\n\n",
             )?;
             let mut tailer = FileTailer::open_from_start(f.path()).await?;
             let entries = tailer.run_once().await?;
@@ -754,9 +752,9 @@ mod tests {
 
         #[tokio::test]
         async fn test_run_once_handles_partial_last_line() -> TestResult {
-            // File with no trailing newline on the last entry.
+            // File with no trailing newline on the last entry, but preceded by a blank line.
             let f = temp_log(
-                "[UnityCrossThreadLogger] Event1\n\
+                "[UnityCrossThreadLogger] Event1\n\n\
                  [UnityCrossThreadLogger] Event2",
             )?;
             let mut tailer = FileTailer::open_from_start(f.path()).await?;
@@ -786,16 +784,21 @@ mod tests {
         async fn test_poll_reads_new_data() -> TestResult {
             let mut f = temp_log("")?;
             let mut tailer = FileTailer::open(f.path()).await?;
+            tailer.set_poll_interval_ms(10);
 
-            // Append new content after opening. Date-prefixed = multi-line.
-            writeln!(f, "[UnityCrossThreadLogger]1/1/2025 Event1")?;
-            writeln!(f, "[UnityCrossThreadLogger]1/1/2025 Event2")?;
+            // Append new content after opening.
+            writeln!(f, "[UnityCrossThreadLogger]1/1/2025 Event1\n")?;
+            writeln!(f, "[UnityCrossThreadLogger]1/1/2025 Event2\n")?;
             f.flush()?;
 
+            // Give it a moment to poll.
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
             let entries = tailer.poll().await?;
-            // Second header flushes first entry.
-            assert_eq!(entries.len(), 1);
+            // Both entries flushed by their blank lines.
+            assert_eq!(entries.len(), 2);
             assert!(entries[0].body.contains("Event1"));
+            assert!(entries[1].body.contains("Event2"));
             Ok(())
         }
 
@@ -841,16 +844,19 @@ mod tests {
             let mut f = temp_log("")?;
             let mut tailer = FileTailer::open(f.path()).await?;
 
-            // Date-prefixed UCTL = multi-line, so the JSON line is accumulated.
+            // Structured entries are terminated by a blank line.
             writeln!(f, "[UnityCrossThreadLogger]1/1/2025 Event1")?;
             writeln!(f, "{{\"key\": \"value\"}}")?;
+            writeln!(f, "")?; // Blank line triggers flush
             writeln!(f, "[UnityCrossThreadLogger]1/1/2025 Event2")?;
+            writeln!(f, "")?; // Blank line triggers flush
             f.flush()?;
 
             let entries = tailer.poll().await?;
-            assert_eq!(entries.len(), 1);
+            assert_eq!(entries.len(), 2);
             assert!(entries[0].body.contains("Event1"));
             assert!(entries[0].body.contains("{\"key\": \"value\"}"));
+            assert!(entries[1].body.contains("Event2"));
             Ok(())
         }
 
@@ -859,14 +865,14 @@ mod tests {
             let mut f = temp_log("")?;
             let mut tailer = FileTailer::open(f.path()).await?;
 
-            // First write — one multi-line header, no flush yet.
+            // First write — header only, no flush yet.
             writeln!(f, "[UnityCrossThreadLogger]1/1/2025 Event1")?;
             f.flush()?;
             let entries1 = tailer.poll().await?;
             assert!(entries1.is_empty());
 
-            // Second write — new header flushes previous entry.
-            writeln!(f, "[Client GRE] Event2")?;
+            // Second write — blank line flushes previous entry.
+            writeln!(f)?;
             f.flush()?;
             let entries2 = tailer.poll().await?;
             assert_eq!(entries2.len(), 1);
@@ -880,15 +886,15 @@ mod tests {
             let mut f = temp_log("")?;
             let mut tailer = FileTailer::open(f.path()).await?;
 
-            // Write a line without a trailing newline (multi-line header).
+            // Write a line without a trailing newline.
             write!(f, "[UnityCrossThreadLogger]1/1/2025 Partial")?;
             f.flush()?;
             let entries1 = tailer.poll().await?;
             assert!(entries1.is_empty());
 
-            // Complete the line and add another header.
+            // Complete the line and add a blank line to flush.
             writeln!(f)?; // Finish the partial line.
-            writeln!(f, "[UnityCrossThreadLogger]1/1/2025 Next")?;
+            writeln!(f)?; // Blank line.
             f.flush()?;
             let entries2 = tailer.poll().await?;
             assert_eq!(entries2.len(), 1);
@@ -902,11 +908,10 @@ mod tests {
             let mut f = temp_log("")?;
             let mut tailer = FileTailer::open(f.path()).await?;
 
-            // Write content with CRLF line endings (multi-line headers).
+            // Write content with CRLF line endings and a blank line.
             write!(
                 f,
-                "[UnityCrossThreadLogger]1/1/2025 Event1\r\n\
-                 [UnityCrossThreadLogger]1/1/2025 Event2\r\n"
+                "[UnityCrossThreadLogger]1/1/2025 Event1\r\n\r\n"
             )?;
             f.flush()?;
 
@@ -923,19 +928,17 @@ mod tests {
             let mut f = temp_log("")?;
             let mut tailer = FileTailer::open(f.path()).await?;
 
-            // Write and poll first batch (multi-line headers).
-            writeln!(f, "[UnityCrossThreadLogger]1/1/2025 Event1")?;
-            writeln!(f, "[UnityCrossThreadLogger]1/1/2025 Event2")?;
+            // Write and poll first entry.
+            writeln!(f, "[UnityCrossThreadLogger]1/1/2025 Event1\n")?;
             f.flush()?;
             let entries1 = tailer.poll().await?;
             assert_eq!(entries1.len(), 1);
 
-            // Write and poll second batch — should only see new data.
-            writeln!(f, "[UnityCrossThreadLogger]1/1/2025 Event3")?;
+            // Write and poll second entry — should only see new data.
+            writeln!(f, "[UnityCrossThreadLogger]1/1/2025 Event2\n")?;
             f.flush()?;
             let entries2 = tailer.poll().await?;
             assert_eq!(entries2.len(), 1);
-            // Should be Event2, not Event1 (Event2 flushed by Event3 header).
             assert!(entries2[0].body.contains("Event2"));
 
             Ok(())
@@ -990,29 +993,26 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn test_flush_partial_line_is_header_returns_both_entries() -> TestResult {
+        async fn test_flush_partial_line_is_header_returns_entry() -> TestResult {
             let mut f = temp_log("")?;
             let mut tailer = FileTailer::open(f.path()).await?;
 
-            // Write a complete (multi-line) header line followed by a
-            // partial line that is itself a header (no trailing newline).
+            // Write a header followed by another header on a partial line.
+            // Without a blank line, they will be merged into a single LogEntry on flush.
             writeln!(f, "[UnityCrossThreadLogger]1/1/2025 First")?;
             write!(f, "[Client GRE] Second")?;
             f.flush()?;
             tailer.poll().await?;
 
-            // flush() should return both: the "First" entry flushed by the
-            // "[Client GRE]" header, and the "[Client GRE] Second" entry
-            // drained from the line buffer.
             let entries = tailer.flush();
             assert_eq!(
                 entries.len(),
-                2,
-                "expected 2 entries, got {}: {entries:?}",
+                1,
+                "expected 1 merged entry since no blank line was provided, got {}",
                 entries.len()
             );
             assert!(entries[0].body.contains("First"));
-            assert!(entries[1].body.contains("Second"));
+            assert!(entries[0].body.contains("Second"));
             Ok(())
         }
     }
@@ -1065,8 +1065,7 @@ mod tests {
             let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
             // Write data that will produce an entry.
-            writeln!(f, "[UnityCrossThreadLogger] Event1")?;
-            writeln!(f, "[UnityCrossThreadLogger] Event2")?;
+            writeln!(f, "[UnityCrossThreadLogger] Event1\n")?;
             f.flush()?;
 
             // Run the tailer in a background task.
@@ -1117,8 +1116,7 @@ mod tests {
             let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
             // Write data to trigger a send.
-            writeln!(f, "[UnityCrossThreadLogger] Event1")?;
-            writeln!(f, "[UnityCrossThreadLogger] Event2")?;
+            writeln!(f, "[UnityCrossThreadLogger] Event1\n")?;
             f.flush()?;
 
             // Drop the receiver before starting.
@@ -1143,18 +1141,13 @@ mod tests {
 
             let handle = tokio::spawn(async move { tailer.run(entry_tx, shutdown_rx).await });
 
-            // Write entries over time. Sleeps are generous (50 ms) to avoid
-            // flakiness on slow CI runners — the tailer polls at 10 ms, so
-            // 50 ms is ~5 poll cycles per write.
+            // Write entries over time, each followed by a blank line.
             for i in 0..3 {
-                writeln!(f, "[UnityCrossThreadLogger] Event{i}")?;
+                writeln!(f, "[UnityCrossThreadLogger] Event{i}\n")?;
                 f.flush()?;
                 tokio::time::sleep(std::time::Duration::from_millis(50)).await;
             }
-            // Write a final header to flush the last entry.
-            writeln!(f, "[UnityCrossThreadLogger] Final")?;
-            f.flush()?;
-            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
             // Shutdown and collect remaining.
             let _ = shutdown_tx.send(true);
@@ -1167,11 +1160,11 @@ mod tests {
                 received.push(entry);
             }
 
-            // We should have received at least 2 entries (Event0, Event1, Event2
-            // flushed by subsequent headers, plus possibly Final from shutdown flush).
-            assert!(
-                received.len() >= 2,
-                "expected at least 2 entries, got {}",
+            // We should have received all 3 entries.
+            assert_eq!(
+                received.len(),
+                3,
+                "expected exactly 3 entries, got {}",
                 received.len()
             );
             Ok(())
@@ -1241,8 +1234,8 @@ mod tests {
         #[tokio::test]
         async fn test_rotation_resets_offset_to_zero_before_reading() -> TestResult {
             let f = temp_log(
-                "[UnityCrossThreadLogger]1/1/2025 OldEvent\n\
-                 [UnityCrossThreadLogger]1/1/2025 OldEvent2\n",
+                "[UnityCrossThreadLogger]1/1/2025 OldEvent\n\n\
+                 [UnityCrossThreadLogger]1/1/2025 OldEvent2\n\n",
             )?;
             let path = f.path().to_path_buf();
 
@@ -1250,19 +1243,20 @@ mod tests {
             // Simulate old session with a large offset.
             tailer.offset = 50_000;
 
-            // Replace with new content (multi-line headers).
+            // Replace with new content.
             replace_file_at_path(
                 &path,
-                "[UnityCrossThreadLogger]1/1/2025 NewA\n\
-                 [UnityCrossThreadLogger]1/1/2025 NewB\n",
+                "[UnityCrossThreadLogger]1/1/2025 NewA\n\n\
+                 [UnityCrossThreadLogger]1/1/2025 NewB\n\n",
             )?;
 
             // Poll detects rotation, re-opens, reads from start.
             let entries = tailer.poll().await?;
             assert!(tailer.take_rotation().is_some());
-            // First header doesn't flush, second header flushes first.
-            assert_eq!(entries.len(), 1);
+            // Both new entries flushed by their blank lines.
+            assert_eq!(entries.len(), 2);
             assert!(entries[0].body.contains("NewA"));
+            assert!(entries[1].body.contains("NewB"));
             Ok(())
         }
 
@@ -1285,15 +1279,14 @@ mod tests {
             tailer.offset = 50_000;
             replace_file_at_path(
                 &path,
-                "[UnityCrossThreadLogger]1/1/2025 Fresh\n\
-                 [UnityCrossThreadLogger]1/1/2025 Fresh2\n",
+                "[UnityCrossThreadLogger]1/1/2025 Fresh\n\n\
+                 [UnityCrossThreadLogger]1/1/2025 Fresh2\n\n",
             )?;
 
             let entries = tailer.poll().await?;
             assert!(tailer.take_rotation().is_some());
             // The old partial line should NOT contaminate new entries.
-            // "Fresh" should be a clean entry.
-            assert_eq!(entries.len(), 1);
+            assert_eq!(entries.len(), 2);
             assert!(entries[0].body.contains("Fresh"));
             assert!(!entries[0].body.contains("Partial"));
             Ok(())

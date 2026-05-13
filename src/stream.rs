@@ -355,9 +355,9 @@ mod tests {
         let content = "[UnityCrossThreadLogger]Updated account. \
                         DisplayName:TestPlayer, \
                         AccountID:abc123, \
-                        Token:sometoken\n\
-                        [UnityCrossThreadLogger]2/25/2026 12:00:00 PM\n\
-                        some filler\n";
+                        Token:sometoken\n\n\
+                        [UnityCrossThreadLogger]2/25/2026 12:00:00 PM\n\n\
+                        some filler\n\n";
         let f = temp_log(content)?;
 
         let (stream, mut sub) = MtgaEventStream::start(f.path()).await?;
@@ -388,8 +388,8 @@ mod tests {
             }
         });
         let content = format!(
-            "[UnityCrossThreadLogger]2/25/2026 12:00:00 PM\n{payload}\n\
-             [UnityCrossThreadLogger]2/25/2026 12:00:01 PM\nfiller\n"
+            "[UnityCrossThreadLogger]2/25/2026 12:00:00 PM\n{payload}\n\n\
+             [UnityCrossThreadLogger]2/25/2026 12:00:01 PM\nfiller\n\n"
         );
         let f = temp_log(&content)?;
 
@@ -421,9 +421,9 @@ mod tests {
             "[UnityCrossThreadLogger]Updated account. \
              DisplayName:TestPlayer, \
              AccountID:abc123, \
-             Token:sometoken\n\
-             [UnityCrossThreadLogger]2/25/2026 12:00:00 PM\n{gs_payload}\n\
-             [UnityCrossThreadLogger]2/25/2026 12:00:01 PM\nfiller\n"
+             Token:sometoken\n\n\
+             [UnityCrossThreadLogger]2/25/2026 12:00:00 PM\n{gs_payload}\n\n\
+             [UnityCrossThreadLogger]2/25/2026 12:00:01 PM\nfiller\n\n"
         );
         let f = temp_log(&content)?;
 
@@ -466,9 +466,9 @@ mod tests {
         let content = "[UnityCrossThreadLogger]Updated account. \
                         DisplayName:TestPlayer, \
                         AccountID:abc123, \
-                        Token:sometoken\n\
-                        [UnityCrossThreadLogger]2/25/2026 12:00:00 PM\n\
-                        some filler\n";
+                        Token:sometoken\n\n\
+                        [UnityCrossThreadLogger]2/25/2026 12:00:00 PM\n\n\
+                        some filler\n\n";
         let f = temp_log(content)?;
 
         let (_stream, mut sub) = MtgaEventStream::start_once(f.path()).await?;
@@ -487,9 +487,9 @@ mod tests {
         let content = "[UnityCrossThreadLogger]Updated account. \
                         DisplayName:TestPlayer, \
                         AccountID:abc123, \
-                        Token:sometoken\n\
-                        [UnityCrossThreadLogger]2/25/2026 12:00:00 PM\n\
-                        some filler\n";
+                        Token:sometoken\n\n\
+                        [UnityCrossThreadLogger]2/25/2026 12:00:00 PM\n\n\
+                        some filler\n\n";
         let f = temp_log(content)?;
 
         let (_stream, mut sub) = MtgaEventStream::start_once(f.path()).await?;
@@ -564,9 +564,9 @@ mod tests {
         let initial = "[UnityCrossThreadLogger]Updated account. \
                         DisplayName:TestPlayer, \
                         AccountID:abc123, \
-                        Token:sometoken\n\
-                        [UnityCrossThreadLogger]2/25/2026 12:00:00 PM\n\
-                        some filler\n";
+                        Token:sometoken\n\n\
+                        [UnityCrossThreadLogger]2/25/2026 12:00:00 PM\n\n\
+                        some filler\n\n";
         let f = temp_log(initial)?;
         let path = f.path().to_path_buf();
 
@@ -640,13 +640,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_start_once_detailed_logs_enabled() -> TestResult {
-        let content = "DETAILED LOGS: ENABLED\n\
+        let content = "DETAILED LOGS: ENABLED\n\n\
                         [UnityCrossThreadLogger]Updated account. \
                         DisplayName:TestPlayer, \
                         AccountID:abc123, \
-                        Token:sometoken\n\
-                        [UnityCrossThreadLogger]2/25/2026 12:00:00 PM\n\
-                        some filler\n";
+                        Token:sometoken\n\n\
+                        [UnityCrossThreadLogger]2/25/2026 12:00:00 PM\n\n\
+                        some filler\n\n";
         let f = temp_log(content)?;
 
         let (_stream, mut sub) = MtgaEventStream::start_once(f.path()).await?;
@@ -684,7 +684,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_start_once_detailed_logs_disabled() -> TestResult {
-        let content = "DETAILED LOGS: DISABLED\n\
+        let content = "DETAILED LOGS: DISABLED\n\n\
                         some unstructured line\n\
                         another unstructured line\n";
         let f = temp_log(content)?;

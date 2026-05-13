@@ -30,8 +30,9 @@ async fn test_stream_session_event_from_log_file() -> TestResult {
     let content = "[UnityCrossThreadLogger]Updated account. \
                     DisplayName:TestPlayer, \
                     AccountID:abc123, \
-                    Token:sometoken\n\
-                    [UnityCrossThreadLogger]2/25/2026 12:00:00 PM\nfiller\n";
+                    Token:sometoken\n\n\
+                    [UnityCrossThreadLogger]2/25/2026 12:00:00 PM\n\n\
+                    filler\n\n";
     let f = temp_log(content)?;
 
     let (stream, mut sub) = MtgaEventStream::start(f.path()).await?;
@@ -62,8 +63,8 @@ async fn test_stream_game_state_event_from_log_file() -> TestResult {
         }
     });
     let content = format!(
-        "[UnityCrossThreadLogger]2/25/2026 12:00:00 PM\n{payload}\n\
-         [UnityCrossThreadLogger]2/25/2026 12:00:01 PM\nfiller\n"
+        "[UnityCrossThreadLogger]2/25/2026 12:00:00 PM\n{payload}\n\n\
+         [UnityCrossThreadLogger]2/25/2026 12:00:01 PM\nfiller\n\n"
     );
     let f = temp_log(&content)?;
 
@@ -99,9 +100,9 @@ async fn test_stream_multiple_event_types_in_order() -> TestResult {
         "[UnityCrossThreadLogger]Updated account. \
          DisplayName:TestPlayer, \
          AccountID:abc123, \
-         Token:sometoken\n\
-         [UnityCrossThreadLogger]2/25/2026 12:00:00 PM\n{gs_payload}\n\
-         [UnityCrossThreadLogger]2/25/2026 12:00:01 PM\nfiller\n"
+         Token:sometoken\n\n\
+         [UnityCrossThreadLogger]2/25/2026 12:00:00 PM\n{gs_payload}\n\n\
+         [UnityCrossThreadLogger]2/25/2026 12:00:01 PM\nfiller\n\n"
     );
     let f = temp_log(&content)?;
 
@@ -146,8 +147,8 @@ async fn test_stream_match_state_event() -> TestResult {
         }
     });
     let content = format!(
-        "[UnityCrossThreadLogger]2/25/2026 12:00:00 PM\n{match_payload}\n\
-         [UnityCrossThreadLogger]2/25/2026 12:00:01 PM\nfiller\n"
+        "[UnityCrossThreadLogger]2/25/2026 12:00:00 PM\n{match_payload}\n\n\
+         [UnityCrossThreadLogger]2/25/2026 12:00:01 PM\nfiller\n\n"
     );
     let f = temp_log(&content)?;
 
@@ -174,8 +175,8 @@ async fn test_stream_rank_event() -> TestResult {
     });
     let content = format!(
         "[UnityCrossThreadLogger]2/25/2026 12:00:00 PM\n\
-         <== RankGetCombinedRankInfo(abc-123)\n{rank_payload}\n\
-         [UnityCrossThreadLogger]2/25/2026 12:00:01 PM\nfiller\n"
+         <== RankGetCombinedRankInfo(abc-123)\n{rank_payload}\n\n\
+         [UnityCrossThreadLogger]2/25/2026 12:00:01 PM\nfiller\n\n"
     );
     let f = temp_log(&content)?;
 
@@ -209,12 +210,12 @@ async fn test_stream_subscriber_ends_after_shutdown() -> TestResult {
 
 #[tokio::test]
 async fn test_stream_detailed_logs_enabled_event() -> TestResult {
-    let content = "DETAILED LOGS: ENABLED\n\
+    let content = "DETAILED LOGS: ENABLED\n\n\
                     [UnityCrossThreadLogger]Updated account. \
                     DisplayName:TestPlayer, \
                     AccountID:abc123, \
-                    Token:sometoken\n\
-                    [UnityCrossThreadLogger]2/25/2026 12:00:00 PM\nfiller\n";
+                    Token:sometoken\n\n\
+                    [UnityCrossThreadLogger]2/25/2026 12:00:00 PM\n\nfiller\n\n";
     let f = temp_log(content)?;
 
     let (stream, mut sub) = MtgaEventStream::start(f.path()).await?;
@@ -236,8 +237,8 @@ async fn test_stream_detailed_logs_enabled_event() -> TestResult {
 
 #[tokio::test]
 async fn test_stream_detailed_logs_disabled_event() -> TestResult {
-    let content = "DETAILED LOGS: DISABLED\n\
-                    some unstructured line\n";
+    let content = "DETAILED LOGS: DISABLED\n\n\
+                    some unstructured line\n\n";
     let f = temp_log(content)?;
 
     let (stream, mut sub) = MtgaEventStream::start(f.path()).await?;
