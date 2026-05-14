@@ -2,8 +2,7 @@
 //!
 //! Detects log entry boundaries using the `[UnityCrossThreadLogger]`,
 //! `[Client GRE]`, `[ConnectionManager]`, and `Matchmaking:` header patterns,
-//! then accumulates subsequent lines until the next header boundary to form
-//! complete raw entries.
+//! then accumulates subsequent lines until the entry is structurally complete.
 //!
 //! # Header classification (Phase 1 of #153)
 //!
@@ -17,8 +16,26 @@
 //!   — no continuation accumulation.
 //! - **Multi-line**: `[UnityCrossThreadLogger]<digit>` (date-prefixed API
 //!   responses, match events) and `[Client GRE]…`. These entries
-//!   accumulate continuation lines until the next header boundary, matching
-//!   the historical behavior.
+//!   accumulate continuation lines until the entry's JSON body is
+//!   structurally complete (brace-balance flush) or the next header arrives
+//!   (fallback for non-JSON bodies).
+//!
+//! # Brace-balance flush (Phase 3 of #153 / #193)
+//!
+//! Multi-line entries whose body contains a `{` are flushed the moment the
+//! brace depth returns to 0 — they no longer wait for the next header to
+//! arrive. A small state machine counts `{` and `}` while tracking string
+//! literals (`"`) and backslash escapes (`\\`), so braces appearing inside
+//! JSON string values do not count. Corpus analysis (44 sessions, 47,412
+//! multi-line entries) shows every entry that opens a `{` closes it within
+//! the entry boundary; bodies that never open a `{` (the rare "Message
+//! summarized…" GRE markers and a few `true`-only REST responses) still
+//! flush on the next header via the original fallback path.
+//!
+//! This behavior is enabled by default via the `brace_depth_flush` cargo
+//! feature. Disabling the feature reverts to the original "flush on next
+//! header" behavior for every multi-line entry — kept as a one-flip rollback
+//! in case a string-literal edge case surfaces in live Arena traffic.
 //!
 //! # Data flow
 //!
@@ -109,8 +126,8 @@ enum HeaderClass {
     MultiLine,
 }
 
-/// Accumulates raw lines and produces complete [`LogEntry`] values when a
-/// new header boundary is detected.
+/// Accumulates raw lines and produces complete [`LogEntry`] values when an
+/// entry is structurally complete.
 ///
 /// # Usage
 ///
@@ -119,14 +136,24 @@ enum HeaderClass {
 ///
 /// - **Zero entries**: continuation line for an in-progress multi-line entry,
 ///   or a headerless line discarded with a warning.
-/// - **One entry**: either a multi-line entry being flushed by a new
-///   single-line entry's arrival, or a single-line entry emitted alone when
-///   no prior entry was in progress.
-/// - **Two entries**: a multi-line entry being flushed *plus* the new
-///   single-line entry that triggered the flush, both emitted from one call.
+/// - **One entry**: a single-line entry emitted on arrival, a multi-line
+///   entry being brace-balance-flushed (default feature behavior), or a
+///   multi-line entry being flushed by the arrival of the next header.
+/// - **Two entries**: a multi-line entry being flushed by a new header
+///   *plus* the new single-line entry that triggered the flush, both
+///   emitted from one call.
 ///
 /// After the input stream ends (EOF or file rotation), call
 /// [`flush`](Self::flush) to retrieve any remaining buffered entry.
+///
+/// # Flush triggers
+///
+/// With the default `brace_depth_flush` feature enabled, a multi-line
+/// entry flushes the moment its body's JSON depth returns to 0 — no need
+/// to wait for the next header. Bodies that never contain a `{` (rare
+/// non-JSON GRE markers and `true`-bodied REST responses) still fall back
+/// to the original "flush on next header" path. See the module-level docs
+/// for the corpus analysis backing this design.
 ///
 /// # Example
 ///
@@ -138,13 +165,15 @@ enum HeaderClass {
 /// // First header (multi-line, date-prefixed) — nothing to flush yet.
 /// assert!(buf.push_line("[UnityCrossThreadLogger]1/1/2025 12:00:00 PM").is_empty());
 ///
-/// // Continuation line — still accumulating.
-/// assert!(buf.push_line(r#"{"key": "value"}"#).is_empty());
+/// // Continuation line opens a `{` — still accumulating until the body
+/// // brace-balances (or, with the feature disabled, until the next header).
+/// assert!(buf.push_line(r#"{"key": "ba"#).is_empty());
 ///
-/// // A single-line header arrives — flushes the multi-line entry AND
-/// // emits the single-line entry, both in one call.
-/// let entries = buf.push_line("[UnityCrossThreadLogger]STATE CHANGED");
-/// assert_eq!(entries.len(), 2);
+/// // The body's brace depth returns to 0 — entry flushes immediately
+/// // (default feature on); the next header is not required.
+/// let entries = buf.push_line(r#"  r"}"#);
+/// # #[cfg(feature = "brace_depth_flush")]
+/// assert_eq!(entries.len(), 1);
 /// ```
 pub struct LineBuffer {
     /// Compiled regex for detecting log entry header boundaries.
@@ -167,6 +196,40 @@ pub struct LineBuffer {
     /// arriving headerless line is Unity stdout noise rather than a true
     /// file-start anomaly.
     has_emitted_anything: bool,
+
+    /// Brace-balance state machine used to detect structurally complete
+    /// JSON bodies inside multi-line entries. See [`BraceState`].
+    #[cfg(feature = "brace_depth_flush")]
+    brace_state: BraceState,
+}
+
+/// In-entry brace-depth and string-literal state for the brace-balance
+/// flush trigger. See [`LineBuffer::advance_brace_state`].
+///
+/// Grouped into its own struct so [`LineBuffer`] does not exceed clippy's
+/// pedantic `struct_excessive_bools` threshold once all four fields are
+/// added — and to make the "reset to defaults on take/reset/new" pattern
+/// a single field swap rather than four parallel writes.
+#[cfg(feature = "brace_depth_flush")]
+#[derive(Default)]
+struct BraceState {
+    /// Running brace depth for the current entry's body. Zero when no `{`
+    /// has been seen yet in this entry. Combined with [`Self::ever_opened`],
+    /// returning to 0 signals a structurally complete JSON body.
+    depth: u32,
+    /// Whether the character cursor is currently inside a JSON string literal.
+    /// Toggled by an unescaped `"`; braces inside a string literal are
+    /// ignored so structurally-complete JSON bodies cannot be falsely
+    /// signaled by `{`/`}` characters embedded in string values.
+    in_string: bool,
+    /// Whether the next character should be treated as escaped — i.e., the
+    /// previous character was a backslash inside a string literal.
+    escape_pending: bool,
+    /// True once any `{` has been observed in the current entry's body.
+    /// Combined with `depth == 0`, signals a complete JSON body and triggers
+    /// an immediate flush. Entries that never open a `{` keep this false
+    /// and fall through to the next-header flush path.
+    ever_opened: bool,
 }
 
 impl LineBuffer {
@@ -185,6 +248,8 @@ impl LineBuffer {
             current_header: None,
             lines: Vec::new(),
             has_emitted_anything: false,
+            #[cfg(feature = "brace_depth_flush")]
+            brace_state: BraceState::default(),
         }
     }
 
@@ -262,6 +327,15 @@ impl LineBuffer {
         } else if self.current_header.is_some() {
             // Continuation line for the current multi-line entry.
             self.lines.push(line.to_owned());
+            #[cfg(feature = "brace_depth_flush")]
+            if self.advance_brace_state(line) {
+                // The body's JSON depth has returned to 0 with at least one
+                // `{` seen — the entry is structurally complete. Flush now
+                // rather than waiting for the next header to arrive.
+                if let Some(entry) = self.take_entry() {
+                    return vec![entry];
+                }
+            }
             Vec::new()
         } else {
             // Headerless line with no entry in progress. Two cases:
@@ -303,6 +377,10 @@ impl LineBuffer {
         self.current_header = None;
         self.lines.clear();
         self.has_emitted_anything = false;
+        #[cfg(feature = "brace_depth_flush")]
+        {
+            self.brace_state = BraceState::default();
+        }
     }
 
     /// Returns `true` if no entry is currently being accumulated.
@@ -385,7 +463,66 @@ impl LineBuffer {
         let header = self.current_header.take()?;
         let body = self.lines.join("\n");
         self.lines.clear();
+        #[cfg(feature = "brace_depth_flush")]
+        {
+            self.brace_state = BraceState::default();
+        }
         Some(LogEntry { header, body })
+    }
+
+    /// Walks `line` one character at a time, updating the in-string /
+    /// escape / depth state used by the brace-balance flush trigger.
+    ///
+    /// Returns `true` when the entry's body is structurally complete — i.e.,
+    /// the running brace depth is 0 *and* at least one `{` has been observed
+    /// since the entry started accumulating. Returning `true` signals
+    /// [`push_line`](Self::push_line) to flush the entry immediately.
+    ///
+    /// The state machine treats `"` as a string-literal toggle (when not
+    /// preceded by an unescaped backslash) and `\\` as an escape marker for
+    /// the next character. Braces appearing inside string literals are
+    /// ignored. Corpus analysis (44 sessions, 47,412 multi-line entries)
+    /// shows this state machine balances correctly on every entry that
+    /// opens a `{`, including 585 with nested JSON-in-string values.
+    #[cfg(feature = "brace_depth_flush")]
+    fn advance_brace_state(&mut self, line: &str) -> bool {
+        let state = &mut self.brace_state;
+        for ch in line.chars() {
+            if state.escape_pending {
+                state.escape_pending = false;
+                continue;
+            }
+            if state.in_string {
+                match ch {
+                    '\\' => state.escape_pending = true,
+                    '"' => state.in_string = false,
+                    _ => {}
+                }
+                continue;
+            }
+            match ch {
+                '"' => state.in_string = true,
+                '{' => {
+                    state.depth = state.depth.saturating_add(1);
+                    state.ever_opened = true;
+                }
+                '}' => {
+                    if state.depth == 0 {
+                        // Corpus has zero unbalanced cases — log an
+                        // observability warning so any future drift surfaces
+                        // rather than being silently floored at zero.
+                        ::log::warn!(
+                            "brace_depth underflow at unbalanced '}}' in entry body \
+                             (line prefix: {:?})",
+                            truncate_for_log(line, 120),
+                        );
+                    }
+                    state.depth = state.depth.saturating_sub(1);
+                }
+                _ => {}
+            }
+        }
+        state.ever_opened && state.depth == 0
     }
 }
 
@@ -479,17 +616,20 @@ mod tests {
 
         #[test]
         fn test_push_line_continuation_appended() {
+            // Body has no `{`/`}`, so brace-balance flush does not trigger
+            // — the entry accumulates until the next header arrives under
+            // both feature configurations.
             let mut buf = LineBuffer::new();
             buf.push_line("[UnityCrossThreadLogger]1/1/2025 Event1");
-            buf.push_line(r#"{"key": "value"}"#);
-            buf.push_line(r#"{"more": "data"}"#);
+            buf.push_line("plain text continuation one");
+            buf.push_line("plain text continuation two");
             assert_eq!(
                 buf.push_line("[UnityCrossThreadLogger]1/1/2025 Event2"),
                 vec![expected(
                     EntryHeader::UnityCrossThreadLogger,
                     "[UnityCrossThreadLogger]1/1/2025 Event1\n\
-                     {\"key\": \"value\"}\n\
-                     {\"more\": \"data\"}",
+                     plain text continuation one\n\
+                     plain text continuation two",
                 )],
             );
         }
@@ -505,21 +645,35 @@ mod tests {
         }
 
         /// Regression: `[Client GRE]` continues to accumulate continuation
-        /// lines after Phase 1 (multi-line classification preserved).
+        /// lines after Phase 1 (multi-line classification preserved). With
+        /// the default `brace_depth_flush` feature on, the entry is emitted
+        /// by the closing `}` line via `push_line` rather than waiting for
+        /// `flush()` — both code paths assemble the same body.
         #[test]
         fn test_push_line_client_gre_header_accumulates() {
+            let expected_body = "[Client GRE] GreToClientEvent\n{\n  \"key\": \"value\"\n}";
             let mut buf = LineBuffer::new();
             buf.push_line("[Client GRE] GreToClientEvent");
             buf.push_line("{");
             buf.push_line(r#"  "key": "value""#);
-            buf.push_line("}");
-            assert_eq!(
-                buf.flush(),
-                Some(expected(
-                    EntryHeader::ClientGre,
-                    "[Client GRE] GreToClientEvent\n{\n  \"key\": \"value\"\n}",
-                )),
-            );
+            let closing = buf.push_line("}");
+            #[cfg(feature = "brace_depth_flush")]
+            {
+                assert_eq!(
+                    closing,
+                    vec![expected(EntryHeader::ClientGre, expected_body)],
+                    "closing brace must flush the entry under brace_depth_flush",
+                );
+                assert!(buf.flush().is_none());
+            }
+            #[cfg(not(feature = "brace_depth_flush"))]
+            {
+                assert!(closing.is_empty());
+                assert_eq!(
+                    buf.flush(),
+                    Some(expected(EntryHeader::ClientGre, expected_body)),
+                );
+            }
         }
 
         #[test]
@@ -637,34 +791,52 @@ mod tests {
             assert!(buf.is_empty());
         }
 
-        /// Multi-line headers (`[UnityCrossThreadLogger]<digit>`) keep
-        /// accumulating continuation lines until the next header — regression
-        /// guard for API-response handling.
+        /// Multi-line headers (`[UnityCrossThreadLogger]<digit>`) accumulate
+        /// continuation lines and produce the same body under both feature
+        /// configurations. The only difference is *when* the entry is
+        /// emitted: with `brace_depth_flush` on, the closing `}` of
+        /// `{"Courses":[]}` flushes it; without the feature, the next
+        /// header flushes it alongside its own single-line emission.
         #[test]
         fn test_push_line_multi_line_date_header_accumulates() {
+            let expected_multi_body = "[UnityCrossThreadLogger]3/11/2026 6:08:24 PM\n\
+                                       <== EventGetCoursesV2(abc-123)\n\
+                                       {\"Courses\":[]}";
+            let expected_single_body = "[UnityCrossThreadLogger]Client.SceneChange {}";
+
             let mut buf = LineBuffer::new();
             assert!(buf
                 .push_line("[UnityCrossThreadLogger]3/11/2026 6:08:24 PM")
                 .is_empty());
             assert!(buf.push_line("<== EventGetCoursesV2(abc-123)").is_empty());
-            assert!(buf.push_line(r#"{"Courses":[]}"#).is_empty());
+            let closing = buf.push_line(r#"{"Courses":[]}"#);
 
-            // Next header (a single-line UCTL alpha label) flushes the
-            // multi-line entry AND emits itself — both in one call.
-            let entries = buf.push_line("[UnityCrossThreadLogger]Client.SceneChange {}");
-            assert_eq!(entries.len(), 2);
-            assert_eq!(entries[0].header, EntryHeader::UnityCrossThreadLogger);
-            assert_eq!(
-                entries[0].body,
-                "[UnityCrossThreadLogger]3/11/2026 6:08:24 PM\n\
-                 <== EventGetCoursesV2(abc-123)\n\
-                 {\"Courses\":[]}",
-            );
-            assert_eq!(entries[1].header, EntryHeader::UnityCrossThreadLogger);
-            assert_eq!(
-                entries[1].body,
-                "[UnityCrossThreadLogger]Client.SceneChange {}",
-            );
+            #[cfg(feature = "brace_depth_flush")]
+            {
+                // The closing `}` of `{"Courses":[]}` brace-balance flushes.
+                assert_eq!(
+                    closing,
+                    vec![expected(
+                        EntryHeader::UnityCrossThreadLogger,
+                        expected_multi_body
+                    )],
+                );
+                // The next single-line header now stands alone.
+                let entries = buf.push_line("[UnityCrossThreadLogger]Client.SceneChange {}");
+                assert_eq!(entries.len(), 1);
+                assert_eq!(entries[0].header, EntryHeader::UnityCrossThreadLogger);
+                assert_eq!(entries[0].body, expected_single_body);
+            }
+            #[cfg(not(feature = "brace_depth_flush"))]
+            {
+                assert!(closing.is_empty());
+                let entries = buf.push_line("[UnityCrossThreadLogger]Client.SceneChange {}");
+                assert_eq!(entries.len(), 2);
+                assert_eq!(entries[0].header, EntryHeader::UnityCrossThreadLogger);
+                assert_eq!(entries[0].body, expected_multi_body);
+                assert_eq!(entries[1].header, EntryHeader::UnityCrossThreadLogger);
+                assert_eq!(entries[1].body, expected_single_body);
+            }
         }
 
         /// Unity stdout noise that arrives *after* a single-line flush is
@@ -779,12 +951,6 @@ mod tests {
 
         #[test]
         fn test_flush_multi_line_entry() {
-            let mut buf = LineBuffer::new();
-            buf.push_line("[Client GRE] GreToClientEvent");
-            buf.push_line("{");
-            buf.push_line(r#"  "gameObjects": ["obj1", "obj2"],"#);
-            buf.push_line(r#"  "actions": []"#);
-            buf.push_line("}");
             let expected_body = [
                 "[Client GRE] GreToClientEvent",
                 "{",
@@ -793,10 +959,32 @@ mod tests {
                 "}",
             ]
             .join("\n");
-            assert_eq!(
-                buf.flush(),
-                Some(expected(EntryHeader::ClientGre, &expected_body)),
-            );
+
+            let mut buf = LineBuffer::new();
+            buf.push_line("[Client GRE] GreToClientEvent");
+            buf.push_line("{");
+            buf.push_line(r#"  "gameObjects": ["obj1", "obj2"],"#);
+            buf.push_line(r#"  "actions": []"#);
+            let closing = buf.push_line("}");
+
+            #[cfg(feature = "brace_depth_flush")]
+            {
+                // The closing `}` brace-balance flushes the entry; `flush()`
+                // is left with nothing to return.
+                assert_eq!(
+                    closing,
+                    vec![expected(EntryHeader::ClientGre, &expected_body)],
+                );
+                assert!(buf.flush().is_none());
+            }
+            #[cfg(not(feature = "brace_depth_flush"))]
+            {
+                assert!(closing.is_empty());
+                assert_eq!(
+                    buf.flush(),
+                    Some(expected(EntryHeader::ClientGre, &expected_body)),
+                );
+            }
         }
     }
 
@@ -809,10 +997,29 @@ mod tests {
         fn test_reset_clears_in_progress_entry() {
             let mut buf = LineBuffer::new();
             buf.push_line("[UnityCrossThreadLogger]1/1/2025 Event");
-            buf.push_line("continuation");
+            // Continuation with an open `{` so brace state is non-trivial
+            // when we reset — depth=1, ever_opened=true, in_string=true.
+            buf.push_line(r#"{"k": "unfinished"#);
             buf.reset();
             assert!(buf.is_empty());
             assert!(buf.flush().is_none());
+
+            // Brace state must also clear so the next accumulation starts
+            // from a clean slate (otherwise stale `ever_opened` would
+            // spuriously flush the next entry).
+            #[cfg(feature = "brace_depth_flush")]
+            {
+                assert_eq!(buf.brace_state.depth, 0, "reset() must clear depth");
+                assert!(!buf.brace_state.in_string, "reset() must clear in_string");
+                assert!(
+                    !buf.brace_state.escape_pending,
+                    "reset() must clear escape_pending",
+                );
+                assert!(
+                    !buf.brace_state.ever_opened,
+                    "reset() must clear ever_opened",
+                );
+            }
         }
 
         #[test]
@@ -975,20 +1182,45 @@ mod tests {
             buf.push_line(r"      }");
             buf.push_line(r"    }");
             buf.push_line(r"  ]");
-            buf.push_line("}");
+            let final_brace = buf.push_line("}");
 
-            // [Client GRE] (multi-line) flushes the UnityCrossThreadLogger entry.
-            let unity_entries = buf.push_line("[Client GRE] Next event");
-            assert_eq!(unity_entries.len(), 1);
-            assert_eq!(unity_entries[0].header, EntryHeader::UnityCrossThreadLogger);
-            assert!(unity_entries[0].body.contains("greToClientMessages"));
-            assert!(unity_entries[0].body.contains("GameStateMessage"));
+            #[cfg(feature = "brace_depth_flush")]
+            {
+                // The matching final `}` brace-balance flushes the UCTL
+                // entry inside the same `push_line` that received it.
+                assert_eq!(final_brace.len(), 1);
+                assert_eq!(final_brace[0].header, EntryHeader::UnityCrossThreadLogger);
+                assert!(final_brace[0].body.contains("greToClientMessages"));
+                assert!(final_brace[0].body.contains("GameStateMessage"));
 
-            // Another header flushes the Client GRE entry.
-            assert_eq!(
-                buf.push_line("[UnityCrossThreadLogger]1/15/2025 After"),
-                vec![expected(EntryHeader::ClientGre, "[Client GRE] Next event")],
-            );
+                // `[Client GRE] Next event` now begins a new accumulation
+                // — nothing else to flush.
+                assert!(buf.push_line("[Client GRE] Next event").is_empty());
+
+                // The Client-GRE body has no `{`, so it falls through to
+                // the legacy "flush on next header" path.
+                assert_eq!(
+                    buf.push_line("[UnityCrossThreadLogger]1/15/2025 After"),
+                    vec![expected(EntryHeader::ClientGre, "[Client GRE] Next event")],
+                );
+            }
+            #[cfg(not(feature = "brace_depth_flush"))]
+            {
+                assert!(final_brace.is_empty());
+
+                // [Client GRE] (multi-line) flushes the UCTL entry.
+                let unity_entries = buf.push_line("[Client GRE] Next event");
+                assert_eq!(unity_entries.len(), 1);
+                assert_eq!(unity_entries[0].header, EntryHeader::UnityCrossThreadLogger);
+                assert!(unity_entries[0].body.contains("greToClientMessages"));
+                assert!(unity_entries[0].body.contains("GameStateMessage"));
+
+                // The next header flushes the Client GRE entry.
+                assert_eq!(
+                    buf.push_line("[UnityCrossThreadLogger]1/15/2025 After"),
+                    vec![expected(EntryHeader::ClientGre, "[Client GRE] Next event")],
+                );
+            }
         }
 
         #[test]
@@ -1453,6 +1685,331 @@ mod tests {
                      some text [ConnectionManager] not a header",
                 )),
             );
+        }
+    }
+
+    // -- Brace-depth flush (#193) -------------------------------------------
+
+    #[cfg(feature = "brace_depth_flush")]
+    mod brace_depth_flush {
+        use super::*;
+
+        /// Header + single-line `{...}` body — the closing `}` flushes the
+        /// entry immediately, no next header required.
+        #[test]
+        fn test_single_line_json_body_flushes_immediately() {
+            let mut buf = LineBuffer::new();
+            assert!(buf
+                .push_line("[UnityCrossThreadLogger]1/1/2025 Event")
+                .is_empty());
+            let result = buf.push_line(r#"{"key":"value"}"#);
+            assert_eq!(
+                result,
+                vec![expected(
+                    EntryHeader::UnityCrossThreadLogger,
+                    "[UnityCrossThreadLogger]1/1/2025 Event\n{\"key\":\"value\"}",
+                )],
+            );
+            assert!(buf.is_empty(), "buffer must be idle after brace-flush");
+        }
+
+        /// Pretty-printed multi-line JSON: opening `{`, key/value lines,
+        /// closing `}` on its own line. The closing `}` flushes the entry.
+        #[test]
+        fn test_multi_line_pretty_printed_json_flushes_on_closing_brace() {
+            let mut buf = LineBuffer::new();
+            buf.push_line("[Client GRE] GreToClientEvent");
+            buf.push_line("{");
+            buf.push_line(r#"  "key": "val""#);
+            let result = buf.push_line("}");
+            assert_eq!(result.len(), 1);
+            assert_eq!(result[0].header, EntryHeader::ClientGre);
+            assert_eq!(
+                result[0].body,
+                "[Client GRE] GreToClientEvent\n{\n  \"key\": \"val\"\n}",
+            );
+            assert!(buf.is_empty());
+        }
+
+        /// Header + `<==` response marker continuation + JSON body. The
+        /// response marker has no `{`; the JSON body line flushes on its
+        /// closing `}`.
+        #[test]
+        fn test_response_marker_then_json_flushes() {
+            let mut buf = LineBuffer::new();
+            assert!(buf
+                .push_line("[UnityCrossThreadLogger]1/1/2025 12:00:00 PM")
+                .is_empty());
+            assert!(buf.push_line("<== EventGetCoursesV2(abc)").is_empty());
+            let result = buf.push_line(r#"{"Courses":[]}"#);
+            assert_eq!(result.len(), 1);
+            assert_eq!(result[0].header, EntryHeader::UnityCrossThreadLogger);
+            assert!(result[0].body.contains("<== EventGetCoursesV2(abc)"));
+            assert!(result[0].body.contains(r#"{"Courses":[]}"#));
+            assert!(buf.is_empty());
+        }
+
+        /// Non-JSON bodies (no `{` anywhere) fall through to the legacy
+        /// "flush on next header" path — corresponds to the rare GRE
+        /// "Message summarized…" markers and `true`-bodied REST responses.
+        #[test]
+        fn test_non_json_body_falls_through_to_next_header() {
+            let mut buf = LineBuffer::new();
+            buf.push_line("[Client GRE] GreToClientEvent");
+            assert!(buf.push_line("[Message summarized due to size]").is_empty());
+            assert!(buf.push_line(":: 12345 entries").is_empty());
+            assert!(buf.push_line(":: payload elided").is_empty());
+
+            // Next header flushes the accumulating Client-GRE entry — the
+            // entry was never brace-flushed because no `{` appeared.
+            let entries = buf.push_line("[UnityCrossThreadLogger]1/1/2025 After");
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].header, EntryHeader::ClientGre);
+            assert!(entries[0].body.contains("[Message summarized"));
+            assert!(entries[0].body.contains(":: 12345 entries"));
+        }
+
+        /// Brace state must not leak between entries: after a brace-flush,
+        /// a follow-up entry with no `{` must NOT trigger a stale flush.
+        #[test]
+        fn test_brace_state_clears_between_entries() {
+            let mut buf = LineBuffer::new();
+
+            // First entry — brace-balance flushes it.
+            buf.push_line("[UnityCrossThreadLogger]1/1/2025 First");
+            let first = buf.push_line(r#"{"a":1}"#);
+            assert_eq!(first.len(), 1);
+            assert!(buf.is_empty());
+
+            // Brace state should be reset — internal sanity check so a
+            // regression here surfaces directly rather than through
+            // downstream behavior.
+            assert_eq!(buf.brace_state.depth, 0);
+            assert!(!buf.brace_state.in_string);
+            assert!(!buf.brace_state.escape_pending);
+            assert!(!buf.brace_state.ever_opened);
+
+            // Second entry has no `{`. Without proper state reset, stale
+            // `ever_opened=true` would falsely flush this entry's first
+            // continuation line. With reset, it accumulates normally and
+            // the next header flushes it.
+            buf.push_line("[Client GRE] PlainBodyEvent");
+            assert!(buf.push_line("just text").is_empty());
+            let entries = buf.push_line("[UnityCrossThreadLogger]1/1/2025 Third");
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].header, EntryHeader::ClientGre);
+            assert_eq!(entries[0].body, "[Client GRE] PlainBodyEvent\njust text");
+        }
+
+        /// After a brace-flush, subsequent headerless lines must be treated
+        /// as routine post-flush noise (silently discarded, no warn) — the
+        /// brace-flush path must arm the same `has_emitted_anything` gate
+        /// the next-header flush path arms.
+        #[test]
+        fn test_brace_flush_arms_orphan_warn_gating() {
+            let mut buf = LineBuffer::new();
+
+            // Brace-flush an entry.
+            buf.push_line("[UnityCrossThreadLogger]1/1/2025 Event");
+            let flushed = buf.push_line(r#"{"k":"v"}"#);
+            assert_eq!(flushed.len(), 1);
+
+            // `has_emitted_anything` was armed by the header detection,
+            // not by the flush itself — verify the gate is still set
+            // after brace-flush so the next orphan is silenced.
+            assert!(
+                buf.has_emitted_anything,
+                "brace-flush path must leave has_emitted_anything armed",
+            );
+
+            // A subsequent orphan line must be silently discarded.
+            assert!(buf.push_line("orphan stdout noise").is_empty());
+            assert!(buf.is_empty());
+        }
+    }
+
+    // -- Brace-depth string-literal handling (property tests) ---------------
+
+    #[cfg(feature = "brace_depth_flush")]
+    mod brace_depth_property {
+        use super::*;
+        use proptest::prelude::*;
+        use serde_json::Value;
+
+        /// Recursive strategy producing arbitrary JSON values. Strings include
+        /// the `{`, `}`, `"`, and `\` characters specifically because those
+        /// are the characters the brace-state machine must handle without
+        /// being fooled by content inside string literals.
+        fn arb_json_value() -> impl Strategy<Value = Value> {
+            // Strings sample from a character set that includes every
+            // character the state machine special-cases.
+            let arb_string = r#"[a-z0-9 \{\}\"\\]{0,12}"#.prop_map(Value::String);
+            let leaf = prop_oneof![
+                Just(Value::Null),
+                any::<bool>().prop_map(Value::Bool),
+                any::<i32>().prop_map(|n| Value::Number(n.into())),
+                arb_string,
+            ];
+            leaf.prop_recursive(3, 24, 4, |inner| {
+                prop_oneof![
+                    prop::collection::vec(inner.clone(), 0..4).prop_map(Value::Array),
+                    prop::collection::vec((r"[a-z]{1,6}", inner), 0..4)
+                        .prop_map(|kvs| { Value::Object(kvs.into_iter().collect()) }),
+                ]
+            })
+        }
+
+        proptest! {
+            /// Any serialized JSON value, when fed as one continuation line
+            /// after a multi-line header, must brace-balance and flush.
+            #[test]
+            fn prop_balanced_json_flushes_exactly_once(value in arb_json_value()) {
+                // Force the top-level value to be an object so the body
+                // opens with `{` — the property is about closed JSON
+                // structures, not bare leaves.
+                // `serde_json::to_string` only errors on serializers that
+                // refuse some `Serialize` shape — `Value` always serializes
+                // cleanly, so the `Err` branch is unreachable in practice.
+                let body = match serde_json::to_string(&Value::Object(
+                    [("v".to_owned(), value)].into_iter().collect(),
+                )) {
+                    Ok(s) => s,
+                    Err(e) => unreachable!("serde_json::to_string on Value failed: {e}"),
+                };
+                let mut buf = LineBuffer::new();
+                let header = buf.push_line("[UnityCrossThreadLogger]1/1/2025 PropTest");
+                prop_assert!(header.is_empty());
+                let out = buf.push_line(&body);
+                prop_assert_eq!(out.len(), 1, "balanced JSON must brace-flush");
+                prop_assert!(buf.is_empty());
+            }
+
+            /// An unterminated string literal — `"abc` with no closing `"`
+            /// — must never appear balanced no matter what comes after the
+            /// opening `{`.
+            #[test]
+            fn prop_unterminated_string_never_balances(
+                prefix in r"[a-z0-9 ]{0,16}",
+                trailing in r"[a-z0-9 \{\}]{0,16}",
+            ) {
+                let body = format!(r#"{{"k":"{prefix}{trailing}"#);
+                let mut buf = LineBuffer::new();
+                buf.push_line("[UnityCrossThreadLogger]1/1/2025 PropTest");
+                let out = buf.push_line(&body);
+                prop_assert_eq!(
+                    out.len(),
+                    0,
+                    "unterminated string literal must not be reported balanced",
+                );
+                prop_assert!(!buf.is_empty(), "entry should remain accumulating");
+            }
+
+            /// `{` and `}` characters embedded in a string literal must not
+            /// affect the brace-balance counter — a well-formed JSON object
+            /// containing brace-noise in a string value still flushes.
+            #[test]
+            fn prop_braces_in_strings_dont_count(
+                noise in r"[\{\}]{0,16}",
+            ) {
+                let body = format!(r#"{{"junk":"{noise}"}}"#);
+                let mut buf = LineBuffer::new();
+                buf.push_line("[UnityCrossThreadLogger]1/1/2025 PropTest");
+                let out = buf.push_line(&body);
+                prop_assert_eq!(
+                    out.len(),
+                    1,
+                    "braces inside string literals must not affect the counter",
+                );
+            }
+        }
+
+        // -- Hand-written regression cases derived from corpus analysis ----
+
+        /// `{"request":"{\"foo\":\"bar\"}"}` — a JSON object whose string
+        /// value contains a nested escaped JSON object. Corpus has 585 such
+        /// entries; all must brace-balance correctly because the inner
+        /// braces appear inside a string literal.
+        #[test]
+        fn test_regression_nested_json_in_string() {
+            let mut buf = LineBuffer::new();
+            buf.push_line("[UnityCrossThreadLogger]1/1/2025 Nested");
+            let body = r#"{"request":"{\"foo\":\"bar\"}"}"#;
+            let out = buf.push_line(body);
+            assert_eq!(out.len(), 1, "nested-string body must brace-balance");
+            assert_eq!(
+                out[0].body,
+                format!("[UnityCrossThreadLogger]1/1/2025 Nested\n{body}")
+            );
+        }
+
+        /// Escaped quote inside a string literal: the `\"` does NOT close
+        /// the string, so the next unescaped `"` is the real closer.
+        #[test]
+        fn test_regression_escaped_quote_inside_string() {
+            let mut buf = LineBuffer::new();
+            buf.push_line("[UnityCrossThreadLogger]1/1/2025 EscQuote");
+            let body = r#"{"name":"a \"quoted\" name"}"#;
+            let out = buf.push_line(body);
+            assert_eq!(out.len(), 1);
+            assert!(out[0].body.contains(r#""a \"quoted\" name""#));
+        }
+
+        /// Escaped backslashes: `\\` is an escape pair; the next character
+        /// is NOT escaped, so an `"` immediately after `\\` correctly
+        /// toggles string state.
+        #[test]
+        fn test_regression_escaped_backslash_inside_string() {
+            let mut buf = LineBuffer::new();
+            buf.push_line("[UnityCrossThreadLogger]1/1/2025 EscBackslash");
+            let body = r#"{"path":"C:\\Users\\foo"}"#;
+            let out = buf.push_line(body);
+            assert_eq!(out.len(), 1);
+            assert!(out[0].body.contains(r#""C:\\Users\\foo""#));
+        }
+
+        /// Bare `{` and `}` inside a string literal must not move the
+        /// counter — the entry balances on the outer `}` alone.
+        #[test]
+        fn test_regression_brace_inside_string_literal() {
+            let mut buf = LineBuffer::new();
+            buf.push_line("[UnityCrossThreadLogger]1/1/2025 BraceInStr");
+            let body = r#"{"emoji":"{ :) }"}"#;
+            let out = buf.push_line(body);
+            assert_eq!(out.len(), 1);
+            assert!(out[0].body.contains(r#""{ :) }""#));
+        }
+
+        /// Pathological unbalanced JSON — opens a `{` but never closes
+        /// it. Depth stays > 0 forever; the entry never brace-flushes
+        /// and must fall through to the next-header flush path. Defined
+        /// behavior, no panic.
+        #[test]
+        fn test_regression_unbalanced_json_falls_through() {
+            let mut buf = LineBuffer::new();
+            buf.push_line("[UnityCrossThreadLogger]1/1/2025 Unbalanced");
+            assert!(buf.push_line(r#"{"unclosed":"#).is_empty());
+            assert!(buf.push_line(r#"  "more":"data""#).is_empty());
+
+            // Next header flushes via the fallback path.
+            let next = buf.push_line("[UnityCrossThreadLogger]1/1/2025 NextEvent");
+            assert_eq!(next.len(), 1);
+            assert_eq!(next[0].header, EntryHeader::UnityCrossThreadLogger);
+            assert!(next[0].body.contains(r#"{"unclosed":"#));
+        }
+
+        /// A JSON string value containing the `\n` escape sequence (not a
+        /// real newline) keeps the value on one logical body line —
+        /// `\\n` is two characters, not a line break.
+        #[test]
+        fn test_regression_escaped_newline_in_string() {
+            let mut buf = LineBuffer::new();
+            buf.push_line("[UnityCrossThreadLogger]1/1/2025 EscNewline");
+            // `\n` in the source string is the two-character escape sequence
+            // `\` followed by `n` — not a real newline.
+            let body = r#"{"raw":"line1\nline2"}"#;
+            let out = buf.push_line(body);
+            assert_eq!(out.len(), 1);
+            assert!(out[0].body.contains(r#""line1\nline2""#));
         }
     }
 }

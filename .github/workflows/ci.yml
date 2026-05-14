@@ -27,6 +27,23 @@ jobs:
       - name: Pre-commit checks
         run: make -j precommit
 
+  test-no-default-features:
+    name: Test (--no-default-features)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@2b1f5e9b395427c92ee4e3331786ca3c37afe2d7 # v1
+
+      # Exercises the feature-off rollback path so it cannot bit-rot.
+      # The `brace_depth_flush` feature is default-on; this job protects
+      # the fallback "flush on next header" behavior that ships if the
+      # feature is disabled (issue #193 reversibility insurance).
+      - name: Run tests with default features disabled
+        run: cargo test --no-default-features
+
   deny:
     name: cargo deny
     runs-on: ubuntu-latest
