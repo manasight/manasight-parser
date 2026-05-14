@@ -4,11 +4,33 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [0.2.2] - 2026-05-07
+## [0.3.0] - 2026-05-13
 
 ### Changed
 
-- `Makefile` added with `precommit`, `precommit-trivial`, `coverage`, and `fmt` targets
+- **`LineBuffer` now flushes multi-line entries on JSON brace-balance** instead of waiting for the next header (#193, #194). Entries containing a `{` are emitted the moment their JSON body's depth returns to 0, dropping draft-event and other interactive-flow latency from seconds-to-minutes to one polling cycle (~50 ms). Public method signatures are unchanged — but downstream consumers that previously batched entries between headers will now receive them sooner.
+- Non-JSON multi-line entries (`[Message summarized…]` GRE markers, `true`-bodied REST responses) keep the original "flush on next header" behavior as a deterministic fallback.
+
+### Added
+
+- New `brace_depth_flush` cargo feature, **default-on**, gating the new flush trigger. Disabling the feature reverts to the original next-header flush behavior — kept as a one-flip rollback in case a live-Arena edge case surfaces.
+- New `BraceState` internal struct with a string-literal + escape-aware state machine; handles nested-JSON-in-string values, escaped quotes, escaped backslashes, and brace noise inside string literals.
+- New `test-no-default-features` CI job (`.github/workflows/ci.yml`) so the rollback path cannot bit-rot.
+- `proptest = "1"` added to `[dev-dependencies]` for state-machine property tests (3 generators + 6 corpus-derived regression cases).
+
+### Fixed
+
+- Smoke-test CI step now uses `set -o pipefail` so failures inside the piped `cargo test … | tee` no longer silently pass (#191, #192).
+
+## [0.2.2] - 2026-05-07
+
+### Added
+
+- New `game_state_type` field on `game_state_message` and `queued_game_state_message` payloads, sourced from the inner `gameStateMessage.type` (`GameStateType_Full` / `GameStateType_Diff`). Field is always present — `None` serializes to JSON `null` — so the schema contract is unambiguous (#182, #183).
+
+### Changed
+
+- `Makefile` added with `precommit`, `precommit-trivial`, `coverage`, and `fmt` targets (#186)
 - CI `check` job updated to call `make precommit` instead of inlining gate steps
 - CLAUDE.md pre-commit checklist updated to reference `make precommit`
 
