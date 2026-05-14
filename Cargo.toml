@@ -30,7 +30,15 @@ tokio = { version = "1", features = ["rt", "sync", "fs", "io-util", "time", "mac
 known-folders = "1"
 
 [dev-dependencies]
+proptest = "1"
 tempfile = "3"
+
+[features]
+default = ["brace_depth_flush"]
+# Flush multi-line entries on JSON brace-balance instead of waiting for the
+# next header. Default-on; the flag exists as reversibility insurance so a
+# regression can be shipped without code edits by flipping the default.
+brace_depth_flush = []
 
 [lints.clippy]
 # Pedantic lints as warnings
