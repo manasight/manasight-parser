@@ -100,6 +100,8 @@ jobs:
           MANASIGHT_TEST_LOGS: /tmp/test-logs/corpus
           CORPUS_TAG: ${{ steps.corpus-tag.outputs.tag }}
         run: |
+          # pipefail is load-bearing: without it, tee's exit 0 masks cargo test failures.
+          set -o pipefail
           set +e
           cargo test --all-features smoke_test_real_logs -- --nocapture 2>&1 | tee /tmp/smoke-output.txt
           SMOKE_EXIT=$?
