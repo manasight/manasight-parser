@@ -2,7 +2,7 @@
   "_meta": {
     "corpus_tag": "manasight-corpus-v26",
     "description": "Smoke test baseline -- per-file, per-parser event counts from Level 1 (parser-only) smoke tests.",
-    "generated_from_commit": "877d647"
+    "generated_from_commit": "a9178f9"
   },
   "files": {
     "session_2026-02-22_0000_ecl-premier-bg-elves.log": {
@@ -12,7 +12,7 @@
         "DetailedLoggingStatus": 1,
         "EventLifecycle": 7,
         "GameResult": 5,
-        "GameState": 4382,
+        "GameState": 4384,
         "Inventory": 7,
         "MatchState": 10,
         "Rank": 7,
@@ -32,9 +32,9 @@
         "rank": 7,
         "session": 6
       },
-      "timestamp_failures": 164,
-      "total_entries": 4914,
-      "unclaimed": 233
+      "timestamp_failures": 165,
+      "total_entries": 4915,
+      "unclaimed": 234
     },
     "session_2026-02-22_0000_ecl-premier-uw-merfolk.log": {
       "double_claims": 0,
@@ -45,7 +45,7 @@
         "DraftHuman": 77,
         "EventLifecycle": 7,
         "GameResult": 4,
-        "GameState": 3478,
+        "GameState": 3480,
         "Inventory": 5,
         "MatchState": 8,
         "Rank": 5,
@@ -76,7 +76,7 @@
         "DetailedLoggingStatus": 1,
         "EventLifecycle": 4,
         "GameResult": 2,
-        "GameState": 809,
+        "GameState": 810,
         "Inventory": 3,
         "MatchState": 4,
         "Rank": 3,
@@ -96,9 +96,9 @@
         "rank": 3,
         "session": 3
       },
-      "timestamp_failures": 90,
-      "total_entries": 949,
-      "unclaimed": 131
+      "timestamp_failures": 91,
+      "total_entries": 950,
+      "unclaimed": 132
     },
     "session_2026-03-05_0000.log": {
       "double_claims": 0,
@@ -198,7 +198,7 @@
         "DetailedLoggingStatus": 1,
         "EventLifecycle": 2,
         "GameResult": 1,
-        "GameState": 308,
+        "GameState": 309,
         "Inventory": 3,
         "MatchState": 2,
         "Rank": 3,
@@ -314,7 +314,7 @@
         "ClientAction": 393,
         "DetailedLoggingStatus": 1,
         "GameResult": 2,
-        "GameState": 458,
+        "GameState": 459,
         "Inventory": 3,
         "MatchState": 4,
         "Rank": 3,
@@ -376,7 +376,7 @@
         "DetailedLoggingStatus": 1,
         "EventLifecycle": 4,
         "GameResult": 2,
-        "GameState": 2212,
+        "GameState": 2214,
         "Inventory": 2,
         "MatchState": 4,
         "Rank": 2,
@@ -396,9 +396,9 @@
         "rank": 2,
         "session": 2
       },
-      "timestamp_failures": 82,
-      "total_entries": 2435,
-      "unclaimed": 111
+      "timestamp_failures": 84,
+      "total_entries": 2437,
+      "unclaimed": 113
     },
     "session_2026-03-22_1232_debug.log": {
       "double_claims": 0,
@@ -407,7 +407,7 @@
         "DetailedLoggingStatus": 1,
         "EventLifecycle": 16,
         "GameResult": 10,
-        "GameState": 3725,
+        "GameState": 3726,
         "Inventory": 11,
         "MatchState": 20,
         "Rank": 11,
@@ -438,7 +438,7 @@
         "DetailedLoggingStatus": 1,
         "EventLifecycle": 14,
         "GameResult": 6,
-        "GameState": 3782,
+        "GameState": 3784,
         "Inventory": 7,
         "MatchState": 12,
         "Rank": 7,
@@ -468,7 +468,7 @@
         "ClientAction": 337,
         "DetailedLoggingStatus": 1,
         "GameResult": 1,
-        "GameState": 493,
+        "GameState": 494,
         "Inventory": 2,
         "MatchState": 2,
         "Rank": 2,
@@ -499,7 +499,7 @@
         "DetailedLoggingStatus": 1,
         "EventLifecycle": 2,
         "GameResult": 2,
-        "GameState": 1762,
+        "GameState": 1764,
         "Inventory": 2,
         "MatchState": 2,
         "Rank": 2,
@@ -713,7 +713,7 @@
         "DetailedLoggingStatus": 1,
         "EventLifecycle": 4,
         "GameResult": 2,
-        "GameState": 882,
+        "GameState": 883,
         "Inventory": 7,
         "MatchState": 8,
         "Rank": 7,
@@ -744,7 +744,7 @@
         "DetailedLoggingStatus": 1,
         "EventLifecycle": 2,
         "GameResult": 2,
-        "GameState": 827,
+        "GameState": 829,
         "Inventory": 4,
         "MatchState": 5,
         "Rank": 4,
@@ -775,7 +775,7 @@
         "DetailedLoggingStatus": 1,
         "EventLifecycle": 2,
         "GameResult": 3,
-        "GameState": 412,
+        "GameState": 413,
         "Inventory": 3,
         "MatchState": 4,
         "Rank": 3,
@@ -870,7 +870,7 @@
         "DetailedLoggingStatus": 1,
         "EventLifecycle": 8,
         "GameResult": 6,
-        "GameState": 1810,
+        "GameState": 1812,
         "Inventory": 7,
         "MatchState": 12,
         "Rank": 7,
@@ -890,9 +890,9 @@
         "rank": 7,
         "session": 9
       },
-      "timestamp_failures": 189,
-      "total_entries": 2153,
-      "unclaimed": 268
+      "timestamp_failures": 192,
+      "total_entries": 2156,
+      "unclaimed": 271
     },
     "session_2026-04-27_2230.log": {
       "double_claims": 0,
@@ -902,7 +902,7 @@
         "DetailedLoggingStatus": 1,
         "EventLifecycle": 2,
         "GameResult": 3,
-        "GameState": 2000,
+        "GameState": 2002,
         "Inventory": 4,
         "MatchState": 6,
         "Rank": 4,
@@ -922,9 +922,9 @@
         "rank": 4,
         "session": 4
       },
-      "timestamp_failures": 100,
-      "total_entries": 2189,
-      "unclaimed": 148
+      "timestamp_failures": 104,
+      "total_entries": 2193,
+      "unclaimed": 152
     },
     "session_2026-04-29_2128.log": {
       "double_claims": 0,
@@ -933,7 +933,7 @@
         "DeckCollection": 3,
         "DetailedLoggingStatus": 1,
         "GameResult": 2,
-        "GameState": 1147,
+        "GameState": 1149,
         "Inventory": 3,
         "MatchState": 4,
         "Rank": 3,
@@ -953,9 +953,9 @@
         "rank": 3,
         "session": 2
       },
-      "timestamp_failures": 66,
-      "total_entries": 1196,
-      "unclaimed": 100
+      "timestamp_failures": 67,
+      "total_entries": 1197,
+      "unclaimed": 101
     },
     "session_2026-04-29_2201.log": {
       "double_claims": 0,
@@ -964,7 +964,7 @@
         "DeckCollection": 2,
         "DetailedLoggingStatus": 1,
         "GameResult": 1,
-        "GameState": 598,
+        "GameState": 599,
         "Inventory": 2,
         "MatchState": 2,
         "Rank": 2,
@@ -995,7 +995,7 @@
         "DeckCollection": 9,
         "DetailedLoggingStatus": 1,
         "GameResult": 8,
-        "GameState": 2231,
+        "GameState": 2236,
         "Inventory": 9,
         "MatchState": 16,
         "Rank": 9,
@@ -1026,7 +1026,7 @@
         "DeckCollection": 2,
         "DetailedLoggingStatus": 1,
         "GameResult": 1,
-        "GameState": 655,
+        "GameState": 656,
         "Inventory": 2,
         "MatchState": 2,
         "Rank": 2,
@@ -1143,7 +1143,7 @@
         "DetailedLoggingStatus": 1,
         "EventLifecycle": 2,
         "GameResult": 2,
-        "GameState": 1450,
+        "GameState": 1451,
         "Inventory": 3,
         "MatchState": 4,
         "Rank": 3,
@@ -1174,7 +1174,7 @@
         "DeckCollection": 4,
         "DetailedLoggingStatus": 1,
         "GameResult": 3,
-        "GameState": 651,
+        "GameState": 653,
         "Inventory": 4,
         "MatchState": 6,
         "Rank": 4,
@@ -1205,7 +1205,7 @@
         "DeckCollection": 3,
         "DetailedLoggingStatus": 1,
         "GameResult": 2,
-        "GameState": 706,
+        "GameState": 708,
         "Inventory": 3,
         "MatchState": 4,
         "Rank": 3,
@@ -1236,7 +1236,7 @@
         "DeckCollection": 3,
         "DetailedLoggingStatus": 1,
         "GameResult": 2,
-        "GameState": 576,
+        "GameState": 578,
         "Inventory": 3,
         "MatchState": 4,
         "Rank": 3,
@@ -1267,7 +1267,7 @@
         "DeckCollection": 2,
         "DetailedLoggingStatus": 1,
         "GameResult": 1,
-        "GameState": 276,
+        "GameState": 277,
         "Inventory": 2,
         "MatchState": 2,
         "Rank": 2,
@@ -1298,7 +1298,7 @@
         "DeckCollection": 2,
         "DetailedLoggingStatus": 1,
         "GameResult": 1,
-        "GameState": 248,
+        "GameState": 249,
         "Inventory": 2,
         "MatchState": 2,
         "Rank": 2,
@@ -1329,7 +1329,7 @@
         "DeckCollection": 2,
         "DetailedLoggingStatus": 1,
         "GameResult": 1,
-        "GameState": 563,
+        "GameState": 564,
         "Inventory": 2,
         "MatchState": 2,
         "Rank": 2,
@@ -1349,9 +1349,9 @@
         "rank": 2,
         "session": 1
       },
-      "timestamp_failures": 46,
-      "total_entries": 830,
-      "unclaimed": 70
+      "timestamp_failures": 47,
+      "total_entries": 831,
+      "unclaimed": 71
     }
   }
 }
