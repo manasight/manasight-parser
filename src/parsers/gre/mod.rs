@@ -163,9 +163,7 @@ pub fn try_parse(
     // Arena batches multiple GSMs into a single greToClientMessages array;
     // processing only the first silently discards the majority of updates.
     for msg in messages {
-        if let Some(event) = emit_gsm_event(msg, body, timestamp) {
-            events.push(event);
-        }
+        events.extend(emit_gsm_events(msg, body, timestamp));
     }
 
     if !events.is_empty() {
@@ -189,44 +187,61 @@ pub fn try_parse(
     Vec::new()
 }
 
-/// Builds a single [`GameEvent`] from a `GameStateMessage` /
-/// `QueuedGameStateMessage` entry, returning `None` for any other GRE message
-/// type (e.g. `ConnectResp`, `DieRollResultsResp`, noise types).
+/// Builds the [`GameEvent`]s produced by a `GameStateMessage` /
+/// `QueuedGameStateMessage` entry, returning an empty vec for any other GRE
+/// message type (e.g. `ConnectResp`, `DieRollResultsResp`, noise types).
 ///
-/// Encapsulates the GameResult-vs-GameState branch: when the embedded
-/// `gameInfo.stage == GameStage_GameOver` and `matchState != MatchState_MatchComplete`,
-/// emits a [`GameEvent::GameResult`] (Class 3 batch trigger); when the stage is
-/// `GameStage_GameOver` with `matchState == MatchState_MatchComplete`, returns
-/// `None` so the duplicate match-complete signal is suppressed.
-fn emit_gsm_event(
+/// Encapsulates the GameResult-vs-GameState branch. Behavior by case:
+///
+/// - Non-GameOver stage → one [`GameEvent::GameState`].
+/// - `GameStage_GameOver` with `matchState == MatchState_MatchComplete` →
+///   empty vec (the duplicate match-complete signal is suppressed because the
+///   prior game-complete entry already produced the [`GameEvent::GameResult`]).
+/// - `GameStage_GameOver` with `matchState != MatchState_MatchComplete` AND
+///   non-empty `annotations` / `persistentAnnotations` → a
+///   [`GameEvent::GameState`] carrying the annotation arrays, followed by the
+///   [`GameEvent::GameResult`]. Per-producer ordering on the broadcast
+///   channel guarantees the `GameState` reaches subscribers before the
+///   `GameResult`, so annotation-walker consumers see the killing-blow damage
+///   before the "Victory!" / "Defeat" payload.
+/// - `GameStage_GameOver` with `matchState != MatchState_MatchComplete` and
+///   empty annotation arrays → one [`GameEvent::GameResult`] only (no
+///   spurious empty [`GameEvent::GameState`]).
+fn emit_gsm_events(
     msg: &serde_json::Value,
     body: &str,
     timestamp: Option<chrono::DateTime<chrono::Utc>>,
-) -> Option<GameEvent> {
-    let msg_type = msg.get("type").and_then(serde_json::Value::as_str)?;
+) -> Vec<GameEvent> {
+    let Some(msg_type) = msg.get("type").and_then(serde_json::Value::as_str) else {
+        return Vec::new();
+    };
     if !matches!(
         msg_type,
         GAME_STATE_MESSAGE_TYPE | QUEUED_GAME_STATE_MESSAGE_TYPE
     ) {
-        return None;
+        return Vec::new();
     }
 
-    let metadata = EventMetadata::new(timestamp, body.as_bytes().to_vec());
     if game_result::is_game_over(msg) {
         if game_result::is_match_complete(msg) {
-            // Suppress the duplicate match-complete signal — the prior
-            // game-complete entry in the same batch already produced the
-            // GameResult event.
-            None
-        } else {
-            let payload = game_result::build_game_result_payload(msg);
-            Some(GameEvent::GameResult(GameResultEvent::new(
-                metadata, payload,
-            )))
+            return Vec::new();
         }
+        let mut out = Vec::with_capacity(2);
+        if game_result::has_annotation_data(msg) {
+            let metadata = EventMetadata::new(timestamp, body.as_bytes().to_vec());
+            let payload = game_state::build_game_state_message_payload(msg);
+            out.push(GameEvent::GameState(GameStateEvent::new(metadata, payload)));
+        }
+        let metadata = EventMetadata::new(timestamp, body.as_bytes().to_vec());
+        let payload = game_result::build_game_result_payload(msg);
+        out.push(GameEvent::GameResult(GameResultEvent::new(
+            metadata, payload,
+        )));
+        out
     } else {
+        let metadata = EventMetadata::new(timestamp, body.as_bytes().to_vec());
         let payload = game_state::build_game_state_message_payload(msg);
-        Some(GameEvent::GameState(GameStateEvent::new(metadata, payload)))
+        vec![GameEvent::GameState(GameStateEvent::new(metadata, payload))]
     }
 }
 

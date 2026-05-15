@@ -29,6 +29,22 @@ pub(super) fn is_match_complete(gre_msg: &serde_json::Value) -> bool {
         == Some(MATCH_STATE_MATCH_COMPLETE)
 }
 
+/// Returns `true` if the GRE message's `gameStateMessage` carries any
+/// annotation data — either a non-empty `annotations` array or a non-empty
+/// `persistentAnnotations` array. Used by the `GameOver` branch of
+/// `emit_gsm_events` to decide whether to also emit a `GameState` event so
+/// the annotations reach normal annotation-walker consumers (the killing
+/// damage that ends a match rides in the `GameOver` GSM's `annotations`).
+pub(super) fn has_annotation_data(gre_msg: &serde_json::Value) -> bool {
+    let gsm = gre_msg.get("gameStateMessage");
+    let nonempty_array = |key: &str| {
+        gsm.and_then(|g| g.get(key))
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|arr| !arr.is_empty())
+    };
+    nonempty_array("annotations") || nonempty_array("persistentAnnotations")
+}
+
 /// Builds a structured payload for a game result extracted from a GRE
 /// `GameStateMessage` with `GameStage_GameOver`.
 ///
@@ -576,6 +592,284 @@ mod tests {
             assert!(!result.is_empty());
             let event = &result[0];
             assert!(matches!(event, GameEvent::GameState(_)));
+        }
+    }
+
+    mod has_annotation_data_tests {
+        use crate::parsers::gre::game_result;
+
+        #[test]
+        fn test_has_annotation_data_true_for_non_empty_annotations() {
+            let msg = serde_json::json!({
+                "gameStateMessage": {
+                    "annotations": [{ "id": 1, "type": "AnnotationType_DamageDealt" }]
+                }
+            });
+            assert!(game_result::has_annotation_data(&msg));
+        }
+
+        #[test]
+        fn test_has_annotation_data_true_for_non_empty_persistent_only() {
+            let msg = serde_json::json!({
+                "gameStateMessage": {
+                    "annotations": [],
+                    "persistentAnnotations": [{ "id": 5 }]
+                }
+            });
+            assert!(game_result::has_annotation_data(&msg));
+        }
+
+        #[test]
+        fn test_has_annotation_data_false_for_empty_arrays() {
+            let msg = serde_json::json!({
+                "gameStateMessage": {
+                    "annotations": [],
+                    "persistentAnnotations": []
+                }
+            });
+            assert!(!game_result::has_annotation_data(&msg));
+        }
+
+        #[test]
+        fn test_has_annotation_data_false_for_missing_arrays() {
+            let msg = serde_json::json!({
+                "gameStateMessage": {
+                    "gameInfo": { "stage": "GameStage_GameOver" }
+                }
+            });
+            assert!(!game_result::has_annotation_data(&msg));
+        }
+
+        #[test]
+        fn test_has_annotation_data_false_for_non_array_values() {
+            let msg = serde_json::json!({
+                "gameStateMessage": {
+                    "annotations": "not-an-array",
+                    "persistentAnnotations": null
+                }
+            });
+            assert!(!game_result::has_annotation_data(&msg));
+        }
+    }
+
+    /// Issue #196: `GameOver` GSMs that carry annotations (e.g. the lethal
+    /// damage that ends the match) must emit a `GameState` event ahead of the
+    /// `GameResult` so annotation-walker consumers see the killing-blow data.
+    mod game_over_dual_emit {
+        use super::*;
+        use crate::parsers::test_helpers::game_state_payload;
+
+        /// Body: `GameOver` GSM with a non-empty `annotations` array carrying
+        /// the killing combat damage (mirrors the real-game capture cited in
+        /// the issue: 5x `DamageDealt` + `ModifiedLife` + `LossOfGame`).
+        fn game_over_body_with_killing_damage() -> String {
+            format!(
+                "[UnityCrossThreadLogger]greToClientEvent\n{}",
+                serde_json::json!({
+                    "greToClientEvent": {
+                        "greToClientMessages": [{
+                            "type": "GREMessageType_GameStateMessage",
+                            "msgId": 537,
+                            "gameStateId": 537,
+                            "gameStateMessage": {
+                                "type": "GameStateType_Diff",
+                                "gameInfo": {
+                                    "matchID": "match-kill-shot",
+                                    "gameNumber": 1,
+                                    "stage": "GameStage_GameOver",
+                                    "matchState": "MatchState_GameComplete",
+                                    "results": [
+                                        {
+                                            "scope": "MatchScope_Game",
+                                            "result": "ResultType_WinLoss",
+                                            "winningTeamId": 1,
+                                            "reason": "ResultReason_Game"
+                                        }
+                                    ]
+                                },
+                                "annotations": [
+                                    {
+                                        "id": 1001,
+                                        "affectorId": 296,
+                                        "affectedIds": [2],
+                                        "type": ["AnnotationType_DamageDealt"],
+                                        "details": [
+                                            { "key": "damage", "type": "DetailType_Int", "valueInt32": [2] }
+                                        ]
+                                    },
+                                    {
+                                        "id": 1002,
+                                        "affectorId": 329,
+                                        "affectedIds": [2],
+                                        "type": ["AnnotationType_DamageDealt"],
+                                        "details": [
+                                            { "key": "damage", "type": "DetailType_Int", "valueInt32": [9] }
+                                        ]
+                                    },
+                                    {
+                                        "id": 1003,
+                                        "affectorId": 2,
+                                        "affectedIds": [2],
+                                        "type": ["AnnotationType_ModifiedLife"],
+                                        "details": [
+                                            { "key": "life", "type": "DetailType_Int", "valueInt32": [-20] }
+                                        ]
+                                    },
+                                    {
+                                        "id": 1004,
+                                        "affectorId": 2,
+                                        "affectedIds": [2],
+                                        "type": ["AnnotationType_LossOfGame"],
+                                        "details": [
+                                            { "key": "reason", "type": "DetailType_String", "valueString": ["SBA_LifeTotal"] }
+                                        ]
+                                    }
+                                ]
+                            }
+                        }]
+                    }
+                })
+            )
+        }
+
+        #[test]
+        fn test_game_over_with_annotations_emits_game_state_then_game_result() {
+            let entry = unity_entry(&game_over_body_with_killing_damage());
+            let events = try_parse(&entry, Some(test_timestamp()));
+            assert_eq!(events.len(), 2, "expected GameState + GameResult");
+            assert!(
+                matches!(events[0], GameEvent::GameState(_)),
+                "first event must be GameState (carries the annotations)"
+            );
+            assert!(
+                matches!(events[1], GameEvent::GameResult(_)),
+                "second event must be GameResult (carries the result fields)"
+            );
+        }
+
+        #[test]
+        fn test_game_state_carries_killing_damage_annotations() {
+            let entry = unity_entry(&game_over_body_with_killing_damage());
+            let events = try_parse(&entry, Some(test_timestamp()));
+            let payload = game_state_payload(&events[0]);
+            let annotations = payload["annotations"]
+                .as_array()
+                .unwrap_or_else(|| unreachable!());
+            assert_eq!(annotations.len(), 4);
+            // Verify the killing damage rides through the GameState event.
+            // The extractor flattens annotation `type` to a singular string.
+            let damage_count = annotations
+                .iter()
+                .filter(|a| a["type"] == "AnnotationType_DamageDealt")
+                .count();
+            assert_eq!(damage_count, 2);
+            let loss = annotations
+                .iter()
+                .find(|a| a["type"] == "AnnotationType_LossOfGame");
+            assert!(loss.is_some(), "LossOfGame annotation must survive");
+        }
+
+        #[test]
+        fn test_game_result_payload_unchanged_under_dual_emit() {
+            let entry = unity_entry(&game_over_body_with_killing_damage());
+            let events = try_parse(&entry, Some(test_timestamp()));
+            let payload = game_result_payload(&events[1]);
+            assert_eq!(payload["type"], "game_result");
+            assert_eq!(payload["winning_team_id"], 1);
+            assert_eq!(payload["result_type"], "ResultType_WinLoss");
+            assert_eq!(payload["reason"], "ResultReason_Game");
+        }
+
+        #[test]
+        fn test_game_over_empty_annotations_emits_only_game_result() {
+            // The plain `game_over_body()` helper has no annotations field.
+            // Empty / missing annotations must NOT trigger a spurious empty
+            // GameState event.
+            let entry = unity_entry(&game_over_body());
+            let events = try_parse(&entry, Some(test_timestamp()));
+            assert_eq!(events.len(), 1, "no GameState when annotations are empty");
+            assert!(matches!(events[0], GameEvent::GameResult(_)));
+        }
+
+        #[test]
+        fn test_game_over_persistent_annotations_only_still_emits_game_state() {
+            // Persistent annotations alone (no regular annotations) are also
+            // worth preserving. Trigger should fire on either array.
+            let body = format!(
+                "[UnityCrossThreadLogger]greToClientEvent\n{}",
+                serde_json::json!({
+                    "greToClientEvent": {
+                        "greToClientMessages": [{
+                            "type": "GREMessageType_GameStateMessage",
+                            "gameStateMessage": {
+                                "gameInfo": {
+                                    "stage": "GameStage_GameOver",
+                                    "matchState": "MatchState_GameComplete",
+                                    "results": [
+                                        { "scope": "MatchScope_Game", "winningTeamId": 1 }
+                                    ]
+                                },
+                                "annotations": [],
+                                "persistentAnnotations": [
+                                    { "id": 5, "affectorId": 28, "type": ["AnnotationType_AbilityActivated"] }
+                                ]
+                            }
+                        }]
+                    }
+                })
+            );
+            let entry = unity_entry(&body);
+            let events = try_parse(&entry, Some(test_timestamp()));
+            assert_eq!(events.len(), 2);
+            assert!(matches!(events[0], GameEvent::GameState(_)));
+            assert!(matches!(events[1], GameEvent::GameResult(_)));
+            let payload = game_state_payload(&events[0]);
+            let persistent = payload["persistent_annotations"]
+                .as_array()
+                .unwrap_or_else(|| unreachable!());
+            assert_eq!(persistent.len(), 1);
+        }
+
+        #[test]
+        fn test_match_complete_with_annotations_still_suppressed() {
+            // The second GameOver GSM (matchState == MatchState_MatchComplete)
+            // is intentionally suppressed even if it carries annotations.
+            // The first GSM (MatchState_GameComplete) already produced the
+            // GameResult; emitting again would duplicate it.
+            let body = format!(
+                "[UnityCrossThreadLogger]greToClientEvent\n{}",
+                serde_json::json!({
+                    "greToClientEvent": {
+                        "greToClientMessages": [{
+                            "type": "GREMessageType_GameStateMessage",
+                            "gameStateMessage": {
+                                "gameInfo": {
+                                    "stage": "GameStage_GameOver",
+                                    "matchState": "MatchState_MatchComplete"
+                                },
+                                "annotations": [
+                                    { "id": 999, "type": ["AnnotationType_DamageDealt"] }
+                                ]
+                            }
+                        }]
+                    }
+                })
+            );
+            let entry = unity_entry(&body);
+            let events = try_parse(&entry, Some(test_timestamp()));
+            assert!(events.is_empty(), "match-complete branch stays suppressed");
+        }
+
+        #[test]
+        fn test_dual_emit_events_preserve_timestamp_and_raw_bytes() {
+            let body = game_over_body_with_killing_damage();
+            let entry = unity_entry(&body);
+            let events = try_parse(&entry, Some(test_timestamp()));
+            assert_eq!(events.len(), 2);
+            for event in &events {
+                assert_eq!(event.metadata().timestamp(), Some(test_timestamp()));
+                assert_eq!(event.metadata().raw_bytes(), body.as_bytes());
+            }
         }
     }
 }

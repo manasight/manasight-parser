@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- GameOver `GameStateMessage`s carrying annotations (e.g. the lethal combat damage that ends the match) no longer drop them silently. When `gameInfo.stage == GameStage_GameOver` and the GSM has a non-empty `annotations` or `persistentAnnotations` array, the parser now emits a `GameEvent::GameState` carrying both arrays immediately before the existing `GameEvent::GameResult`. Per-producer ordering on the broadcast channel guarantees annotation-walker consumers see the killing-blow data before the result payload. GameOver GSMs with empty annotation arrays continue to emit only the `GameResult` event; the `MatchState_MatchComplete` suppression branch is unchanged (#196).
+
 ## [0.3.0] - 2026-05-13
 
 ### Changed
