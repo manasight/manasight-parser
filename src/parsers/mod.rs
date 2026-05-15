@@ -16,3 +16,4 @@ pub mod rank;
 pub mod session;
 #[cfg(test)]
 pub(crate) mod test_helpers;
+pub mod truncation;

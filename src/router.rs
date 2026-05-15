@@ -260,6 +260,14 @@ fn dispatch_to_parsers(entry: &LogEntry, timestamp: Option<DateTime<Utc>>) -> Ve
         return vec![event];
     }
 
+    // Truncation marker entries — structurally a metadata-style entry (no
+    // JSON body, header-only data) so dispatched alongside metadata before
+    // the GRE path. The parser gates on `EntryHeader::TruncationMarker`, so
+    // non-truncation entries pass straight through.
+    if let Some(event) = parsers::truncation::try_parse(entry, timestamp) {
+        return vec![event];
+    }
+
     // GRE parser returns Vec<GameEvent> (may contain multiple batched GSMs).
     let gre_events = parsers::gre::try_parse(entry, timestamp);
     if !gre_events.is_empty() {
@@ -913,6 +921,70 @@ mod tests {
         fn test_route_unrecognized_metadata_returns_empty() {
             let router = Router::new();
             let entry = metadata_entry("SOME OTHER METADATA");
+
+            let results = router.route(&entry);
+            assert!(results.is_empty());
+            assert_eq!(router.stats().unknown_count(), 1);
+        }
+    }
+
+    // -- Router: GSM truncation marker entries (#200) ------------------------
+
+    mod truncation_marker_entries {
+        use super::*;
+
+        fn truncation_entry(body: &str) -> LogEntry {
+            LogEntry {
+                header: EntryHeader::TruncationMarker,
+                body: body.to_owned(),
+            }
+        }
+
+        fn marker_body(object_count: u32, annotation_count: u32) -> String {
+            format!(
+                "[Message summarized because one or more GameStateMessages \
+                 exceeded the 50 GameObject or 50 Annotation limit.]\n\
+                 ::: GameStateMessage\n\
+                 :: GameObject Count = {object_count}\n\
+                 :: Annotation Count = {annotation_count}\n\
+                 ::: ActionsAvailableReq"
+            )
+        }
+
+        #[test]
+        fn test_route_truncation_marker_emits_truncation_event() {
+            let router = Router::new();
+            let entry = truncation_entry(&marker_body(63, 4));
+
+            let results = router.route(&entry);
+            assert_eq!(results.len(), 1);
+            assert!(matches!(&results[0], GameEvent::Truncation(_)));
+            assert_eq!(router.stats().routed_count(), 1);
+            assert_eq!(router.stats().unknown_count(), 0);
+        }
+
+        #[test]
+        fn test_route_truncation_marker_preserves_counts() {
+            let router = Router::new();
+            let entry = truncation_entry(&marker_body(63, 4));
+
+            let results = router.route(&entry);
+            assert_eq!(results.len(), 1);
+            let GameEvent::Truncation(ref event) = results[0] else {
+                unreachable!("expected Truncation event");
+            };
+            assert_eq!(event.object_count(), Some(63));
+            assert_eq!(event.annotation_count(), Some(4));
+        }
+
+        #[test]
+        fn test_route_truncation_marker_without_counts_is_unrecognized() {
+            // Marker header but no count lines — the parser bails and the
+            // router falls through to its unknown-counter path.
+            let router = Router::new();
+            let body = "[Message summarized because one or more GameStateMessages \
+                        exceeded the 50 GameObject or 50 Annotation limit.]";
+            let entry = truncation_entry(body);
 
             let results = router.route(&entry);
             assert!(results.is_empty());

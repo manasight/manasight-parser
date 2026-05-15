@@ -16,6 +16,7 @@ use super::turn_info::extract_turn_info;
 ///   "game_state_type": "GameStateType_Full",
 ///   "msg_id": 5,
 ///   "game_state_id": 42,
+///   "prev_game_state_id": 41,
 ///   "zones": [ { "zone_id": 1, "zone_type": "ZoneType_Hand", ... }, ... ],
 ///   "game_objects": [ { "instance_id": 100, "grp_id": 68398, ... }, ... ],
 ///   "game_info": { ... },
@@ -32,6 +33,12 @@ use super::turn_info::extract_turn_info;
 /// when `gameInfo.turnInfo` is absent. `annotations`, `persistent_annotations`,
 /// `timers`, and `diff_deleted_instance_ids` are empty arrays when their
 /// respective source arrays are absent.
+///
+/// `prev_game_state_id` is the `prevGameStateId` field present on every Diff
+/// GSM wire payload. Full GSMs legitimately omit it; the extracted value is
+/// `Option<i64>` and serializes to JSON `null` when absent. Surfacing this
+/// field lets downstream consumers detect a missed `game_state_id` in the
+/// sequence even when the data is present (issue #200).
 pub(super) fn build_game_state_message_payload(gre_msg: &serde_json::Value) -> serde_json::Value {
     let gsm = gre_msg.get("gameStateMessage");
 
@@ -45,6 +52,15 @@ pub(super) fn build_game_state_message_payload(gre_msg: &serde_json::Value) -> s
         .get("gameStateId")
         .and_then(serde_json::Value::as_i64)
         .unwrap_or(0);
+
+    // `prevGameStateId` is present inside `gameStateMessage` on every Diff
+    // GSM wire payload (corpus-verified across 589/589 Diff GSMs in a sample
+    // session) and omitted from Full GSMs. `Option<i64>` round-trips to JSON
+    // null when absent so the key is always present in the emitted payload
+    // (issue #200).
+    let prev_game_state_id = gsm
+        .and_then(|g| g.get("prevGameStateId"))
+        .and_then(serde_json::Value::as_i64);
 
     // Determine the payload type based on the GRE message type.
     let gre_type = gre_msg
@@ -105,6 +121,7 @@ pub(super) fn build_game_state_message_payload(gre_msg: &serde_json::Value) -> s
         "game_state_type": game_state_type,
         "msg_id": msg_id,
         "game_state_id": game_state_id,
+        "prev_game_state_id": prev_game_state_id,
         "zones": zones,
         "game_objects": game_objects,
         "game_info": game_info,
@@ -1896,6 +1913,120 @@ mod tests {
             let payload = first_game_state_payload(&body);
             assert_eq!(payload["type"], "queued_game_state_message");
             assert_eq!(payload["game_state_type"], "GameStateType_Full");
+        }
+    }
+
+    // -- prev_game_state_id extraction (#200) -------------------------------
+
+    mod prev_game_state_id_extraction {
+        use super::*;
+
+        /// Helper: build a GSM body with the given `prevGameStateId` inside
+        /// the inner `gameStateMessage` sub-object — corpus-verified
+        /// (589/589 Diff GSMs in a sample session) wire location.
+        fn gsm_body_with_prev(game_state_type: &str, prev: Option<i64>) -> String {
+            let mut inner = serde_json::json!({
+                "type": game_state_type,
+                "zones": [],
+                "gameObjects": []
+            });
+            if let Some(p) = prev {
+                inner["prevGameStateId"] = serde_json::json!(p);
+            }
+            let msg = serde_json::json!({
+                "type": "GREMessageType_GameStateMessage",
+                "msgId": 60,
+                "gameStateId": 300,
+                "gameStateMessage": inner
+            });
+            format!(
+                "[UnityCrossThreadLogger]greToClientEvent\n{}",
+                serde_json::json!({
+                    "greToClientEvent": {
+                        "greToClientMessages": [msg]
+                    }
+                })
+            )
+        }
+
+        #[test]
+        fn test_diff_gsm_extracts_prev_game_state_id() {
+            let body = gsm_body_with_prev("GameStateType_Diff", Some(299));
+            let entry = unity_entry(&body);
+            let result = try_parse(&entry, Some(test_timestamp()));
+            assert!(!result.is_empty());
+            let payload = game_state_payload(&result[0]);
+            assert_eq!(payload["prev_game_state_id"], 299);
+        }
+
+        #[test]
+        fn test_full_gsm_missing_prev_id_serializes_as_null() {
+            let body = gsm_body_with_prev("GameStateType_Full", None);
+            let entry = unity_entry(&body);
+            let result = try_parse(&entry, Some(test_timestamp()));
+            assert!(!result.is_empty());
+            let payload = game_state_payload(&result[0]);
+            // Key is always present, value is JSON null when absent on the wire.
+            assert!(
+                payload
+                    .get("prev_game_state_id")
+                    .is_some_and(serde_json::Value::is_null),
+                "expected prev_game_state_id = null, got {:?}",
+                payload.get("prev_game_state_id"),
+            );
+        }
+
+        #[test]
+        fn test_diff_gsm_prev_id_equals_one() {
+            // Smallest realistic value — game-start Diff GSMs reference msg 0.
+            let body = gsm_body_with_prev("GameStateType_Diff", Some(1));
+            let entry = unity_entry(&body);
+            let result = try_parse(&entry, Some(test_timestamp()));
+            assert!(!result.is_empty());
+            let payload = game_state_payload(&result[0]);
+            assert_eq!(payload["prev_game_state_id"], 1);
+        }
+
+        #[test]
+        fn test_prev_id_extraction_independent_of_game_state_id() {
+            // Sanity check: extraction reads `prevGameStateId`, not `gameStateId`.
+            let body = gsm_body_with_prev("GameStateType_Diff", Some(450));
+            let entry = unity_entry(&body);
+            let result = try_parse(&entry, Some(test_timestamp()));
+            assert!(!result.is_empty());
+            let payload = game_state_payload(&result[0]);
+            assert_eq!(payload["game_state_id"], 300);
+            assert_eq!(payload["prev_game_state_id"], 450);
+        }
+
+        #[test]
+        fn test_queued_gsm_extracts_prev_game_state_id() {
+            // QueuedGameStateMessage uses the same wire shape — prev id
+            // extraction must apply equally (read from inner `gameStateMessage`).
+            let msg = serde_json::json!({
+                "type": "GREMessageType_QueuedGameStateMessage",
+                "msgId": 61,
+                "gameStateId": 301,
+                "gameStateMessage": {
+                    "type": "GameStateType_Diff",
+                    "zones": [],
+                    "gameObjects": [],
+                    "prevGameStateId": 300,
+                }
+            });
+            let body = format!(
+                "[UnityCrossThreadLogger]greToClientEvent\n{}",
+                serde_json::json!({
+                    "greToClientEvent": {
+                        "greToClientMessages": [msg]
+                    }
+                })
+            );
+            let entry = unity_entry(&body);
+            let result = try_parse(&entry, Some(test_timestamp()));
+            assert!(!result.is_empty());
+            let payload = game_state_payload(&result[0]);
+            assert_eq!(payload["prev_game_state_id"], 300);
         }
     }
 }

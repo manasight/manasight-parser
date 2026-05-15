@@ -28,9 +28,10 @@
 //! literals (`"`) and backslash escapes (`\\`), so braces appearing inside
 //! JSON string values do not count. Corpus analysis (44 sessions, 47,412
 //! multi-line entries) shows every entry that opens a `{` closes it within
-//! the entry boundary; bodies that never open a `{` (the rare "Message
-//! summarized…" GRE markers and a few `true`-only REST responses) still
-//! flush on the next header via the original fallback path.
+//! the entry boundary; bodies that never open a `{` (a few `true`-only REST
+//! responses and the [`EntryHeader::TruncationMarker`] entries whose
+//! follow-on `:: ... Count = N` lines carry no JSON braces) still flush on
+//! the next header via the original fallback path.
 //!
 //! This behavior is enabled by default via the `brace_depth_flush` cargo
 //! feature. Disabling the feature reverts to the original "flush on next
@@ -52,6 +53,16 @@
 use regex::Regex;
 
 use crate::util::truncate_for_log;
+
+/// Prefix of MTGA's GSM truncation marker line.
+///
+/// The full line in the log is
+/// `[Message summarized because one or more GameStateMessages exceeded the 50
+/// GameObject or 50 Annotation limit.]`. The shorter `"[Message summarized"`
+/// prefix is sufficient to detect the marker without coupling to the exact
+/// wording (Arena could vary punctuation or rephrase the suffix) and has zero
+/// false-positive matches in the corpus.
+const TRUNCATION_MARKER_PREFIX: &str = "[Message summarized";
 
 /// The known log entry header prefixes in MTG Arena's `Player.log`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -77,6 +88,15 @@ pub enum EntryHeader {
     /// Currently covers `DETAILED LOGS: ENABLED` and `DETAILED LOGS: DISABLED`,
     /// which Arena writes near the top of every session (typically line 24).
     Metadata,
+    /// `[Message summarized because one or more GameStateMessages exceeded the
+    /// 50 GameObject or 50 Annotation limit.]` — Arena's truncation marker
+    /// emitted in place of an oversized `GameStateMessage` body. The marker
+    /// is followed by `::: GameStateMessage`, `:: GameObject Count = N`,
+    /// `:: Annotation Count = M`, and the next sibling message header. The
+    /// GSM body itself is irrecoverable from `Player.log`; this header
+    /// surfaces the signal so downstream consumers can detect a missed
+    /// `gsm_id` via the gap.
+    TruncationMarker,
 }
 
 impl EntryHeader {
@@ -92,6 +112,7 @@ impl EntryHeader {
             Self::ConnectionManager => "[ConnectionManager]",
             Self::Matchmaking => "Matchmaking:",
             Self::Metadata => "METADATA",
+            Self::TruncationMarker => "[Message summarized]",
         }
     }
 }
@@ -417,6 +438,9 @@ impl LineBuffer {
         if line.starts_with("Matchmaking: ") {
             return Some(EntryHeader::Matchmaking);
         }
+        if line.starts_with(TRUNCATION_MARKER_PREFIX) {
+            return Some(EntryHeader::TruncationMarker);
+        }
         None
     }
 
@@ -446,7 +470,16 @@ impl LineBuffer {
                     HeaderClass::SingleLine
                 }
             }
-            EntryHeader::ClientGre => HeaderClass::MultiLine,
+            // `ClientGre` accumulates its full JSON body until brace-balance
+            // flush (default feature) or the next header arrives.
+            //
+            // `TruncationMarker` is followed by 3 sub-header lines
+            // (`::: GameStateMessage`, `:: GameObject Count = N`,
+            // `:: Annotation Count = M`) that must accumulate into the entry
+            // body so the thin truncation parser can extract the counts.
+            // Its body never opens a `{`, so brace-balance flush doesn't
+            // fire — accumulation terminates when the next header arrives.
+            EntryHeader::ClientGre | EntryHeader::TruncationMarker => HeaderClass::MultiLine,
             // ConnectionManager and Matchmaking are corpus-confirmed
             // single-line. Metadata (`DETAILED LOGS: …`) is handled directly
             // in `push_line` and never reaches this function — but it must
@@ -1750,22 +1783,23 @@ mod tests {
         }
 
         /// Non-JSON bodies (no `{` anywhere) fall through to the legacy
-        /// "flush on next header" path — corresponds to the rare GRE
-        /// "Message summarized…" markers and `true`-bodied REST responses.
+        /// "flush on next header" path — corresponds to the rare
+        /// `true`-bodied REST responses and similar header-less continuations
+        /// whose body never opens a brace.
         #[test]
         fn test_non_json_body_falls_through_to_next_header() {
             let mut buf = LineBuffer::new();
             buf.push_line("[Client GRE] GreToClientEvent");
-            assert!(buf.push_line("[Message summarized due to size]").is_empty());
+            assert!(buf.push_line("(payload elided)").is_empty());
             assert!(buf.push_line(":: 12345 entries").is_empty());
-            assert!(buf.push_line(":: payload elided").is_empty());
+            assert!(buf.push_line(":: payload trimmed").is_empty());
 
             // Next header flushes the accumulating Client-GRE entry — the
             // entry was never brace-flushed because no `{` appeared.
             let entries = buf.push_line("[UnityCrossThreadLogger]1/1/2025 After");
             assert_eq!(entries.len(), 1);
             assert_eq!(entries[0].header, EntryHeader::ClientGre);
-            assert!(entries[0].body.contains("[Message summarized"));
+            assert!(entries[0].body.contains("(payload elided)"));
             assert!(entries[0].body.contains(":: 12345 entries"));
         }
 
@@ -2010,6 +2044,127 @@ mod tests {
             let out = buf.push_line(body);
             assert_eq!(out.len(), 1);
             assert!(out[0].body.contains(r#""line1\nline2""#));
+        }
+    }
+
+    // -- LineBuffer: GSM truncation marker header (#200) ---------------------
+
+    mod truncation_marker {
+        use super::*;
+
+        const MARKER: &str = "[Message summarized because one or more GameStateMessages \
+             exceeded the 50 GameObject or 50 Annotation limit.]";
+
+        #[test]
+        fn test_as_str_truncation_marker() {
+            assert_eq!(
+                EntryHeader::TruncationMarker.as_str(),
+                "[Message summarized]"
+            );
+        }
+
+        #[test]
+        fn test_display_truncation_marker() {
+            assert_eq!(
+                EntryHeader::TruncationMarker.to_string(),
+                "[Message summarized]"
+            );
+        }
+
+        #[test]
+        fn test_marker_is_detected_as_header() {
+            let buf = LineBuffer::new();
+            assert_eq!(
+                buf.detect_header(MARKER),
+                Some(EntryHeader::TruncationMarker)
+            );
+        }
+
+        #[test]
+        fn test_marker_with_prefix_only_is_detected() {
+            // Detection uses the `[Message summarized` prefix to stay
+            // tolerant of minor wording variations. Any line starting with
+            // that prefix is classified as a truncation marker.
+            let buf = LineBuffer::new();
+            let line = "[Message summarized for some other reason]";
+            assert_eq!(buf.detect_header(line), Some(EntryHeader::TruncationMarker));
+        }
+
+        #[test]
+        fn test_marker_classified_as_multi_line() {
+            assert_eq!(
+                LineBuffer::classify_header(EntryHeader::TruncationMarker, MARKER),
+                HeaderClass::MultiLine,
+            );
+        }
+
+        #[test]
+        fn test_marker_as_first_line_starts_accumulation() {
+            let mut buf = LineBuffer::new();
+            let out = buf.push_line(MARKER);
+            // MultiLine — entry is not flushed yet.
+            assert!(out.is_empty());
+            assert!(!buf.is_empty());
+        }
+
+        #[test]
+        fn test_marker_mid_stream_flushes_prior_uctl_envelope() {
+            // The truncation marker arrives inside a `[UnityCrossThreadLogger]`
+            // envelope and the prior (now header-only) UCTL entry must flush
+            // when the marker triggers a new MultiLine entry.
+            let mut buf = LineBuffer::new();
+            buf.push_line(
+                "[UnityCrossThreadLogger]5/13/2026 10:01:12 AM: \
+                 Match to <transaction>: GreToClientEvent",
+            );
+
+            let out = buf.push_line(MARKER);
+            assert_eq!(out.len(), 1);
+            assert_eq!(out[0].header, EntryHeader::UnityCrossThreadLogger);
+            assert!(out[0].body.contains("GreToClientEvent"));
+
+            // Truncation entry is now accumulating in the buffer.
+            assert!(!buf.is_empty());
+        }
+
+        #[test]
+        fn test_marker_accumulates_count_lines_until_next_header() {
+            // The marker + follow-on `::: GameStateMessage`, `:: GameObject
+            // Count = N`, `:: Annotation Count = M`, and `::: ActionsAvailableReq`
+            // lines are all accumulated into the truncation entry. The entry
+            // flushes when the next real header arrives (here, the next
+            // `[UnityCrossThreadLogger]` line).
+            let mut buf = LineBuffer::new();
+            assert!(buf.push_line(MARKER).is_empty());
+            assert!(buf.push_line("::: GameStateMessage").is_empty());
+            assert!(buf.push_line(":: GameObject Count = 63").is_empty());
+            assert!(buf.push_line(":: Annotation Count = 4").is_empty());
+            assert!(buf.push_line("::: ActionsAvailableReq").is_empty());
+
+            let out = buf.push_line("[UnityCrossThreadLogger]5/13/2026 10:01:13 AM Next");
+            assert_eq!(out.len(), 1);
+            assert_eq!(out[0].header, EntryHeader::TruncationMarker);
+            assert!(out[0].body.starts_with(MARKER));
+            assert!(out[0].body.contains(":: GameObject Count = 63"));
+            assert!(out[0].body.contains(":: Annotation Count = 4"));
+            assert!(out[0].body.contains("::: ActionsAvailableReq"));
+        }
+
+        #[test]
+        fn test_marker_flush_via_eof() {
+            // EOF flush also produces the truncation entry, in case the log
+            // ends immediately after the marker block.
+            let mut buf = LineBuffer::new();
+            buf.push_line(MARKER);
+            buf.push_line("::: GameStateMessage");
+            buf.push_line(":: GameObject Count = 7");
+            buf.push_line(":: Annotation Count = 11");
+            let flushed = buf.flush();
+            assert!(flushed.is_some());
+            let entry = flushed.unwrap_or_else(|| unreachable!());
+            assert_eq!(entry.header, EntryHeader::TruncationMarker);
+            assert!(entry.body.contains("GameObject Count = 7"));
+            assert!(entry.body.contains("Annotation Count = 11"));
         }
     }
 }

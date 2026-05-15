@@ -52,7 +52,7 @@ pub use events::{
     ClientActionEvent, DeckCollectionEvent, DetailedLoggingStatusEvent, DraftBotEvent,
     DraftCompleteEvent, DraftHumanEvent, EventLifecycleEvent, EventMetadata, GameEvent,
     GameResultEvent, GameStateEvent, InventoryEvent, LogFileRotatedEvent, MatchStateEvent,
-    PerformanceClass, RankEvent, SessionEvent,
+    PerformanceClass, RankEvent, SessionEvent, TruncationEvent,
 };
 pub use sanitize::scrub_raw_log;
 pub use stream::{MtgaEventStream, StreamError};

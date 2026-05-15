@@ -129,6 +129,7 @@ macro_rules! delegate_to_inner {
             Self::TcpConnectionClose(e) => e.$method(),
             Self::WebSocketClosed(e) => e.$method(),
             Self::ConnectionError(e) => e.$method(),
+            Self::Truncation(e) => e.$method(),
         }
     };
 }
@@ -260,6 +261,17 @@ pub enum GameEvent {
     /// the parser is agnostic to inner error-code semantics (per ADR-011).
     /// Class 1 — interactive dispatch.
     ConnectionError(ConnectionErrorEvent),
+
+    /// GSM truncation marker observed.
+    ///
+    /// Parsed from `[Message summarized because one or more GameStateMessages
+    /// exceeded the 50 GameObject or 50 Annotation limit.]` entries. The
+    /// truncated GSM's body is irrecoverable from `Player.log`; this event
+    /// surfaces the signal so downstream consumers (deck tracker) can mark
+    /// the next `gsm_id` as crossing a data-loss gap. Payload is
+    /// `{"object_count": N, "annotation_count": M}`; timestamp lives in
+    /// `EventMetadata`. Class 1 — interactive dispatch.
+    Truncation(TruncationEvent),
 }
 
 impl GameEvent {
@@ -278,7 +290,8 @@ impl GameEvent {
             | Self::MatchConnectionState(_)
             | Self::TcpConnectionClose(_)
             | Self::WebSocketClosed(_)
-            | Self::ConnectionError(_) => PerformanceClass::InteractiveDispatch,
+            | Self::ConnectionError(_)
+            | Self::Truncation(_) => PerformanceClass::InteractiveDispatch,
             Self::DraftBot(_)
             | Self::DraftHuman(_)
             | Self::DraftComplete(_)
@@ -639,6 +652,57 @@ impl DetailedLoggingStatusEvent {
 }
 
 define_event! {
+    /// GSM truncation marker event.
+    ///
+    /// Emitted when Arena's `Player.log` writes the
+    /// `[Message summarized because one or more GameStateMessages exceeded the
+    /// 50 GameObject or 50 Annotation limit.]` marker in place of a normal
+    /// `GameStateMessage` JSON body. The truncated GSM's body is irrecoverable
+    /// from the log; this event surfaces the signal so downstream consumers
+    /// (deck tracker) can mark the next `gsm_id` as crossing a data-loss gap.
+    ///
+    /// Following the header-only convention used by `LogFileRotatedEvent` and
+    /// `DetailedLoggingStatusEvent`: timestamp lives in `EventMetadata`, the
+    /// payload carries `{"object_count": N, "annotation_count": M}`.
+    /// `raw_bytes` is empty because the marker has no parseable body and
+    /// downstream fingerprinting derives no value from preserving the
+    /// fixed-form marker text.
+    TruncationEvent
+}
+
+impl TruncationEvent {
+    /// Creates a truncation event from parsed marker counts.
+    pub fn new_truncation(
+        timestamp: Option<DateTime<Utc>>,
+        object_count: u32,
+        annotation_count: u32,
+    ) -> Self {
+        let metadata = EventMetadata::new(timestamp, Vec::new());
+        let payload = serde_json::json!({
+            "object_count": object_count,
+            "annotation_count": annotation_count,
+        });
+        Self::new(metadata, payload)
+    }
+
+    /// Returns the truncated GSM's reported game-object count, or `None`
+    /// if the payload was manually constructed without the field.
+    pub fn object_count(&self) -> Option<u32> {
+        self.payload()["object_count"]
+            .as_u64()
+            .and_then(|v| u32::try_from(v).ok())
+    }
+
+    /// Returns the truncated GSM's reported annotation count, or `None`
+    /// if the payload was manually constructed without the field.
+    pub fn annotation_count(&self) -> Option<u32> {
+        self.payload()["annotation_count"]
+            .as_u64()
+            .and_then(|v| u32::try_from(v).ok())
+    }
+}
+
+define_event! {
     /// Match connection state machine transition event.
     ///
     /// Parsed from `[UnityCrossThreadLogger]STATE CHANGED {...}` entries.
@@ -778,6 +842,7 @@ mod tests {
             )),
             GameEvent::WebSocketClosed(WebSocketClosedEvent::new(meta.clone(), payload.clone())),
             GameEvent::ConnectionError(ConnectionErrorEvent::new(meta.clone(), payload.clone())),
+            GameEvent::Truncation(TruncationEvent::new(meta.clone(), payload.clone())),
         ]
     }
 
@@ -1024,6 +1089,7 @@ mod tests {
             PerformanceClass::InteractiveDispatch, // TcpConnectionClose
             PerformanceClass::InteractiveDispatch, // WebSocketClosed
             PerformanceClass::InteractiveDispatch, // ConnectionError
+            PerformanceClass::InteractiveDispatch, // Truncation
         ];
 
         assert_eq!(
@@ -1143,6 +1209,7 @@ mod tests {
             1, // TcpConnectionClose
             1, // WebSocketClosed
             1, // ConnectionError
+            1, // Truncation
         ];
         assert_eq!(events.len(), expected_numbers.len());
         for (event, expected_num) in events.iter().zip(expected_numbers.iter()) {
@@ -1406,5 +1473,78 @@ mod tests {
             event.performance_class(),
             PerformanceClass::InteractiveDispatch
         );
+    }
+
+    // -- TruncationEvent --
+
+    fn make_truncation(object_count: u32, annotation_count: u32) -> TruncationEvent {
+        let ts = Utc
+            .with_ymd_and_hms(2026, 5, 13, 10, 1, 12)
+            .single()
+            .unwrap_or_default();
+        TruncationEvent::new_truncation(Some(ts), object_count, annotation_count)
+    }
+
+    #[test]
+    fn test_truncation_event_payload_contains_object_count() {
+        let event = make_truncation(63, 4);
+        assert_eq!(event.payload()["object_count"], 63);
+    }
+
+    #[test]
+    fn test_truncation_event_payload_contains_annotation_count() {
+        let event = make_truncation(63, 4);
+        assert_eq!(event.payload()["annotation_count"], 4);
+    }
+
+    #[test]
+    fn test_truncation_event_metadata_has_empty_raw_bytes() {
+        // Following LogFileRotated / DetailedLoggingStatus precedent —
+        // marker text is fixed-form, so raw_bytes adds no fingerprint value.
+        let event = make_truncation(63, 4);
+        assert!(event.metadata().raw_bytes().is_empty());
+    }
+
+    #[test]
+    fn test_truncation_event_metadata_carries_timestamp() {
+        let event = make_truncation(63, 4);
+        assert!(event.metadata().timestamp().is_some());
+    }
+
+    #[test]
+    fn test_truncation_event_accepts_missing_timestamp() {
+        // Router passes Option<DateTime> through to the constructor — entries
+        // with unparseable timestamps must still produce the event.
+        let event = TruncationEvent::new_truncation(None, 51, 0);
+        assert!(event.metadata().timestamp().is_none());
+        assert_eq!(event.object_count(), Some(51));
+    }
+
+    #[test]
+    fn test_truncation_event_object_count_accessor() {
+        assert_eq!(make_truncation(63, 4).object_count(), Some(63));
+    }
+
+    #[test]
+    fn test_truncation_event_annotation_count_accessor() {
+        assert_eq!(make_truncation(63, 4).annotation_count(), Some(4));
+    }
+
+    #[test]
+    fn test_truncation_event_performance_class_is_interactive() {
+        let event = GameEvent::Truncation(make_truncation(63, 4));
+        assert_eq!(
+            event.performance_class(),
+            PerformanceClass::InteractiveDispatch
+        );
+    }
+
+    #[test]
+    fn test_truncation_event_serialize_round_trip() -> TestResult {
+        let event = GameEvent::Truncation(make_truncation(63, 4));
+        let serialized = serde_json::to_string(&event)?;
+        let deserialized: GameEvent = serde_json::from_str(&serialized)?;
+        assert_eq!(deserialized, event);
+        Ok(())
     }
 }
