@@ -517,8 +517,7 @@ define_event! {
 define_event! {
     /// Human draft pick events.
     ///
-    /// Parsed from `Draft.Notify`, `EventPlayerDraftMakePick`, and
-    /// `LogBusinessEvents` entries containing `PickGrpId`.
+    /// Parsed from `Draft.Notify` and `EventPlayerDraftMakePick`.
     DraftHumanEvent
 }
 
@@ -541,9 +540,8 @@ define_event! {
 define_event! {
     /// Session identity and connection events.
     ///
-    /// Covers `Updated account. DisplayName:`, `authenticateResponse`,
-    /// and `FrontDoorConnection.Close`. Needed to tag all subsequent events
-    /// with player identity.
+    /// Covers `authenticateResponse` and `FrontDoorConnection.Close`.
+    /// Needed to tag all subsequent events with player identity.
     SessionEvent
 }
 
@@ -978,9 +976,9 @@ mod tests {
     fn test_draft_human_event_field_access() {
         let event = DraftHumanEvent::new(
             make_metadata(b"human draft"),
-            serde_json::json!({"PickGrpId": 12345}),
+            serde_json::json!({"draft_id": "test-draft-123"}),
         );
-        assert_eq!(event.payload()["PickGrpId"], 12345);
+        assert_eq!(event.payload()["draft_id"], "test-draft-123");
     }
 
     #[test]

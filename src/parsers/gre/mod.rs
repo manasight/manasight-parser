@@ -445,7 +445,7 @@ mod tests {
 
         #[test]
         fn test_try_parse_unrelated_entry_returns_empty() {
-            let body = "[UnityCrossThreadLogger]Updated account. DisplayName:Test";
+            let body = "[UnityCrossThreadLogger]FrontDoorConnection.Close";
             let entry = unity_entry(body);
             assert!(try_parse(&entry, Some(test_timestamp())).is_empty());
         }

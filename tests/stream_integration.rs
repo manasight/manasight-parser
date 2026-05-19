@@ -27,10 +27,8 @@ fn temp_log(content: &str) -> Result<NamedTempFile, std::io::Error> {
 
 #[tokio::test]
 async fn test_stream_session_event_from_log_file() -> TestResult {
-    let content = "[UnityCrossThreadLogger]Updated account. \
-                    DisplayName:TestPlayer, \
-                    AccountID:abc123, \
-                    Token:sometoken\n\
+    let content = "[UnityCrossThreadLogger]authenticateResponse\n\
+                    {\"screenName\":\"TestPlayer\"}\n\
                     [UnityCrossThreadLogger]2/25/2026 12:00:00 PM\nfiller\n";
     let f = temp_log(content)?;
 
@@ -96,10 +94,8 @@ async fn test_stream_multiple_event_types_in_order() -> TestResult {
     });
     // Session event (no timestamp) followed by GameState event (with timestamp).
     let content = format!(
-        "[UnityCrossThreadLogger]Updated account. \
-         DisplayName:TestPlayer, \
-         AccountID:abc123, \
-         Token:sometoken\n\
+        "[UnityCrossThreadLogger]authenticateResponse\n\
+         {{\"screenName\":\"TestPlayer\"}}\n\
          [UnityCrossThreadLogger]2/25/2026 12:00:00 PM\n{gs_payload}\n\
          [UnityCrossThreadLogger]2/25/2026 12:00:01 PM\nfiller\n"
     );
@@ -210,10 +206,8 @@ async fn test_stream_subscriber_ends_after_shutdown() -> TestResult {
 #[tokio::test]
 async fn test_stream_detailed_logs_enabled_event() -> TestResult {
     let content = "DETAILED LOGS: ENABLED\n\
-                    [UnityCrossThreadLogger]Updated account. \
-                    DisplayName:TestPlayer, \
-                    AccountID:abc123, \
-                    Token:sometoken\n\
+                    [UnityCrossThreadLogger]authenticateResponse\n\
+                    {\"screenName\":\"TestPlayer\"}\n\
                     [UnityCrossThreadLogger]2/25/2026 12:00:00 PM\nfiller\n";
     let f = temp_log(content)?;
 

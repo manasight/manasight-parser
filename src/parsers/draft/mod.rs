@@ -5,7 +5,7 @@
 //! | Module | Log Signatures | Event Type |
 //! |--------|---------------|------------|
 //! | [`bot`] | `BotDraftDraftStatus`, `BotDraftDraftPick` | [`DraftBotEvent`](crate::events::DraftBotEvent) |
-//! | [`human`] | `Draft.Notify`, `EventPlayerDraftMakePick`, `LogBusinessEvents` with `PickGrpId` | [`DraftHumanEvent`](crate::events::DraftHumanEvent) |
+//! | [`human`] | `Draft.Notify`, `EventPlayerDraftMakePick` | [`DraftHumanEvent`](crate::events::DraftHumanEvent) |
 //! | [`complete`] | `DraftCompleteDraft` | [`DraftCompleteEvent`](crate::events::DraftCompleteEvent) |
 
 pub mod bot;
