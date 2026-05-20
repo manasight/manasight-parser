@@ -396,7 +396,7 @@ mod tests {
 
         #[test]
         fn test_extract_timestamp_no_timestamp_content_returns_none() {
-            let body = "[UnityCrossThreadLogger]Updated account. DisplayName:Player";
+            let body = "[UnityCrossThreadLogger]FrontDoorConnection.Close";
             let ts = extract_timestamp(body);
             assert!(ts.is_none());
         }
@@ -498,12 +498,10 @@ mod tests {
         }
 
         #[test]
-        fn test_route_session_account_update() {
+        fn test_route_session_authenticate_response() {
             let router = Router::new();
-            let body = "[UnityCrossThreadLogger]Updated account. \
-                         DisplayName:TestPlayer, \
-                         AccountID:abc123, \
-                         Token:sometoken";
+            let body = "[UnityCrossThreadLogger]authenticateResponse\n\
+                         {\"screenName\":\"TestPlayer\"}";
             let entry = unity_entry(body);
 
             let results = router.route(&entry);
@@ -703,10 +701,8 @@ mod tests {
         fn test_route_no_timestamp_session_still_routes() {
             let router = Router::new();
             // Real-world session entries without timestamps should still route.
-            let body = "[UnityCrossThreadLogger]Updated account. \
-                         DisplayName:Player, \
-                         AccountID:abc123, \
-                         Token:token";
+            let body = "[UnityCrossThreadLogger]authenticateResponse\n\
+                         {\"screenName\":\"Player\"}";
             let entry = unity_entry(body);
 
             let results = router.route(&entry);
@@ -722,10 +718,8 @@ mod tests {
             let router = Router::new();
             // Session entries without timestamps should have None timestamp
             // in metadata rather than a synthetic Utc::now().
-            let body = "[UnityCrossThreadLogger]Updated account. \
-                         DisplayName:Player, \
-                         AccountID:abc123, \
-                         Token:token";
+            let body = "[UnityCrossThreadLogger]authenticateResponse\n\
+                         {\"screenName\":\"Player\"}";
             let entry = unity_entry(body);
 
             let results = router.route(&entry);
@@ -800,10 +794,8 @@ mod tests {
             let router = Router::new();
 
             // Route one known entry (session -- no timestamp in header).
-            let known_body = "[UnityCrossThreadLogger]Updated account. \
-                              DisplayName:Player, \
-                              AccountID:abc123, \
-                              Token:token";
+            let known_body = "[UnityCrossThreadLogger]authenticateResponse\n\
+                              {\"screenName\":\"Player\"}";
             router.route(&unity_entry(known_body));
 
             // Route one unknown entry (with valid timestamp).

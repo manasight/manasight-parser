@@ -681,8 +681,8 @@ mod tests {
 
         #[test]
         fn test_try_parse_session_event_returns_none() {
-            let body = "[UnityCrossThreadLogger]Updated account. \
-                         DisplayName:Test, AccountID:abc123";
+            let body = "[UnityCrossThreadLogger]authenticateResponse\n\
+                         {\"screenName\":\"Test\"}";
             let entry = unity_entry(body);
             assert!(try_parse(&entry, Some(test_timestamp())).is_none());
         }

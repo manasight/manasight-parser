@@ -1,19 +1,18 @@
 //! Human draft parser for Premier Draft and Traditional Draft events.
 //!
 //! In human (pod) drafts, the player drafts against other human players.
-//! Three log signatures capture the draft flow:
+//! Two log signatures capture the draft flow:
 //!
 //! | Signature | Meaning | Key Fields |
 //! |-----------|---------|------------|
 //! | `Draft.Notify` | Draft state notification (pack presented) | `draftId`, `SelfPack`, `SelfPick`, `PackCards` |
-//! | `EventPlayerDraftMakePick` | Player's pick selection | `EventName`, `PickInfo` with `CardId`, `PackNumber`, `PickNumber` |
-//! | `LogBusinessEvents` with `PickGrpId` | Pick confirmation (business event) | `PickGrpId`, `PackCards`, `EventName` |
+//! | `EventPlayerDraftMakePick` | Player's pick selection | `DraftId`, `GrpIds`, `Pack`, `Pick` |
 //!
 //! Human drafts have 3 packs of 14 picks each (42 total picks). Pack and
 //! pick numbers are zero-indexed in the log.
 //!
-//! All three events are Class 2 (Durable Per-Event) -- each pick is
-//! independently valuable and must survive crashes.
+//! Both events are Class 2 (Durable Per-Event) -- each pick is independently
+//! valuable and must survive crashes.
 
 use crate::events::{DraftHumanEvent, EventMetadata, GameEvent};
 use crate::log::entry::LogEntry;
@@ -31,23 +30,11 @@ const DRAFT_NOTIFY_MARKER: &str = "Draft.Notify";
 /// from the presented pack.
 const MAKE_PICK_MARKER: &str = "EventPlayerDraftMakePick";
 
-/// Marker that identifies business event entries in the log.
-///
-/// `LogBusinessEvents` is a shared container used for multiple event types
-/// (game results, draft picks, etc.). We further discriminate by checking
-/// for the `PickGrpId` field.
-const BUSINESS_EVENTS_MARKER: &str = "LogBusinessEvents";
-
-/// Field that distinguishes draft pick business events from other
-/// `LogBusinessEvents` entries (e.g., game results with `WinningType`).
-const PICK_GRP_ID_FIELD: &str = "PickGrpId";
-
 /// Attempts to parse a [`LogEntry`] as a human draft event.
 ///
 /// Returns `Some(GameEvent::DraftHuman(_))` if the entry matches any of:
 /// - A `Draft.Notify` pack presentation
 /// - An `EventPlayerDraftMakePick` pick selection
-/// - A `LogBusinessEvents` with `PickGrpId` pick confirmation
 ///
 /// Returns `None` if the entry does not match any human draft signature.
 ///
@@ -70,14 +57,6 @@ pub fn try_parse(
 
     // Try EventPlayerDraftMakePick (pick selection).
     if let Some(payload) = try_parse_make_pick(body) {
-        let metadata = EventMetadata::new(timestamp, body.as_bytes().to_vec());
-        return Some(GameEvent::DraftHuman(DraftHumanEvent::new(
-            metadata, payload,
-        )));
-    }
-
-    // Try LogBusinessEvents with PickGrpId (pick confirmation).
-    if let Some(payload) = try_parse_pick_business_event(body) {
         let metadata = EventMetadata::new(timestamp, body.as_bytes().to_vec());
         return Some(GameEvent::DraftHuman(DraftHumanEvent::new(
             metadata, payload,
@@ -180,8 +159,7 @@ fn try_parse_make_pick(body: &str) -> Option<serde_json::Value> {
                 .and_then(|v| v.as_array())
                 .and_then(|arr| arr.first())
                 .and_then(serde_json::Value::as_i64)
-        })
-        .unwrap_or(0);
+        })?;
 
     let pack_idx = pick_info
         .get("PackNumber")
@@ -230,117 +208,6 @@ fn try_parse_make_pick(body: &str) -> Option<serde_json::Value> {
         "card_ids": card_ids,
         "raw_make_pick": parsed,
     }))
-}
-
-/// Attempts to parse a `LogBusinessEvents` with `PickGrpId` pick confirmation.
-///
-/// The log entry body contains a JSON object (or array of objects) with:
-/// - `PickGrpId`: the GRP ID of the picked card
-/// - `PackCards`: card GRP IDs that were in the pack (may be comma-separated
-///   string or array)
-/// - `EventName` or `InternalEventName`: the Arena event identifier
-fn try_parse_pick_business_event(body: &str) -> Option<serde_json::Value> {
-    // Must contain both the business events marker and PickGrpId.
-    if !body.contains(BUSINESS_EVENTS_MARKER) {
-        return None;
-    }
-
-    if !body.contains(PICK_GRP_ID_FIELD) {
-        return None;
-    }
-
-    let parsed = api_common::parse_json_from_body(body, "LogBusinessEvents (draft pick)")?;
-
-    // Find the source object containing PickGrpId.
-    let source = find_pick_source(&parsed)?;
-
-    let pick_grp_id = source
-        .get("PickGrpId")
-        .and_then(serde_json::Value::as_i64)
-        .unwrap_or(0);
-
-    let pack_cards = extract_business_event_pack_cards(source);
-
-    let event_name = source
-        .get("EventName")
-        .or_else(|| source.get("InternalEventName"))
-        .or_else(|| parsed.get("EventName"))
-        .or_else(|| parsed.get("InternalEventName"))
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("");
-
-    let pack_idx = source
-        .get("PackNumber")
-        .and_then(serde_json::Value::as_i64)
-        .unwrap_or(0);
-
-    let selection_idx = source
-        .get("PickNumber")
-        .and_then(serde_json::Value::as_i64)
-        .unwrap_or(0);
-
-    Some(serde_json::json!({
-        "type": "draft_human_pick_confirm",
-        "pick_grp_id": pick_grp_id,
-        "pack_cards": pack_cards,
-        "event_name": event_name,
-        "pack_number": pack_idx,
-        "pick_number": selection_idx,
-        "raw_business_event": parsed,
-    }))
-}
-
-/// Finds the source object containing `PickGrpId` within a parsed JSON value.
-///
-/// Searches the top level, inside a `Params` object, and inside a
-/// top-level array of business events.
-fn find_pick_source(parsed: &serde_json::Value) -> Option<&serde_json::Value> {
-    // Top level.
-    if parsed.get(PICK_GRP_ID_FIELD).is_some() {
-        return Some(parsed);
-    }
-
-    // Inside a `Params` object.
-    if let Some(params) = parsed.get("Params") {
-        if params.get(PICK_GRP_ID_FIELD).is_some() {
-            return Some(params);
-        }
-    }
-
-    // Inside a top-level array of business events.
-    if let Some(arr) = parsed.as_array() {
-        return arr
-            .iter()
-            .find(|item| item.get(PICK_GRP_ID_FIELD).is_some());
-    }
-
-    None
-}
-
-/// Extracts pack card IDs from a `PackCards` field in a business event.
-///
-/// `PackCards` may be a comma-separated string of GRP IDs (e.g., `"12345,67890"`)
-/// or an array of integers. This function normalizes to `Vec<i64>`.
-fn extract_business_event_pack_cards(source: &serde_json::Value) -> Vec<i64> {
-    if let Some(pack_cards) = source.get("PackCards") {
-        // Try as comma-separated string first.
-        if let Some(s) = pack_cards.as_str() {
-            return parse_comma_separated_ids(s);
-        }
-
-        // Try as array.
-        if let Some(arr) = pack_cards.as_array() {
-            return arr
-                .iter()
-                .filter_map(|v| {
-                    v.as_i64()
-                        .or_else(|| v.as_str().and_then(|s| s.parse::<i64>().ok()))
-                })
-                .collect();
-        }
-    }
-
-    Vec::new()
 }
 
 /// Extracts pack card IDs from a `PackCards` field in a `Draft.Notify` payload.
@@ -668,7 +535,7 @@ mod tests {
         }
 
         #[test]
-        fn test_try_parse_make_pick_missing_card_id_defaults_to_zero() {
+        fn test_try_parse_make_pick_missing_card_id_returns_none() {
             let body = "[UnityCrossThreadLogger]EventPlayerDraftMakePick\n\
                          {\n\
                            \"PickInfo\": {\n\
@@ -679,11 +546,7 @@ mod tests {
             let entry = unity_entry(body);
             let result = try_parse(&entry, Some(test_timestamp()));
 
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
-            let payload = draft_human_payload(event);
-
-            assert_eq!(payload["card_id"], 0);
+            assert!(result.is_none());
         }
 
         #[test]
@@ -766,155 +629,6 @@ mod tests {
         }
     }
 
-    // -- LogBusinessEvents with PickGrpId parsing ----------------------------
-
-    mod pick_business_event {
-        use super::*;
-
-        #[test]
-        fn test_try_parse_pick_business_event_basic() {
-            let body = "[UnityCrossThreadLogger]LogBusinessEvents\n\
-                         {\n\
-                           \"PickGrpId\": 12345,\n\
-                           \"PackCards\": \"12345,67890,11111\",\n\
-                           \"EventName\": \"PremierDraft_MKM_20260201\"\n\
-                         }";
-            let entry = unity_entry(body);
-            let result = try_parse(&entry, Some(test_timestamp()));
-
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
-            let payload = draft_human_payload(event);
-
-            assert_eq!(payload["type"], "draft_human_pick_confirm");
-            assert_eq!(payload["pick_grp_id"], 12345);
-            assert_eq!(
-                payload["pack_cards"],
-                serde_json::json!([12345, 67890, 11111])
-            );
-            assert_eq!(payload["event_name"], "PremierDraft_MKM_20260201");
-        }
-
-        #[test]
-        fn test_try_parse_pick_business_event_with_pack_pick_numbers() {
-            let body = "[UnityCrossThreadLogger]LogBusinessEvents\n\
-                         {\n\
-                           \"PickGrpId\": 67890,\n\
-                           \"PackNumber\": 1,\n\
-                           \"PickNumber\": 5,\n\
-                           \"PackCards\": \"67890,22222\"\n\
-                         }";
-            let entry = unity_entry(body);
-            let result = try_parse(&entry, Some(test_timestamp()));
-
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
-            let payload = draft_human_payload(event);
-
-            assert_eq!(payload["pick_grp_id"], 67890);
-            assert_eq!(payload["pack_number"], 1);
-            assert_eq!(payload["pick_number"], 5);
-        }
-
-        #[test]
-        fn test_try_parse_pick_business_event_params_wrapper() {
-            let body = "[UnityCrossThreadLogger]LogBusinessEvents\n\
-                         {\n\
-                           \"Params\": {\n\
-                             \"PickGrpId\": 33333,\n\
-                             \"PackCards\": \"33333,44444,55555\"\n\
-                           }\n\
-                         }";
-            let entry = unity_entry(body);
-            let result = try_parse(&entry, Some(test_timestamp()));
-
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
-            let payload = draft_human_payload(event);
-
-            assert_eq!(payload["pick_grp_id"], 33333);
-            assert_eq!(
-                payload["pack_cards"],
-                serde_json::json!([33333, 44444, 55555])
-            );
-        }
-
-        #[test]
-        fn test_try_parse_pick_business_event_array_format() {
-            let body = "[UnityCrossThreadLogger]LogBusinessEvents\n\
-                         [\n\
-                           {\"SomeOtherField\": \"value\"},\n\
-                           {\n\
-                             \"PickGrpId\": 44444,\n\
-                             \"PackCards\": \"44444,55555\"\n\
-                           }\n\
-                         ]";
-            let entry = unity_entry(body);
-            let result = try_parse(&entry, Some(test_timestamp()));
-
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
-            let payload = draft_human_payload(event);
-
-            assert_eq!(payload["pick_grp_id"], 44444);
-        }
-
-        #[test]
-        fn test_try_parse_pick_business_event_array_pack_cards() {
-            let body = "[UnityCrossThreadLogger]LogBusinessEvents\n\
-                         {\n\
-                           \"PickGrpId\": 12345,\n\
-                           \"PackCards\": [12345, 67890, 11111]\n\
-                         }";
-            let entry = unity_entry(body);
-            let result = try_parse(&entry, Some(test_timestamp()));
-
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
-            let payload = draft_human_payload(event);
-
-            assert_eq!(
-                payload["pack_cards"],
-                serde_json::json!([12345, 67890, 11111])
-            );
-        }
-
-        #[test]
-        fn test_try_parse_pick_business_event_preserves_raw_payload() {
-            let body = "[UnityCrossThreadLogger]LogBusinessEvents\n\
-                         {\n\
-                           \"PickGrpId\": 12345,\n\
-                           \"ExtraField\": \"preserved\"\n\
-                         }";
-            let entry = unity_entry(body);
-            let result = try_parse(&entry, Some(test_timestamp()));
-
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
-            let payload = draft_human_payload(event);
-
-            assert_eq!(payload["raw_business_event"]["ExtraField"], "preserved");
-        }
-
-        #[test]
-        fn test_try_parse_pick_business_event_with_timestamp_in_header() {
-            let body = "[UnityCrossThreadLogger]2/25/2026 12:00:00 PM \
-                         LogBusinessEvents\n\
-                         {\n\
-                           \"PickGrpId\": 88888,\n\
-                           \"PackCards\": \"88888\"\n\
-                         }";
-            let entry = unity_entry(body);
-            let result = try_parse(&entry, Some(test_timestamp()));
-
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
-            let payload = draft_human_payload(event);
-
-            assert_eq!(payload["pick_grp_id"], 88888);
-        }
-    }
-
     // -- Metadata preservation -----------------------------------------------
 
     mod metadata {
@@ -947,18 +661,6 @@ mod tests {
         }
 
         #[test]
-        fn test_try_parse_preserves_raw_bytes_business_event() {
-            let body = "[UnityCrossThreadLogger]LogBusinessEvents\n\
-                         {\"PickGrpId\": 12345}";
-            let entry = unity_entry(body);
-            let result = try_parse(&entry, Some(test_timestamp()));
-
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
-            assert_eq!(event.metadata().raw_bytes(), body.as_bytes());
-        }
-
-        #[test]
         fn test_try_parse_stores_timestamp_notify() {
             let body = "[UnityCrossThreadLogger]Draft.Notify\n\
                          {\"SelfPack\": 0, \"SelfPick\": 0, \
@@ -977,19 +679,6 @@ mod tests {
             let body = "[UnityCrossThreadLogger]EventPlayerDraftMakePick\n\
                          {\"PickInfo\": {\"CardId\": 1, \"PackNumber\": 0, \
                           \"PickNumber\": 0}}";
-            let entry = unity_entry(body);
-            let ts = Some(test_timestamp());
-            let result = try_parse(&entry, ts);
-
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
-            assert_eq!(event.metadata().timestamp(), ts);
-        }
-
-        #[test]
-        fn test_try_parse_stores_timestamp_business_event() {
-            let body = "[UnityCrossThreadLogger]LogBusinessEvents\n\
-                         {\"PickGrpId\": 12345}";
             let entry = unity_entry(body);
             let ts = Some(test_timestamp());
             let result = try_parse(&entry, ts);
@@ -1134,18 +823,6 @@ mod tests {
             let event = result.as_ref().unwrap_or_else(|| unreachable!());
             assert_eq!(event.performance_class(), PerformanceClass::DurablePerEvent);
         }
-
-        #[test]
-        fn test_draft_human_business_event_is_durable_per_event() {
-            let body = "[UnityCrossThreadLogger]LogBusinessEvents\n\
-                         {\"PickGrpId\": 12345}";
-            let entry = unity_entry(body);
-            let result = try_parse(&entry, Some(test_timestamp()));
-
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
-            assert_eq!(event.performance_class(), PerformanceClass::DurablePerEvent);
-        }
     }
 
     // -- Internal helpers ----------------------------------------------------
@@ -1186,33 +863,6 @@ mod tests {
                 parse_comma_separated_ids("12345,abc,67890"),
                 vec![12345, 67890]
             );
-        }
-
-        #[test]
-        fn test_find_pick_source_top_level() {
-            let val = serde_json::json!({"PickGrpId": 12345});
-            assert!(find_pick_source(&val).is_some());
-        }
-
-        #[test]
-        fn test_find_pick_source_in_params() {
-            let val = serde_json::json!({"Params": {"PickGrpId": 12345}});
-            assert!(find_pick_source(&val).is_some());
-        }
-
-        #[test]
-        fn test_find_pick_source_in_array() {
-            let val = serde_json::json!([
-                {"SomeField": 1},
-                {"PickGrpId": 12345}
-            ]);
-            assert!(find_pick_source(&val).is_some());
-        }
-
-        #[test]
-        fn test_find_pick_source_absent() {
-            let val = serde_json::json!({"WinningType": "WinLoss"});
-            assert!(find_pick_source(&val).is_none());
         }
     }
 }

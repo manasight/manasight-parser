@@ -352,10 +352,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_start_delivers_session_event() -> TestResult {
-        let content = "[UnityCrossThreadLogger]Updated account. \
-                        DisplayName:TestPlayer, \
-                        AccountID:abc123, \
-                        Token:sometoken\n\
+        let content = "[UnityCrossThreadLogger]authenticateResponse\n\
+                        {\"screenName\":\"TestPlayer\"}\n\
                         [UnityCrossThreadLogger]2/25/2026 12:00:00 PM\n\
                         some filler\n";
         let f = temp_log(content)?;
@@ -418,10 +416,8 @@ mod tests {
             }
         });
         let content = format!(
-            "[UnityCrossThreadLogger]Updated account. \
-             DisplayName:TestPlayer, \
-             AccountID:abc123, \
-             Token:sometoken\n\
+            "[UnityCrossThreadLogger]authenticateResponse\n\
+             {{\"screenName\":\"TestPlayer\"}}\n\
              [UnityCrossThreadLogger]2/25/2026 12:00:00 PM\n{gs_payload}\n\
              [UnityCrossThreadLogger]2/25/2026 12:00:01 PM\nfiller\n"
         );
@@ -463,10 +459,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_start_once_delivers_session_event() -> TestResult {
-        let content = "[UnityCrossThreadLogger]Updated account. \
-                        DisplayName:TestPlayer, \
-                        AccountID:abc123, \
-                        Token:sometoken\n\
+        let content = "[UnityCrossThreadLogger]authenticateResponse\n\
+                        {\"screenName\":\"TestPlayer\"}\n\
                         [UnityCrossThreadLogger]2/25/2026 12:00:00 PM\n\
                         some filler\n";
         let f = temp_log(content)?;
@@ -484,10 +478,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_start_once_subscriber_ends_after_eof() -> TestResult {
-        let content = "[UnityCrossThreadLogger]Updated account. \
-                        DisplayName:TestPlayer, \
-                        AccountID:abc123, \
-                        Token:sometoken\n\
+        let content = "[UnityCrossThreadLogger]authenticateResponse\n\
+                        {\"screenName\":\"TestPlayer\"}\n\
                         [UnityCrossThreadLogger]2/25/2026 12:00:00 PM\n\
                         some filler\n";
         let f = temp_log(content)?;
@@ -561,10 +553,8 @@ mod tests {
     #[tokio::test]
     async fn test_start_emits_log_file_rotated_event_on_rotation() -> TestResult {
         // Create initial log with enough content to set a non-zero offset.
-        let initial = "[UnityCrossThreadLogger]Updated account. \
-                        DisplayName:TestPlayer, \
-                        AccountID:abc123, \
-                        Token:sometoken\n\
+        let initial = "[UnityCrossThreadLogger]authenticateResponse\n\
+                        {\"screenName\":\"TestPlayer\"}\n\
                         [UnityCrossThreadLogger]2/25/2026 12:00:00 PM\n\
                         some filler\n";
         let f = temp_log(initial)?;
@@ -641,10 +631,8 @@ mod tests {
     #[tokio::test]
     async fn test_start_once_detailed_logs_enabled() -> TestResult {
         let content = "DETAILED LOGS: ENABLED\n\
-                        [UnityCrossThreadLogger]Updated account. \
-                        DisplayName:TestPlayer, \
-                        AccountID:abc123, \
-                        Token:sometoken\n\
+                        [UnityCrossThreadLogger]authenticateResponse\n\
+                        {\"screenName\":\"TestPlayer\"}\n\
                         [UnityCrossThreadLogger]2/25/2026 12:00:00 PM\n\
                         some filler\n";
         let f = temp_log(content)?;

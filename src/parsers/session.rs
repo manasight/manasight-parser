@@ -1,11 +1,10 @@
-//! Session event parser: login, account ID, display name, and logout.
+//! Session event parser: login and logout.
 //!
-//! Recognizes three log signatures that establish and terminate player
+//! Recognizes two log signatures that establish and terminate player
 //! identity within a session:
 //!
 //! | Signature | Meaning |
 //! |-----------|---------|
-//! | `Updated account. DisplayName:` | Account identity (display name + account ID) |
 //! | `authenticateResponse` | Login confirmation (screen name in JSON) |
 //! | `FrontDoorConnection.Close` | Logout / disconnect |
 //!
@@ -15,9 +14,6 @@
 use crate::events::{EventMetadata, GameEvent, SessionEvent};
 use crate::log::entry::LogEntry;
 use crate::parsers::api_common;
-
-/// Prefix that introduces account identity lines in the log.
-const ACCOUNT_UPDATE_PREFIX: &str = "Updated account. DisplayName:";
 
 /// Marker for authentication response entries.
 const AUTHENTICATE_RESPONSE_MARKER: &str = "authenticateResponse";
@@ -43,11 +39,6 @@ pub fn try_parse(
     // Strip the header prefix (e.g., "[UnityCrossThreadLogger]") to get
     // the content portion of the first line.
     let content = strip_header_prefix(body);
-
-    if let Some(payload) = try_parse_account_update(content) {
-        let metadata = EventMetadata::new(timestamp, body.as_bytes().to_vec());
-        return Some(GameEvent::Session(SessionEvent::new(metadata, payload)));
-    }
 
     if let Some(payload) = try_parse_authenticate_response(body) {
         let metadata = EventMetadata::new(timestamp, body.as_bytes().to_vec());
@@ -78,38 +69,6 @@ fn strip_header_prefix(body: &str) -> &str {
     } else {
         first_line
     }
-}
-
-/// Attempts to parse an `Updated account. DisplayName:` line.
-///
-/// Expected format (after header stripping):
-/// ```text
-/// Updated account. DisplayName:SomeName, AccountID:abc123def456, ...
-/// ```
-///
-/// Extracts `DisplayName` and `AccountID` fields and returns them as a
-/// JSON payload with `type: "session_account_update"`.
-fn try_parse_account_update(content: &str) -> Option<serde_json::Value> {
-    if !content.contains(ACCOUNT_UPDATE_PREFIX) {
-        return None;
-    }
-
-    // Extract text after "DisplayName:" up to the next comma or end of line.
-    let after_prefix = content.split(ACCOUNT_UPDATE_PREFIX).nth(1)?;
-    let display_name = after_prefix.split(',').next().unwrap_or("").trim();
-
-    // Extract AccountID if present.
-    let account_id = content
-        .split("AccountID:")
-        .nth(1)
-        .and_then(|s| s.split(',').next())
-        .map_or("", str::trim);
-
-    Some(serde_json::json!({
-        "type": "session_account_update",
-        "display_name": display_name,
-        "account_id": account_id,
-    }))
 }
 
 /// Attempts to parse an `authenticateResponse` entry.
@@ -192,120 +151,6 @@ fn find_screen_name(value: &serde_json::Value) -> Option<String> {
 mod tests {
     use super::*;
     use crate::parsers::test_helpers::{session_payload, test_timestamp, unity_entry, EntryHeader};
-
-    // -- Account update parsing -----------------------------------------------
-
-    mod account_update {
-        use super::*;
-
-        #[test]
-        fn test_try_parse_account_update_basic() {
-            let body = "[UnityCrossThreadLogger]Updated account. \
-                         DisplayName:TestPlayer, \
-                         AccountID:abcdef123456, \
-                         Token:sometoken123";
-            let entry = unity_entry(body);
-            let result = try_parse(&entry, Some(test_timestamp()));
-
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| {
-                // Safe: we just asserted is_some() above.
-                unreachable!()
-            });
-            let payload = session_payload(event);
-
-            assert_eq!(payload["type"], "session_account_update");
-            assert_eq!(payload["display_name"], "TestPlayer");
-            assert_eq!(payload["account_id"], "abcdef123456");
-        }
-
-        #[test]
-        fn test_try_parse_account_update_with_space_after_header() {
-            let body = "[UnityCrossThreadLogger] Updated account. \
-                         DisplayName:Player Two, \
-                         AccountID:xyz789";
-            let entry = unity_entry(body);
-            let result = try_parse(&entry, Some(test_timestamp()));
-
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
-            let payload = session_payload(event);
-
-            assert_eq!(payload["type"], "session_account_update");
-            assert_eq!(payload["display_name"], "Player Two");
-            assert_eq!(payload["account_id"], "xyz789");
-        }
-
-        #[test]
-        fn test_try_parse_account_update_empty_display_name() {
-            let body = "[UnityCrossThreadLogger]Updated account. \
-                         DisplayName:, AccountID:abc123";
-            let entry = unity_entry(body);
-            let result = try_parse(&entry, Some(test_timestamp()));
-
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
-            let payload = session_payload(event);
-
-            assert_eq!(payload["display_name"], "");
-            assert_eq!(payload["account_id"], "abc123");
-        }
-
-        #[test]
-        fn test_try_parse_account_update_no_account_id() {
-            let body = "[UnityCrossThreadLogger]Updated account. DisplayName:Solo";
-            let entry = unity_entry(body);
-            let result = try_parse(&entry, Some(test_timestamp()));
-
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
-            let payload = session_payload(event);
-
-            assert_eq!(payload["display_name"], "Solo");
-            assert_eq!(payload["account_id"], "");
-        }
-
-        #[test]
-        fn test_try_parse_account_update_preserves_raw_bytes() {
-            let body = "[UnityCrossThreadLogger]Updated account. \
-                         DisplayName:RawTest, AccountID:raw123";
-            let entry = unity_entry(body);
-            let result = try_parse(&entry, Some(test_timestamp()));
-
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
-            assert_eq!(event.metadata().raw_bytes(), body.as_bytes());
-        }
-
-        #[test]
-        fn test_try_parse_account_update_stores_timestamp() {
-            let body = "[UnityCrossThreadLogger]Updated account. \
-                         DisplayName:TsTest, AccountID:ts123";
-            let entry = unity_entry(body);
-            let ts = Some(test_timestamp());
-            let result = try_parse(&entry, ts);
-
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
-            assert_eq!(event.metadata().timestamp(), ts);
-        }
-
-        #[test]
-        fn test_try_parse_account_update_with_timestamp_in_header() {
-            let body = "[UnityCrossThreadLogger]2/25/2026 12:00:00 PM \
-                         Updated account. DisplayName:TimestampPlayer, \
-                         AccountID:ts456";
-            let entry = unity_entry(body);
-            let result = try_parse(&entry, Some(test_timestamp()));
-
-            assert!(result.is_some());
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
-            let payload = session_payload(event);
-
-            assert_eq!(payload["display_name"], "TimestampPlayer");
-            assert_eq!(payload["account_id"], "ts456");
-        }
-    }
 
     // -- Authenticate response parsing ----------------------------------------
 
@@ -501,13 +346,6 @@ mod tests {
             let entry = unity_entry(body);
             assert!(try_parse(&entry, Some(test_timestamp())).is_none());
         }
-
-        #[test]
-        fn test_try_parse_partial_account_marker_returns_none() {
-            let body = "[UnityCrossThreadLogger]Updated account status";
-            let entry = unity_entry(body);
-            assert!(try_parse(&entry, Some(test_timestamp())).is_none());
-        }
     }
 
     // -- Performance class ---------------------------------------------------
@@ -518,8 +356,8 @@ mod tests {
 
         #[test]
         fn test_session_event_is_durable_per_event() {
-            let body = "[UnityCrossThreadLogger]Updated account. \
-                         DisplayName:ClassTest, AccountID:class123";
+            let body = "[UnityCrossThreadLogger]authenticateResponse\n\
+                         {\"screenName\":\"ClassTest\"}";
             let entry = unity_entry(body);
             let result = try_parse(&entry, Some(test_timestamp()));
 
