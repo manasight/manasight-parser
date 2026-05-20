@@ -599,11 +599,11 @@ mod tests {
         use super::*;
 
         #[test]
-        fn test_client_gre_header_returns_none() {
+        fn test_matchmaking_header_returns_none() {
             let entry = LogEntry {
-                header: EntryHeader::ClientGre,
+                header: EntryHeader::Matchmaking,
                 body: format!(
-                    "[Client GRE]{PROCESS_READ_EXCEPTION_MARKER} {{\"function\":\"ReadAsync\"}}"
+                    "Matchmaking:{PROCESS_READ_EXCEPTION_MARKER} {{\"function\":\"ReadAsync\"}}"
                 ),
             };
             assert!(try_parse(&entry, Some(test_timestamp())).is_none());
@@ -820,11 +820,11 @@ mod tests {
         }
 
         #[test]
-        fn test_client_gre_header_with_reconnect_body_returns_none() {
+        fn test_unity_header_with_reconnect_body_returns_none() {
             // Confirms dispatch is header-gated: a ConnectionManager-shaped
-            // body under the wrong header (ClientGre) must return None.
+            // body under the wrong header (UnityCrossThreadLogger) must return None.
             let entry = LogEntry {
-                header: EntryHeader::ClientGre,
+                header: EntryHeader::UnityCrossThreadLogger,
                 body: "[ConnectionManager] Reconnect result : Connected".to_owned(),
             };
             assert!(try_parse(&entry, Some(test_timestamp())).is_none());

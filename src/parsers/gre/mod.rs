@@ -508,9 +508,11 @@ mod tests {
         }
 
         #[test]
-        fn test_try_parse_client_gre_header_is_accepted() {
+        fn test_try_parse_gre_content_parsed_regardless_of_header() {
+            // The GRE parser gates on body content (greToClientEvent marker),
+            // not on the header type. Any entry carrying the marker is parsed.
             let body = format!(
-                "[Client GRE]greToClientEvent\n{}",
+                "[UnityCrossThreadLogger]greToClientEvent\n{}",
                 serde_json::json!({
                     "greToClientEvent": {
                         "greToClientMessages": [
@@ -526,12 +528,9 @@ mod tests {
                 })
             );
             let entry = LogEntry {
-                header: EntryHeader::ClientGre,
+                header: EntryHeader::UnityCrossThreadLogger,
                 body: body.clone(),
             };
-            // Note: This returns events because the parser only checks the body
-            // content, not the header type. The GRE marker is present in the
-            // body. This is valid -- ConnectResp can appear under either header.
             let results = try_parse(&entry, Some(test_timestamp()));
             assert_eq!(results.len(), 1);
         }

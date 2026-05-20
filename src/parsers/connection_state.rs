@@ -237,10 +237,10 @@ mod tests {
         }
 
         #[test]
-        fn test_client_gre_header_returns_none() {
+        fn test_connection_manager_header_returns_none() {
             let entry = LogEntry {
-                header: EntryHeader::ClientGre,
-                body: "[Client GRE]STATE CHANGED {\"old\":\"Playing\",\"new\":\"Disconnected\"}"
+                header: EntryHeader::ConnectionManager,
+                body: "[ConnectionManager]STATE CHANGED {\"old\":\"Playing\",\"new\":\"Disconnected\"}"
                     .to_owned(),
             };
             assert!(try_parse(&entry, Some(test_timestamp())).is_none());

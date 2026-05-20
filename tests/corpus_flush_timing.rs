@@ -161,7 +161,6 @@ fn test_replay_produces_expected_entry_count() {
             line.starts_with("[UnityCrossThreadLogger]")
                 || line.starts_with("[ConnectionManager]")
                 || line.starts_with("Matchmaking: ")
-                || line.starts_with("[Client GRE]")
         })
         .collect();
 

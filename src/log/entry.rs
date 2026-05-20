@@ -1,7 +1,7 @@
 //! Log entry prefix identification and multi-line JSON accumulation.
 //!
 //! Detects log entry boundaries using the `[UnityCrossThreadLogger]`,
-//! `[Client GRE]`, `[ConnectionManager]`, and `Matchmaking:` header patterns,
+//! `[ConnectionManager]`, and `Matchmaking:` header patterns,
 //! then accumulates subsequent lines until the entry is structurally complete.
 //!
 //! # Header classification (Phase 1 of #153)
@@ -15,10 +15,9 @@
 //!   flushed in the same [`LineBuffer::push_line`] call that received them
 //!   — no continuation accumulation.
 //! - **Multi-line**: `[UnityCrossThreadLogger]<digit>` (date-prefixed API
-//!   responses, match events) and `[Client GRE]…`. These entries
-//!   accumulate continuation lines until the entry's JSON body is
-//!   structurally complete (brace-balance flush) or the next header arrives
-//!   (fallback for non-JSON bodies).
+//!   responses, match events). These entries accumulate continuation lines
+//!   until the entry's JSON body is structurally complete (brace-balance
+//!   flush) or the next header arrives (fallback for non-JSON bodies).
 //!
 //! # Brace-balance flush (Phase 3 of #153 / #193)
 //!
@@ -71,8 +70,6 @@ pub enum EntryHeader {
     /// `[UnityCrossThreadLogger]` — the most common header, used for
     /// game state, client actions, match lifecycle, and most other events.
     UnityCrossThreadLogger,
-    /// `[Client GRE]` — used for Game Rules Engine messages.
-    ClientGre,
     /// `[ConnectionManager]` — emitted for Arena's connection-lifecycle
     /// diagnostics (e.g., `Reconnect result : ...`, `Reconnect succeeded`,
     /// `Reconnect failed`). These lines are plain-text, single-line entries
@@ -108,7 +105,6 @@ impl EntryHeader {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::UnityCrossThreadLogger => "[UnityCrossThreadLogger]",
-            Self::ClientGre => "[Client GRE]",
             Self::ConnectionManager => "[ConnectionManager]",
             Self::Matchmaking => "Matchmaking:",
             Self::Metadata => "METADATA",
@@ -259,11 +255,10 @@ impl LineBuffer {
         // The regex crate documents that `Regex::new` only fails on invalid
         // patterns. This pattern is a compile-time constant and is valid, so
         // the `Err` branch is unreachable in practice.
-        let header_re =
-            match Regex::new(r"^\[(UnityCrossThreadLogger|Client GRE|ConnectionManager)\]") {
-                Ok(re) => re,
-                Err(e) => unreachable!("invalid header regex: {e}"),
-            };
+        let header_re = match Regex::new(r"^\[(UnityCrossThreadLogger|ConnectionManager)\]") {
+            Ok(re) => re,
+            Err(e) => unreachable!("invalid header regex: {e}"),
+        };
         Self {
             header_re,
             current_header: None,
@@ -286,7 +281,7 @@ impl LineBuffer {
     /// headers (`[UnityCrossThreadLogger]<non-digit>`, `[ConnectionManager]…`,
     /// `Matchmaking:…`) flush any prior multi-line entry and emit the new
     /// entry in the same call. Multi-line headers
-    /// (`[UnityCrossThreadLogger]<digit>`, `[Client GRE]…`) flush any prior
+    /// (`[UnityCrossThreadLogger]<digit>`) flush any prior
     /// entry and begin a fresh accumulation.
     ///
     /// Metadata lines (`DETAILED LOGS: ENABLED` / `DISABLED`) are
@@ -421,8 +416,8 @@ impl LineBuffer {
 
     /// Detects whether `line` starts with a known header prefix.
     ///
-    /// Bracketed headers (`[UnityCrossThreadLogger]`, `[Client GRE]`,
-    /// `[ConnectionManager]`) are matched via the compiled regex. The
+    /// Bracketed headers (`[UnityCrossThreadLogger]`, `[ConnectionManager]`)
+    /// are matched via the compiled regex. The
     /// bare `Matchmaking: ` prefix is matched via a separate
     /// `starts_with` check because it has no brackets.
     fn detect_header(&self, line: &str) -> Option<EntryHeader> {
@@ -430,7 +425,6 @@ impl LineBuffer {
             let prefix = caps.get(1)?.as_str();
             return match prefix {
                 "UnityCrossThreadLogger" => Some(EntryHeader::UnityCrossThreadLogger),
-                "Client GRE" => Some(EntryHeader::ClientGre),
                 "ConnectionManager" => Some(EntryHeader::ConnectionManager),
                 _ => None,
             };
@@ -453,8 +447,6 @@ impl LineBuffer {
     ///   (date-prefixed API responses and match events).
     /// - `[UnityCrossThreadLogger]` followed by anything else → single-line
     ///   (alpha labels and `==>` request markers).
-    /// - `[Client GRE]` → multi-line (current behavior preserved; corpus
-    ///   has zero coverage of this header).
     /// - `[ConnectionManager]…` → single-line.
     /// - `Matchmaking:…` → single-line.
     fn classify_header(header: EntryHeader, line: &str) -> HeaderClass {
@@ -470,16 +462,13 @@ impl LineBuffer {
                     HeaderClass::SingleLine
                 }
             }
-            // `ClientGre` accumulates its full JSON body until brace-balance
-            // flush (default feature) or the next header arrives.
-            //
             // `TruncationMarker` is followed by 3 sub-header lines
             // (`::: GameStateMessage`, `:: GameObject Count = N`,
             // `:: Annotation Count = M`) that must accumulate into the entry
             // body so the thin truncation parser can extract the counts.
             // Its body never opens a `{`, so brace-balance flush doesn't
             // fire — accumulation terminates when the next header arrives.
-            EntryHeader::ClientGre | EntryHeader::TruncationMarker => HeaderClass::MultiLine,
+            EntryHeader::TruncationMarker => HeaderClass::MultiLine,
             // ConnectionManager and Matchmaking are corpus-confirmed
             // single-line. Metadata (`DETAILED LOGS: …`) is handled directly
             // in `push_line` and never reaches this function — but it must
@@ -595,21 +584,11 @@ mod tests {
         }
 
         #[test]
-        fn test_as_str_client_gre() {
-            assert_eq!(EntryHeader::ClientGre.as_str(), "[Client GRE]");
-        }
-
-        #[test]
         fn test_display_unity() {
             assert_eq!(
                 EntryHeader::UnityCrossThreadLogger.to_string(),
                 "[UnityCrossThreadLogger]"
             );
-        }
-
-        #[test]
-        fn test_display_client_gre() {
-            assert_eq!(EntryHeader::ClientGre.to_string(), "[Client GRE]");
         }
 
         #[test]
@@ -639,7 +618,7 @@ mod tests {
             let mut buf = LineBuffer::new();
             buf.push_line("[UnityCrossThreadLogger]1/1/2025 Event1");
             assert_eq!(
-                buf.push_line("[Client GRE] 1/1/2025 Event2"),
+                buf.push_line("[UnityCrossThreadLogger]1/1/2025 Event2"),
                 vec![expected(
                     EntryHeader::UnityCrossThreadLogger,
                     "[UnityCrossThreadLogger]1/1/2025 Event1",
@@ -668,54 +647,12 @@ mod tests {
         }
 
         #[test]
-        fn test_push_line_client_gre_header_detected() {
-            let mut buf = LineBuffer::new();
-            buf.push_line("[Client GRE] GreMessage");
-            assert_eq!(
-                buf.flush(),
-                Some(expected(EntryHeader::ClientGre, "[Client GRE] GreMessage")),
-            );
-        }
-
-        /// Regression: `[Client GRE]` continues to accumulate continuation
-        /// lines after Phase 1 (multi-line classification preserved). With
-        /// the default `brace_depth_flush` feature on, the entry is emitted
-        /// by the closing `}` line via `push_line` rather than waiting for
-        /// `flush()` — both code paths assemble the same body.
-        #[test]
-        fn test_push_line_client_gre_header_accumulates() {
-            let expected_body = "[Client GRE] GreToClientEvent\n{\n  \"key\": \"value\"\n}";
-            let mut buf = LineBuffer::new();
-            buf.push_line("[Client GRE] GreToClientEvent");
-            buf.push_line("{");
-            buf.push_line(r#"  "key": "value""#);
-            let closing = buf.push_line("}");
-            #[cfg(feature = "brace_depth_flush")]
-            {
-                assert_eq!(
-                    closing,
-                    vec![expected(EntryHeader::ClientGre, expected_body)],
-                    "closing brace must flush the entry under brace_depth_flush",
-                );
-                assert!(buf.flush().is_none());
-            }
-            #[cfg(not(feature = "brace_depth_flush"))]
-            {
-                assert!(closing.is_empty());
-                assert_eq!(
-                    buf.flush(),
-                    Some(expected(EntryHeader::ClientGre, expected_body)),
-                );
-            }
-        }
-
-        #[test]
         fn test_push_line_alternating_multi_line_headers() {
             let mut buf = LineBuffer::new();
             buf.push_line("[UnityCrossThreadLogger]1/1/2025 Event1");
 
             assert_eq!(
-                buf.push_line("[Client GRE] Event2"),
+                buf.push_line("[UnityCrossThreadLogger]1/1/2025 Event2"),
                 vec![expected(
                     EntryHeader::UnityCrossThreadLogger,
                     "[UnityCrossThreadLogger]1/1/2025 Event1",
@@ -724,7 +661,10 @@ mod tests {
 
             assert_eq!(
                 buf.push_line("[UnityCrossThreadLogger]1/1/2025 Event3"),
-                vec![expected(EntryHeader::ClientGre, "[Client GRE] Event2")],
+                vec![expected(
+                    EntryHeader::UnityCrossThreadLogger,
+                    "[UnityCrossThreadLogger]1/1/2025 Event2",
+                )],
             );
 
             assert_eq!(
@@ -985,7 +925,7 @@ mod tests {
         #[test]
         fn test_flush_multi_line_entry() {
             let expected_body = [
-                "[Client GRE] GreToClientEvent",
+                "[UnityCrossThreadLogger]1/1/2025 GreToClientEvent",
                 "{",
                 r#"  "gameObjects": ["obj1", "obj2"],"#,
                 r#"  "actions": []"#,
@@ -994,7 +934,7 @@ mod tests {
             .join("\n");
 
             let mut buf = LineBuffer::new();
-            buf.push_line("[Client GRE] GreToClientEvent");
+            buf.push_line("[UnityCrossThreadLogger]1/1/2025 GreToClientEvent");
             buf.push_line("{");
             buf.push_line(r#"  "gameObjects": ["obj1", "obj2"],"#);
             buf.push_line(r#"  "actions": []"#);
@@ -1006,7 +946,10 @@ mod tests {
                 // is left with nothing to return.
                 assert_eq!(
                     closing,
-                    vec![expected(EntryHeader::ClientGre, &expected_body)],
+                    vec![expected(
+                        EntryHeader::UnityCrossThreadLogger,
+                        &expected_body
+                    )],
                 );
                 assert!(buf.flush().is_none());
             }
@@ -1015,7 +958,10 @@ mod tests {
                 assert!(closing.is_empty());
                 assert_eq!(
                     buf.flush(),
-                    Some(expected(EntryHeader::ClientGre, &expected_body)),
+                    Some(expected(
+                        EntryHeader::UnityCrossThreadLogger,
+                        &expected_body
+                    )),
                 );
             }
         }
@@ -1060,10 +1006,13 @@ mod tests {
             let mut buf = LineBuffer::new();
             buf.push_line("[UnityCrossThreadLogger]1/1/2025 Old");
             buf.reset();
-            buf.push_line("[Client GRE] New");
+            buf.push_line("[UnityCrossThreadLogger]1/1/2025 New");
             assert_eq!(
                 buf.flush(),
-                Some(expected(EntryHeader::ClientGre, "[Client GRE] New")),
+                Some(expected(
+                    EntryHeader::UnityCrossThreadLogger,
+                    "[UnityCrossThreadLogger]1/1/2025 New",
+                )),
             );
         }
     }
@@ -1226,32 +1175,38 @@ mod tests {
                 assert!(final_brace[0].body.contains("greToClientMessages"));
                 assert!(final_brace[0].body.contains("GameStateMessage"));
 
-                // `[Client GRE] Next event` now begins a new accumulation
-                // — nothing else to flush.
-                assert!(buf.push_line("[Client GRE] Next event").is_empty());
+                // A second UCTL multi-line entry begins accumulating.
+                // No `{` in the body, so it falls through to the next-header flush.
+                assert!(buf
+                    .push_line("[UnityCrossThreadLogger]1/15/2025 Next event")
+                    .is_empty());
 
-                // The Client-GRE body has no `{`, so it falls through to
-                // the legacy "flush on next header" path.
                 assert_eq!(
                     buf.push_line("[UnityCrossThreadLogger]1/15/2025 After"),
-                    vec![expected(EntryHeader::ClientGre, "[Client GRE] Next event")],
+                    vec![expected(
+                        EntryHeader::UnityCrossThreadLogger,
+                        "[UnityCrossThreadLogger]1/15/2025 Next event",
+                    )],
                 );
             }
             #[cfg(not(feature = "brace_depth_flush"))]
             {
                 assert!(final_brace.is_empty());
 
-                // [Client GRE] (multi-line) flushes the UCTL entry.
-                let unity_entries = buf.push_line("[Client GRE] Next event");
+                // Second UCTL (multi-line) flushes the first UCTL entry.
+                let unity_entries = buf.push_line("[UnityCrossThreadLogger]1/15/2025 Next event");
                 assert_eq!(unity_entries.len(), 1);
                 assert_eq!(unity_entries[0].header, EntryHeader::UnityCrossThreadLogger);
                 assert!(unity_entries[0].body.contains("greToClientMessages"));
                 assert!(unity_entries[0].body.contains("GameStateMessage"));
 
-                // The next header flushes the Client GRE entry.
+                // The next header flushes the second entry.
                 assert_eq!(
                     buf.push_line("[UnityCrossThreadLogger]1/15/2025 After"),
-                    vec![expected(EntryHeader::ClientGre, "[Client GRE] Next event")],
+                    vec![expected(
+                        EntryHeader::UnityCrossThreadLogger,
+                        "[UnityCrossThreadLogger]1/15/2025 Next event",
+                    )],
                 );
             }
         }
@@ -1751,15 +1706,15 @@ mod tests {
         #[test]
         fn test_multi_line_pretty_printed_json_flushes_on_closing_brace() {
             let mut buf = LineBuffer::new();
-            buf.push_line("[Client GRE] GreToClientEvent");
+            buf.push_line("[UnityCrossThreadLogger]1/1/2025 GreToClientEvent");
             buf.push_line("{");
             buf.push_line(r#"  "key": "val""#);
             let result = buf.push_line("}");
             assert_eq!(result.len(), 1);
-            assert_eq!(result[0].header, EntryHeader::ClientGre);
+            assert_eq!(result[0].header, EntryHeader::UnityCrossThreadLogger);
             assert_eq!(
                 result[0].body,
-                "[Client GRE] GreToClientEvent\n{\n  \"key\": \"val\"\n}",
+                "[UnityCrossThreadLogger]1/1/2025 GreToClientEvent\n{\n  \"key\": \"val\"\n}",
             );
             assert!(buf.is_empty());
         }
@@ -1789,16 +1744,16 @@ mod tests {
         #[test]
         fn test_non_json_body_falls_through_to_next_header() {
             let mut buf = LineBuffer::new();
-            buf.push_line("[Client GRE] GreToClientEvent");
+            buf.push_line("[UnityCrossThreadLogger]1/1/2025 GreToClientEvent");
             assert!(buf.push_line("(payload elided)").is_empty());
             assert!(buf.push_line(":: 12345 entries").is_empty());
             assert!(buf.push_line(":: payload trimmed").is_empty());
 
-            // Next header flushes the accumulating Client-GRE entry — the
-            // entry was never brace-flushed because no `{` appeared.
+            // Next header flushes the accumulating entry — never brace-flushed
+            // because no `{` appeared.
             let entries = buf.push_line("[UnityCrossThreadLogger]1/1/2025 After");
             assert_eq!(entries.len(), 1);
-            assert_eq!(entries[0].header, EntryHeader::ClientGre);
+            assert_eq!(entries[0].header, EntryHeader::UnityCrossThreadLogger);
             assert!(entries[0].body.contains("(payload elided)"));
             assert!(entries[0].body.contains(":: 12345 entries"));
         }
@@ -1827,12 +1782,15 @@ mod tests {
             // `ever_opened=true` would falsely flush this entry's first
             // continuation line. With reset, it accumulates normally and
             // the next header flushes it.
-            buf.push_line("[Client GRE] PlainBodyEvent");
+            buf.push_line("[UnityCrossThreadLogger]1/1/2025 PlainBodyEvent");
             assert!(buf.push_line("just text").is_empty());
             let entries = buf.push_line("[UnityCrossThreadLogger]1/1/2025 Third");
             assert_eq!(entries.len(), 1);
-            assert_eq!(entries[0].header, EntryHeader::ClientGre);
-            assert_eq!(entries[0].body, "[Client GRE] PlainBodyEvent\njust text");
+            assert_eq!(entries[0].header, EntryHeader::UnityCrossThreadLogger);
+            assert_eq!(
+                entries[0].body,
+                "[UnityCrossThreadLogger]1/1/2025 PlainBodyEvent\njust text",
+            );
         }
 
         /// After a brace-flush, subsequent headerless lines must be treated
