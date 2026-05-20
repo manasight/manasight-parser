@@ -241,20 +241,26 @@ fn normalize_mulligan_decision(raw: &str) -> &str {
 
 /// Builds a structured payload from a `SelectNResp` message.
 ///
-/// The `selectNResp` sub-object carries the player's card selection:
-/// - `selectedOptionIds` — array of selected option IDs
-/// - `selectedObjectIds` — array of selected game object instance IDs
+/// The `selectNResp` sub-object carries the player's selection in response to
+/// prompts like "choose a card to discard" or "select targets". The real wire
+/// format (verified against the manasight-corpus, 237 occurrences across 44
+/// sessions) is a single `ids` array of game-object instance IDs, optionally
+/// accompanied by `useArbitrary: string` for ordering metadata. An earlier
+/// version of this handler extracted two separate id arrays (see issue #206);
+/// neither name appeared in any real log and the two-field shape has been
+/// retired in favour of the single `selected_ids` output below.
 ///
-/// This is used for responses to prompts like "choose a card to discard",
-/// "select targets", etc.
+/// `useArbitrary` is intentionally NOT surfaced on the typed payload. Its
+/// values (e.g. `"OrderingType_OrderArbitraryOnce"`) are preserved verbatim
+/// inside `raw_client_action`, so any consumer that later needs ordering
+/// metadata can reach into the raw JSON without a public-schema change.
 ///
 /// The output payload has the shape:
 ///
 /// ```json
 /// {
 ///   "type": "select_n_resp",
-///   "selected_option_ids": [1, 2],
-///   "selected_object_ids": [101, 102],
+///   "selected_ids": [280],
 ///   "game_state_id": 5,
 ///   "resp_id": 1,
 ///   "request_id": 12345,
@@ -267,11 +273,7 @@ fn build_select_n_resp_payload(
 ) -> serde_json::Value {
     let select_resp = inner.get("selectNResp");
 
-    let selected_option_ids =
-        extract_i64_array(select_resp.and_then(|sr| sr.get("selectedOptionIds")));
-
-    let selected_object_ids =
-        extract_i64_array(select_resp.and_then(|sr| sr.get("selectedObjectIds")));
+    let selected_ids = extract_i64_array(select_resp.and_then(|sr| sr.get("ids")));
 
     let game_state_id = extract_game_state_id(inner);
     let resp_id = extract_resp_id(inner);
@@ -279,8 +281,7 @@ fn build_select_n_resp_payload(
 
     serde_json::json!({
         "type": "select_n_resp",
-        "selected_option_ids": selected_option_ids,
-        "selected_object_ids": selected_object_ids,
+        "selected_ids": selected_ids,
         "game_state_id": game_state_id,
         "resp_id": resp_id,
         "request_id": request_id,
@@ -593,12 +594,11 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn test_try_parse_select_n_resp_with_options() -> TestResult {
+    fn test_try_parse_select_n_resp_with_ids() -> TestResult {
         let inner = serde_json::json!({
             "type": "ClientMessageType_SelectNResp",
             "selectNResp": {
-                "selectedOptionIds": [1, 3],
-                "selectedObjectIds": [101, 102, 103]
+                "ids": [101, 102, 103]
             },
             "gameStateId": 10,
             "respId": 5
@@ -611,11 +611,7 @@ mod tests {
         if let Some(GameEvent::ClientAction(event)) = &result {
             let payload = event.payload();
             assert_eq!(payload["type"], "select_n_resp");
-            assert_eq!(payload["selected_option_ids"], serde_json::json!([1, 3]));
-            assert_eq!(
-                payload["selected_object_ids"],
-                serde_json::json!([101, 102, 103])
-            );
+            assert_eq!(payload["selected_ids"], serde_json::json!([101, 102, 103]));
             assert_eq!(payload["game_state_id"], 10);
             assert_eq!(payload["resp_id"], 5);
             assert_eq!(payload["request_id"], 42);
@@ -626,13 +622,11 @@ mod tests {
     }
 
     #[test]
-    fn test_try_parse_select_n_resp_empty_selections() -> TestResult {
+    fn test_try_parse_select_n_resp_empty_selection() -> TestResult {
+        // Real corpus shape: `selectNResp: {}` with no `ids` key — should default to []
         let inner = serde_json::json!({
             "type": "ClientMessageType_SelectNResp",
-            "selectNResp": {
-                "selectedOptionIds": [],
-                "selectedObjectIds": []
-            },
+            "selectNResp": {},
             "gameStateId": 7,
             "respId": 3
         });
@@ -644,8 +638,7 @@ mod tests {
         if let Some(GameEvent::ClientAction(event)) = &result {
             let payload = event.payload();
             assert_eq!(payload["type"], "select_n_resp");
-            assert_eq!(payload["selected_option_ids"], serde_json::json!([]));
-            assert_eq!(payload["selected_object_ids"], serde_json::json!([]));
+            assert_eq!(payload["selected_ids"], serde_json::json!([]));
         } else {
             return Err("Expected GameEvent::ClientAction".into());
         }
@@ -654,7 +647,7 @@ mod tests {
 
     #[test]
     fn test_try_parse_select_n_resp_missing_select_object() -> TestResult {
-        // selectNResp sub-object is missing — should default to empty arrays.
+        // selectNResp sub-object is missing entirely — should default to empty.
         let inner = serde_json::json!({
             "type": "ClientMessageType_SelectNResp",
             "gameStateId": 4,
@@ -668,8 +661,7 @@ mod tests {
         if let Some(GameEvent::ClientAction(event)) = &result {
             let payload = event.payload();
             assert_eq!(payload["type"], "select_n_resp");
-            assert_eq!(payload["selected_option_ids"], serde_json::json!([]));
-            assert_eq!(payload["selected_object_ids"], serde_json::json!([]));
+            assert_eq!(payload["selected_ids"], serde_json::json!([]));
         } else {
             return Err("Expected GameEvent::ClientAction".into());
         }
@@ -677,11 +669,14 @@ mod tests {
     }
 
     #[test]
-    fn test_try_parse_select_n_resp_only_option_ids() -> TestResult {
+    fn test_try_parse_select_n_resp_use_arbitrary_preserved_in_raw() -> TestResult {
+        // Verbatim corpus payload: `useArbitrary` must NOT appear on the typed
+        // payload but must be reachable through `raw_client_action`.
         let inner = serde_json::json!({
             "type": "ClientMessageType_SelectNResp",
             "selectNResp": {
-                "selectedOptionIds": [5, 6, 7]
+                "ids": [0],
+                "useArbitrary": "OrderingType_OrderArbitraryOnce"
             },
             "gameStateId": 8,
             "respId": 4
@@ -694,8 +689,38 @@ mod tests {
         if let Some(GameEvent::ClientAction(event)) = &result {
             let payload = event.payload();
             assert_eq!(payload["type"], "select_n_resp");
-            assert_eq!(payload["selected_option_ids"], serde_json::json!([5, 6, 7]));
-            assert_eq!(payload["selected_object_ids"], serde_json::json!([]));
+            assert_eq!(payload["selected_ids"], serde_json::json!([0]));
+            assert!(payload.get("use_arbitrary").is_none());
+            assert!(payload.get("useArbitrary").is_none());
+            let raw_use_arbitrary = payload
+                .pointer("/raw_client_action/payload/selectNResp/useArbitrary")
+                .and_then(|v| v.as_str());
+            assert_eq!(raw_use_arbitrary, Some("OrderingType_OrderArbitraryOnce"));
+        } else {
+            return Err("Expected GameEvent::ClientAction".into());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_try_parse_select_n_resp_corpus_verbatim() -> TestResult {
+        // Verbatim corpus fixture from manasight-corpus session 2026-02-22 —
+        // pins the public payload shape against a real wire-format sample.
+        let inner = serde_json::json!({
+            "type": "ClientMessageType_SelectNResp",
+            "selectNResp": { "ids": [280] },
+            "gameStateId": 12,
+            "respId": 6
+        });
+        let body = wrap_client_to_gre(&inner);
+        let entry = unity_entry(&body);
+        let result = try_parse(&entry, Some(test_timestamp()));
+
+        assert!(result.is_some());
+        if let Some(GameEvent::ClientAction(event)) = &result {
+            let payload = event.payload();
+            assert_eq!(payload["type"], "select_n_resp");
+            assert_eq!(payload["selected_ids"], serde_json::json!([280]));
         } else {
             return Err("Expected GameEvent::ClientAction".into());
         }
@@ -999,7 +1024,7 @@ mod tests {
     fn test_try_parse_event_metadata_raw_bytes() {
         let inner = serde_json::json!({
             "type": "ClientMessageType_SelectNResp",
-            "selectNResp": {"selectedOptionIds": [1]},
+            "selectNResp": {"ids": [1]},
             "gameStateId": 1,
             "respId": 1
         });
@@ -1285,8 +1310,7 @@ mod tests {
               \"payload\": {\n\
                 \"type\": \"ClientMessageType_SelectNResp\",\n\
                 \"selectNResp\": {\n\
-                  \"selectedOptionIds\": [2],\n\
-                  \"selectedObjectIds\": [456]\n\
+                  \"ids\": [456]\n\
                 },\n\
                 \"gameStateId\": 20,\n\
                 \"respId\": 10\n\
@@ -1301,8 +1325,7 @@ mod tests {
         if let Some(GameEvent::ClientAction(event)) = &result {
             let payload = event.payload();
             assert_eq!(payload["type"], "select_n_resp");
-            assert_eq!(payload["selected_option_ids"], serde_json::json!([2]));
-            assert_eq!(payload["selected_object_ids"], serde_json::json!([456]));
+            assert_eq!(payload["selected_ids"], serde_json::json!([456]));
             assert_eq!(payload["game_state_id"], 20);
             assert_eq!(payload["request_id"], 11111);
         } else {
