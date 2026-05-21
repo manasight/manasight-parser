@@ -24,7 +24,7 @@ const FRONT_DOOR_CLOSE_MARKER: &str = "FrontDoorConnection.Close";
 /// Attempts to parse a [`LogEntry`] as a session event.
 ///
 /// Returns `Some(GameEvent::Session(_))` if the entry matches one of the
-/// three recognized session signatures, or `None` if the entry is not a
+/// two recognized session signatures, or `None` if the entry is not a
 /// session event.
 ///
 /// The `timestamp` is `None` when the log entry header did not contain a
