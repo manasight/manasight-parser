@@ -866,7 +866,7 @@ mod tests {
             assert!(entries1.is_empty());
 
             // Second write — new header flushes previous entry.
-            writeln!(f, "[Client GRE] Event2")?;
+            writeln!(f, "[UnityCrossThreadLogger]1/1/2025 Event2")?;
             f.flush()?;
             let entries2 = tailer.poll().await?;
             assert_eq!(entries2.len(), 1);
@@ -997,13 +997,12 @@ mod tests {
             // Write a complete (multi-line) header line followed by a
             // partial line that is itself a header (no trailing newline).
             writeln!(f, "[UnityCrossThreadLogger]1/1/2025 First")?;
-            write!(f, "[Client GRE] Second")?;
+            write!(f, "[UnityCrossThreadLogger]1/1/2025 Second")?;
             f.flush()?;
             tailer.poll().await?;
 
             // flush() should return both: the "First" entry flushed by the
-            // "[Client GRE]" header, and the "[Client GRE] Second" entry
-            // drained from the line buffer.
+            // second header, and the "Second" entry drained from the line buffer.
             let entries = tailer.flush();
             assert_eq!(
                 entries.len(),

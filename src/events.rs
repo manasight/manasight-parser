@@ -211,7 +211,7 @@ pub enum GameEvent {
     /// Emitted by the file tailer when it determines whether Arena's
     /// "Detailed Logs (Plugin Support)" setting is enabled. `enabled: false`
     /// is emitted after 30 seconds of observed log writes without any
-    /// `[UnityCrossThreadLogger]` or `[Client GRE]` headers. `enabled: true`
+    /// `[UnityCrossThreadLogger]` headers. `enabled: true`
     /// is emitted if structured headers are later detected (user enabled the
     /// setting and restarted Arena).
     /// Class 1 — interactive dispatch (local status signal).
@@ -577,10 +577,11 @@ define_event! {
 define_event! {
     /// Game result event — triggers post-game batch assembly.
     ///
-    /// Parsed from `LogBusinessEvents` with `WinningType` and
-    /// `GameStage_GameOver`. When this event fires, the desktop app
-    /// serializes the disk-backed game buffer into a single compressed
-    /// payload and uploads it.
+    /// Parsed from a GRE `GameStateMessage` whose `gameInfo.stage` equals
+    /// `GameStage_GameOver` (specifically the `MatchState_GameComplete`
+    /// variant to avoid duplicate firing in Bo3). When this event fires,
+    /// the desktop app serializes the disk-backed game buffer into a single
+    /// compressed payload and uploads it.
     GameResultEvent
 }
 

@@ -186,7 +186,6 @@ impl Default for Router {
 /// The expected format is:
 /// ```text
 /// [UnityCrossThreadLogger]2/25/2026 12:00:00 PM some content
-/// [Client GRE]2/25/2026 12:00:00 PM GreToClientEvent
 /// [UnityCrossThreadLogger]3/13/2026 11:34:51 PM: Match to ...
 /// ```
 ///
@@ -311,14 +310,6 @@ mod tests {
         }
     }
 
-    /// Helper: build a `LogEntry` with `ClientGre` header.
-    fn gre_entry(body: &str) -> LogEntry {
-        LogEntry {
-            header: EntryHeader::ClientGre,
-            body: body.to_owned(),
-        }
-    }
-
     // -- extract_timestamp ---------------------------------------------------
 
     mod extract_timestamp_tests {
@@ -371,13 +362,6 @@ mod tests {
                     "2026-02-25 14:30:00"
                 );
             }
-        }
-
-        #[test]
-        fn test_extract_timestamp_client_gre_header() {
-            let body = "[Client GRE]2/25/2026 12:00:00 PM GreToClientEvent";
-            let ts = extract_timestamp(body);
-            assert!(ts.is_some());
         }
 
         #[test]
@@ -824,35 +808,6 @@ mod tests {
             let router = Router::default();
             assert_eq!(router.stats().routed_count(), 0);
             assert_eq!(router.stats().unknown_count(), 0);
-        }
-    }
-
-    // -- Router: Client GRE header entries -----------------------------------
-
-    mod client_gre_entries {
-        use super::*;
-
-        #[test]
-        fn test_route_client_gre_entry() {
-            let router = Router::new();
-            let payload = serde_json::json!({
-                "greToClientEvent": {
-                    "greToClientMessages": [{
-                        "type": "GREMessageType_GameStateMessage",
-                        "gameStateMessage": {
-                            "gameInfo": { "stage": "GameStage_Play" },
-                            "gameObjects": [],
-                            "zones": []
-                        }
-                    }]
-                }
-            });
-            let body = format!("[Client GRE]2/25/2026 12:00:00 PM\n{payload}");
-            let entry = gre_entry(&body);
-
-            let results = router.route(&entry);
-            assert_eq!(results.len(), 1);
-            assert!(matches!(&results[0], GameEvent::GameState(_)));
         }
     }
 

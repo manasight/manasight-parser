@@ -24,7 +24,7 @@ const FRONT_DOOR_CLOSE_MARKER: &str = "FrontDoorConnection.Close";
 /// Attempts to parse a [`LogEntry`] as a session event.
 ///
 /// Returns `Some(GameEvent::Session(_))` if the entry matches one of the
-/// three recognized session signatures, or `None` if the entry is not a
+/// two recognized session signatures, or `None` if the entry is not a
 /// session event.
 ///
 /// The `timestamp` is `None` when the log entry header did not contain a
@@ -56,8 +56,8 @@ pub fn try_parse(
     None
 }
 
-/// Strips the `[UnityCrossThreadLogger]` or `[Client GRE]` bracket prefix
-/// from the first line of the body, returning the remaining content.
+/// Strips the `[UnityCrossThreadLogger]` bracket prefix from the first line
+/// of the body, returning the remaining content.
 ///
 /// If the body does not start with a recognized bracket prefix, returns
 /// the full body unchanged.
@@ -332,10 +332,10 @@ mod tests {
         }
 
         #[test]
-        fn test_try_parse_client_gre_entry_returns_none() {
+        fn test_try_parse_connection_manager_entry_returns_none() {
             let entry = LogEntry {
-                header: EntryHeader::ClientGre,
-                body: "[Client GRE]some GRE message".to_owned(),
+                header: EntryHeader::ConnectionManager,
+                body: "[ConnectionManager]some connection message".to_owned(),
             };
             assert!(try_parse(&entry, Some(test_timestamp())).is_none());
         }
@@ -385,9 +385,9 @@ mod tests {
         }
 
         #[test]
-        fn test_strip_header_prefix_client_gre() {
-            let result = strip_header_prefix("[Client GRE]gre content");
-            assert_eq!(result, "gre content");
+        fn test_strip_header_prefix_connection_manager() {
+            let result = strip_header_prefix("[ConnectionManager]connection content");
+            assert_eq!(result, "connection content");
         }
 
         #[test]

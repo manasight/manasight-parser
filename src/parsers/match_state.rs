@@ -710,10 +710,10 @@ mod tests {
         }
 
         #[test]
-        fn test_try_parse_client_gre_entry_returns_none() {
+        fn test_try_parse_connection_manager_entry_returns_none() {
             let entry = LogEntry {
-                header: EntryHeader::ClientGre,
-                body: "[Client GRE]matchGameRoomStateChangedEvent".to_owned(),
+                header: EntryHeader::ConnectionManager,
+                body: "[ConnectionManager]matchGameRoomStateChangedEvent".to_owned(),
             };
             assert!(try_parse(&entry, Some(test_timestamp())).is_none());
         }

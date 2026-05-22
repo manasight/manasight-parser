@@ -157,9 +157,9 @@ mod tests {
         }
 
         #[test]
-        fn test_try_parse_client_gre_header_returns_none() {
+        fn test_try_parse_connection_manager_header_returns_none() {
             let entry = LogEntry {
-                header: EntryHeader::ClientGre,
+                header: EntryHeader::ConnectionManager,
                 body: "DETAILED LOGS: ENABLED".to_owned(),
             };
             assert!(try_parse(&entry, None).is_none());

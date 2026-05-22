@@ -599,8 +599,8 @@ mod tests {
         fn test_non_unity_cross_thread_logger_header_returns_none() {
             // Correct marker text but wrong header — must not parse.
             let entry = LogEntry {
-                header: EntryHeader::ClientGre,
-                body: "[Client GRE]Client.TcpConnection.Close {\"status\":7,\"reason\":\"Closed by remote end\"}"
+                header: EntryHeader::ConnectionManager,
+                body: "[ConnectionManager]Client.TcpConnection.Close {\"status\":7,\"reason\":\"Closed by remote end\"}"
                     .to_owned(),
             };
             assert!(try_parse(&entry, Some(test_timestamp())).is_none());
