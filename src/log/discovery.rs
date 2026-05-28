@@ -201,7 +201,7 @@ pub(crate) fn linux_candidate_base_dirs(home: &Path, steam_lib: Option<&Path>) -
         candidates.push(locallow);
     }
 
-    // Lutris (fallback, UNVERIFIED — manasight/manasight-docs#772)
+    // Lutris (fallback, UNVERIFIED)
     let lutris_locallow = home
         .join("Games")
         .join("magic-the-gathering-arena")
