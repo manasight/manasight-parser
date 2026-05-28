@@ -523,7 +523,7 @@ mod tests {
 
         type TestResult = Result<(), Box<dyn std::error::Error>>;
 
-        /// Build the full Player.log path under a LocalLow base dir.
+        /// Build the full Player.log path under a `LocalLow` base dir.
         fn player_log_path(locallow: &Path) -> PathBuf {
             locallow
                 .join("Wizards Of The Coast")
