@@ -22,3 +22,8 @@ tests/smoke-results/
 # Claude Code — ignore workspace commands and runtime dirs
 .claude/commands/
 .claude/worktrees/
+# Timing logs are local-only — never commit/push them: trailing timing-log
+# commits on PR branches cancel in-flight CI and re-run the full pipeline
+# (see #218). Previously tracked logs remain in history; future logs have
+# unique names and are ignored.
+.claude/timing-logs/
