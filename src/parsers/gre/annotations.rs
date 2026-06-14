@@ -49,6 +49,12 @@ const ANNOTATION_TYPE_SHUFFLE: &str = "AnnotationType_Shuffle";
 /// (companion, conjured, drafted, plus uncharacterized state flags).
 const ANNOTATION_TYPE_DESIGNATION: &str = "AnnotationType_Designation";
 
+/// Annotation type for player choices (e.g. "name a card" effects).
+const ANNOTATION_TYPE_CHOICE_RESULT: &str = "AnnotationType_ChoiceResult";
+
+/// Annotation type for ability link metadata (links a choice to its source ability).
+const ANNOTATION_TYPE_LINK_INFO: &str = "AnnotationType_LinkInfo";
+
 /// Extracts persistent annotations from the `gameStateMessage.persistentAnnotations` array.
 ///
 /// Persistent annotations accumulate across game state updates (unlike
@@ -96,6 +102,13 @@ pub(super) fn extract_persistent_annotations(
 ///   any of `conjuration_type`, `source_grpid`, `grpid`, `value`, `controller_id`
 ///   that are present in `details` (permissive — no branching on
 ///   `DesignationType` value, so undocumented variants pass through cleanly).
+/// - **`AnnotationType_ChoiceResult`**: `choice_value` (always), plus any of
+///   `choice_domain`, `choice_sentiment` that are present in `details`
+///   (permissive — no branching on domain value, so undocumented variants pass
+///   through cleanly).
+/// - **`AnnotationType_LinkInfo`**: any of `choose_link_type`, `source_ability_grp_id`,
+///   `link_type` that are present in `details` (permissive — no branching on
+///   link-type value, so undocumented variants pass through cleanly).
 /// - **All other types**: passed through with base fields only.
 ///
 /// Returns an empty `Vec` when `annotations` is absent or empty.
@@ -248,6 +261,8 @@ fn add_type_specific_fields(
         ANNOTATION_TYPE_SCRY => add_scry_fields(obj, details),
         ANNOTATION_TYPE_SHUFFLE => add_shuffle_fields(obj, details),
         ANNOTATION_TYPE_DESIGNATION => add_designation_fields(obj, details),
+        ANNOTATION_TYPE_CHOICE_RESULT => add_choice_result_fields(obj, details),
+        ANNOTATION_TYPE_LINK_INFO => add_link_info_fields(obj, details),
         _ => {}
     }
 }
@@ -463,6 +478,55 @@ fn add_designation_fields(
     }
     if let Some(c) = detail_int(details, "ControllerId") {
         obj.insert("controller_id".into(), serde_json::json!(c));
+    }
+}
+
+/// Adds `ChoiceResult` fields to an annotation result.
+///
+/// Always emits `choice_value` (present in all observed corpus annotations).
+/// Then conditionally emits `choice_domain` and `choice_sentiment` when found.
+///
+/// The implementation is intentionally permissive: every optional key is
+/// looked up unconditionally via the existing `detail_int` helper and inserted
+/// only when found. Never branches on the `Choice_Domain` value — undocumented
+/// variants pass through cleanly with whatever fields they happen to carry.
+fn add_choice_result_fields(
+    obj: &mut serde_json::Map<String, serde_json::Value>,
+    details: &[serde_json::Value],
+) {
+    obj.insert(
+        "choice_value".into(),
+        serde_json::json!(detail_int(details, "Choice_Value").unwrap_or(0)),
+    );
+    if let Some(d) = detail_int(details, "Choice_Domain") {
+        obj.insert("choice_domain".into(), serde_json::json!(d));
+    }
+    if let Some(s) = detail_int(details, "Choice_Sentiment") {
+        obj.insert("choice_sentiment".into(), serde_json::json!(s));
+    }
+}
+
+/// Adds `LinkInfo` fields to an annotation result.
+///
+/// Conditionally emits `choose_link_type`, `source_ability_grp_id`, and
+/// `link_type` when found in `details`.
+///
+/// The implementation is intentionally permissive: every key is looked up
+/// unconditionally via the existing `detail_str` / `detail_int` helpers and
+/// inserted only when found. Never branches on the `ChooseLinkType` value —
+/// undocumented variants pass through cleanly with whatever fields they carry.
+fn add_link_info_fields(
+    obj: &mut serde_json::Map<String, serde_json::Value>,
+    details: &[serde_json::Value],
+) {
+    if let Some(t) = detail_str(details, "ChooseLinkType") {
+        obj.insert("choose_link_type".into(), serde_json::json!(t));
+    }
+    if let Some(g) = detail_int(details, "sourceAbilityGRPID") {
+        obj.insert("source_ability_grp_id".into(), serde_json::json!(g));
+    }
+    if let Some(lt) = detail_int(details, "LinkType") {
+        obj.insert("link_type".into(), serde_json::json!(lt));
     }
 }
 
@@ -1949,6 +2013,229 @@ mod tests {
             assert!(ann.get("source_grpid").is_none());
             assert!(ann.get("conjuration_type").is_none());
             assert!(ann.get("value").is_none());
+        }
+    }
+
+    mod choice_result_extraction {
+        use super::*;
+
+        /// Domain=5 case — common corpus shape (`Choice_Value` + `Choice_Domain`=5).
+        /// Mirrors live corpus observation; domain is optional so both fields
+        /// must be emitted when present.
+        #[test]
+        fn test_choice_result_domain5_value_and_domain_emitted() {
+            let body = format!(
+                "[UnityCrossThreadLogger]greToClientEvent\n{}",
+                serde_json::json!({
+                    "greToClientEvent": {
+                        "greToClientMessages": [{
+                            "type": "GREMessageType_GameStateMessage",
+                            "msgId": 50,
+                            "gameStateId": 200,
+                            "gameStateMessage": {
+                                "annotations": [{
+                                    "id": 300,
+                                    "affectorId": 291,
+                                    "affectedIds": [1],
+                                    "type": ["AnnotationType_ChoiceResult"],
+                                    "details": [
+                                        { "key": "Choice_Value", "type": "KeyValuePairValueType_int32", "valueInt32": [5001] },
+                                        { "key": "Choice_Domain", "type": "KeyValuePairValueType_int32", "valueInt32": [5] }
+                                    ]
+                                }]
+                            }
+                        }]
+                    }
+                })
+            );
+            let entry = unity_entry(&body);
+            let event = try_parse(&entry, Some(test_timestamp()))
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| unreachable!());
+            let payload = game_state_payload(&event);
+
+            let ann = &payload["annotations"][0];
+            assert_eq!(ann["type"], "AnnotationType_ChoiceResult");
+            assert_eq!(ann["affector_id"], 291);
+            assert_eq!(ann["choice_value"], 5001);
+            assert_eq!(ann["choice_domain"], 5);
+            // choice_sentiment absent when not in details.
+            assert!(ann.get("choice_sentiment").is_none());
+        }
+
+        /// Value-only / no-domain case — only `Choice_Value` present.
+        /// `choice_value` must be emitted; `choice_domain` must be absent.
+        #[test]
+        fn test_choice_result_value_only_no_domain() {
+            let body = format!(
+                "[UnityCrossThreadLogger]greToClientEvent\n{}",
+                serde_json::json!({
+                    "greToClientEvent": {
+                        "greToClientMessages": [{
+                            "type": "GREMessageType_GameStateMessage",
+                            "msgId": 51,
+                            "gameStateId": 201,
+                            "gameStateMessage": {
+                                "annotations": [{
+                                    "id": 301,
+                                    "affectorId": 400,
+                                    "affectedIds": [2],
+                                    "type": ["AnnotationType_ChoiceResult"],
+                                    "details": [
+                                        { "key": "Choice_Value", "type": "KeyValuePairValueType_int32", "valueInt32": [42] }
+                                    ]
+                                }]
+                            }
+                        }]
+                    }
+                })
+            );
+            let entry = unity_entry(&body);
+            let event = try_parse(&entry, Some(test_timestamp()))
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| unreachable!());
+            let payload = game_state_payload(&event);
+
+            let ann = &payload["annotations"][0];
+            assert_eq!(ann["type"], "AnnotationType_ChoiceResult");
+            assert_eq!(ann["choice_value"], 42);
+            assert!(ann.get("choice_domain").is_none());
+            assert!(ann.get("choice_sentiment").is_none());
+        }
+
+        /// Domain=13 / `CardName` case — live capture shape from Petrified Hamlet.
+        /// `Choice_Value=1071244` is the `LocId` of the named card; `Choice_Domain=13`
+        /// identifies this as a card-name choice. Both must be emitted.
+        #[test]
+        fn test_choice_result_domain13_cardname() {
+            let body = format!(
+                "[UnityCrossThreadLogger]greToClientEvent\n{}",
+                serde_json::json!({
+                    "greToClientEvent": {
+                        "greToClientMessages": [{
+                            "type": "GREMessageType_GameStateMessage",
+                            "msgId": 52,
+                            "gameStateId": 202,
+                            "gameStateMessage": {
+                                "annotations": [{
+                                    "id": 302,
+                                    "affectorId": 291,
+                                    "affectedIds": [1],
+                                    "type": ["AnnotationType_ChoiceResult"],
+                                    "details": [
+                                        { "key": "Choice_Value", "type": "KeyValuePairValueType_int32", "valueInt32": [1_071_244] },
+                                        { "key": "Choice_Domain", "type": "KeyValuePairValueType_int32", "valueInt32": [13] }
+                                    ]
+                                }]
+                            }
+                        }]
+                    }
+                })
+            );
+            let entry = unity_entry(&body);
+            let event = try_parse(&entry, Some(test_timestamp()))
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| unreachable!());
+            let payload = game_state_payload(&event);
+
+            let ann = &payload["annotations"][0];
+            assert_eq!(ann["type"], "AnnotationType_ChoiceResult");
+            assert_eq!(ann["choice_value"], 1_071_244);
+            assert_eq!(ann["choice_domain"], 13);
+            assert!(ann.get("choice_sentiment").is_none());
+        }
+    }
+
+    mod link_info_extraction {
+        use super::*;
+
+        /// `ChooseLinkType`="Type" case with `sourceAbilityGRPID` and `LinkType`.
+        /// All three optional fields present — all must be emitted.
+        #[test]
+        fn test_link_info_type_with_source_and_link_type() {
+            let body = format!(
+                "[UnityCrossThreadLogger]greToClientEvent\n{}",
+                serde_json::json!({
+                    "greToClientEvent": {
+                        "greToClientMessages": [{
+                            "type": "GREMessageType_GameStateMessage",
+                            "msgId": 53,
+                            "gameStateId": 203,
+                            "gameStateMessage": {
+                                "annotations": [{
+                                    "id": 303,
+                                    "affectorId": 291,
+                                    "affectedIds": [1],
+                                    "type": ["AnnotationType_LinkInfo"],
+                                    "details": [
+                                        { "key": "ChooseLinkType", "type": "KeyValuePairValueType_string", "valueString": ["Type"] },
+                                        { "key": "sourceAbilityGRPID", "type": "KeyValuePairValueType_int32", "valueInt32": [99001] },
+                                        { "key": "LinkType", "type": "KeyValuePairValueType_int32", "valueInt32": [3] }
+                                    ]
+                                }]
+                            }
+                        }]
+                    }
+                })
+            );
+            let entry = unity_entry(&body);
+            let event = try_parse(&entry, Some(test_timestamp()))
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| unreachable!());
+            let payload = game_state_payload(&event);
+
+            let ann = &payload["annotations"][0];
+            assert_eq!(ann["type"], "AnnotationType_LinkInfo");
+            assert_eq!(ann["affector_id"], 291);
+            assert_eq!(ann["choose_link_type"], "Type");
+            assert_eq!(ann["source_ability_grp_id"], 99001);
+            assert_eq!(ann["link_type"], 3);
+        }
+
+        /// ChooseLinkType="CardName" synthetic case.
+        /// Validates permissive emit: `ChooseLinkType` is emitted regardless of value.
+        #[test]
+        fn test_link_info_cardname_link_type() {
+            let body = format!(
+                "[UnityCrossThreadLogger]greToClientEvent\n{}",
+                serde_json::json!({
+                    "greToClientEvent": {
+                        "greToClientMessages": [{
+                            "type": "GREMessageType_GameStateMessage",
+                            "msgId": 54,
+                            "gameStateId": 204,
+                            "gameStateMessage": {
+                                "annotations": [{
+                                    "id": 304,
+                                    "affectorId": 291,
+                                    "affectedIds": [1],
+                                    "type": ["AnnotationType_LinkInfo"],
+                                    "details": [
+                                        { "key": "ChooseLinkType", "type": "KeyValuePairValueType_string", "valueString": ["CardName"] }
+                                    ]
+                                }]
+                            }
+                        }]
+                    }
+                })
+            );
+            let entry = unity_entry(&body);
+            let event = try_parse(&entry, Some(test_timestamp()))
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| unreachable!());
+            let payload = game_state_payload(&event);
+
+            let ann = &payload["annotations"][0];
+            assert_eq!(ann["type"], "AnnotationType_LinkInfo");
+            assert_eq!(ann["choose_link_type"], "CardName");
+            // sourceAbilityGRPID and LinkType absent when not in details.
+            assert!(ann.get("source_ability_grp_id").is_none());
+            assert!(ann.get("link_type").is_none());
         }
     }
 
