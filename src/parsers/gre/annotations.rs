@@ -2105,6 +2105,49 @@ mod tests {
             assert!(ann.get("choice_sentiment").is_none());
         }
 
+        /// Absent `Choice_Value` case — `details` contains NO `Choice_Value` key.
+        /// `add_choice_result_fields` uses `unwrap_or(0)`, so `choice_value` must
+        /// default to 0 and neither `choice_domain` nor `choice_sentiment` should appear.
+        #[test]
+        fn test_choice_result_absent_choice_value_defaults_to_zero() {
+            let body = format!(
+                "[UnityCrossThreadLogger]greToClientEvent\n{}",
+                serde_json::json!({
+                    "greToClientEvent": {
+                        "greToClientMessages": [{
+                            "type": "GREMessageType_GameStateMessage",
+                            "msgId": 55,
+                            "gameStateId": 205,
+                            "gameStateMessage": {
+                                "annotations": [{
+                                    "id": 305,
+                                    "affectorId": 500,
+                                    "affectedIds": [3],
+                                    "type": ["AnnotationType_ChoiceResult"],
+                                    "details": []
+                                }]
+                            }
+                        }]
+                    }
+                })
+            );
+            let entry = unity_entry(&body);
+            let event = try_parse(&entry, Some(test_timestamp()))
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| unreachable!());
+            let payload = game_state_payload(&event);
+
+            let ann = &payload["annotations"][0];
+            assert_eq!(ann["type"], "AnnotationType_ChoiceResult");
+            assert_eq!(ann["affector_id"], 500);
+            // Absent Choice_Value -> unwrap_or(0) fallback
+            assert_eq!(ann["choice_value"], 0);
+            // No domain or sentiment when keys absent
+            assert!(ann.get("choice_domain").is_none());
+            assert!(ann.get("choice_sentiment").is_none());
+        }
+
         /// Domain=13 / `CardName` case — live capture shape from Petrified Hamlet.
         /// `Choice_Value=1071244` is the `LocId` of the named card; `Choice_Domain=13`
         /// identifies this as a card-name choice. Both must be emitted.
@@ -2194,6 +2237,49 @@ mod tests {
             assert_eq!(ann["choose_link_type"], "Type");
             assert_eq!(ann["source_ability_grp_id"], 99001);
             assert_eq!(ann["link_type"], 3);
+        }
+
+        /// All three optional detail keys absent — `details` is empty.
+        /// `add_link_info_fields` must emit zero type-specific fields but base
+        /// fields (`type`, `affector_id`, etc.) must still be present.
+        #[test]
+        fn test_link_info_all_detail_keys_absent_emits_no_type_specific_fields() {
+            let body = format!(
+                "[UnityCrossThreadLogger]greToClientEvent\n{}",
+                serde_json::json!({
+                    "greToClientEvent": {
+                        "greToClientMessages": [{
+                            "type": "GREMessageType_GameStateMessage",
+                            "msgId": 56,
+                            "gameStateId": 206,
+                            "gameStateMessage": {
+                                "annotations": [{
+                                    "id": 306,
+                                    "affectorId": 600,
+                                    "affectedIds": [4],
+                                    "type": ["AnnotationType_LinkInfo"],
+                                    "details": []
+                                }]
+                            }
+                        }]
+                    }
+                })
+            );
+            let entry = unity_entry(&body);
+            let event = try_parse(&entry, Some(test_timestamp()))
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| unreachable!());
+            let payload = game_state_payload(&event);
+
+            let ann = &payload["annotations"][0];
+            // Base fields still present
+            assert_eq!(ann["type"], "AnnotationType_LinkInfo");
+            assert_eq!(ann["affector_id"], 600);
+            // All three type-specific fields absent when keys missing
+            assert!(ann.get("choose_link_type").is_none());
+            assert!(ann.get("source_ability_grp_id").is_none());
+            assert!(ann.get("link_type").is_none());
         }
 
         /// ChooseLinkType="CardName" synthetic case.
