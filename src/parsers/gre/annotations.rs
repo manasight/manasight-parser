@@ -2190,6 +2190,51 @@ mod tests {
             assert_eq!(ann["choice_domain"], 13);
             assert!(ann.get("choice_sentiment").is_none());
         }
+
+        /// Sentiment-present case — `Choice_Sentiment` in `details` is emitted as
+        /// `choice_sentiment`. Its sibling optional field `choice_domain` already
+        /// has a positive (Domain=5) test; this locks in the symmetric
+        /// `choice_sentiment` emit path so the conditional insert is covered.
+        #[test]
+        fn test_choice_result_sentiment_emitted_when_present() {
+            let body = format!(
+                "[UnityCrossThreadLogger]greToClientEvent\n{}",
+                serde_json::json!({
+                    "greToClientEvent": {
+                        "greToClientMessages": [{
+                            "type": "GREMessageType_GameStateMessage",
+                            "msgId": 57,
+                            "gameStateId": 207,
+                            "gameStateMessage": {
+                                "annotations": [{
+                                    "id": 307,
+                                    "affectorId": 291,
+                                    "affectedIds": [1],
+                                    "type": ["AnnotationType_ChoiceResult"],
+                                    "details": [
+                                        { "key": "Choice_Value", "type": "KeyValuePairValueType_int32", "valueInt32": [6] },
+                                        { "key": "Choice_Domain", "type": "KeyValuePairValueType_int32", "valueInt32": [6] },
+                                        { "key": "Choice_Sentiment", "type": "KeyValuePairValueType_int32", "valueInt32": [2] }
+                                    ]
+                                }]
+                            }
+                        }]
+                    }
+                })
+            );
+            let entry = unity_entry(&body);
+            let event = try_parse(&entry, Some(test_timestamp()))
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| unreachable!());
+            let payload = game_state_payload(&event);
+
+            let ann = &payload["annotations"][0];
+            assert_eq!(ann["type"], "AnnotationType_ChoiceResult");
+            assert_eq!(ann["choice_value"], 6);
+            assert_eq!(ann["choice_domain"], 6);
+            assert_eq!(ann["choice_sentiment"], 2);
+        }
     }
 
     mod link_info_extraction {
