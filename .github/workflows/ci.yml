@@ -44,6 +44,25 @@ jobs:
       - name: Run tests with default features disabled
         run: cargo test --no-default-features
 
+  wasm-check:
+    name: WASM build check
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
+
+      - name: Add wasm32 target
+        run: rustup target add wasm32-unknown-unknown
+
+      # Verify that the sync/WASM-compatible subset compiles to wasm32.
+      # Uses --no-default-features to exclude tokio/known-folders (tailer feature),
+      # keeping only the pure-Rust core: LineBuffer, Router, parsers, parse_whole_log.
+      - name: cargo check (wasm32-unknown-unknown)
+        run: cargo check --target wasm32-unknown-unknown --no-default-features --features brace_depth_flush
+
   deny:
     name: cargo deny
     runs-on: ubuntu-latest
