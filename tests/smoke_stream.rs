@@ -2,7 +2,9 @@
 //!
 //! Full async pipeline via `MtgaEventStream::start_once()`.
 //!
-//! Gated on the `MANASIGHT_TEST_LOGS` environment variable.
+//! Gated on the `MANASIGHT_TEST_LOGS` environment variable and the `tailer`
+//! feature (requires tokio + file tailing stack).
+#![cfg(feature = "tailer")]
 //!
 //! ```bash
 //! MANASIGHT_TEST_LOGS=/path/to/logs cargo test smoke_stream -- --nocapture

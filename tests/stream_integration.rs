@@ -3,6 +3,9 @@
 //! Verifies the full pipeline: file tailer -> router -> event bus -> subscriber.
 //! Each test writes a sample log file, starts the stream, and asserts that the
 //! expected typed events arrive on the subscriber.
+//!
+//! Gated on the `tailer` feature (requires tokio + file tailing stack).
+#![cfg(feature = "tailer")]
 
 use std::io::Write;
 
