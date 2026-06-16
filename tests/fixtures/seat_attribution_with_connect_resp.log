@@ -1,0 +1,4 @@
+[UnityCrossThreadLogger]1/1/2026 12:00:00 PM matchGameRoomStateChangedEvent
+{"matchGameRoomStateChangedEvent":{"gameRoomInfo":{"stateType":"MatchGameRoomStateType_Playing","gameRoomConfig":{"matchId":"test-match-seat-attr","eventId":"Ladder","reservedPlayers":[{"userId":"user-alice","playerName":"Alice#11111","systemSeatId":1,"teamId":1},{"userId":"user-bob","playerName":"Bob#22222","systemSeatId":2,"teamId":2}]}}}}
+[UnityCrossThreadLogger]1/1/2026 12:00:01 PM greToClientEvent
+{"greToClientEvent":{"greToClientMessages":[{"type":"GREMessageType_ConnectResp","systemSeatIds":[1],"msgId":1,"gameStateId":0,"connectResp":{"status":"ConnectionStatus_Success","deckMessage":{"deckCards":[68398,68398,68398,68398],"sideboardCards":[]},"settings":{}}}]}}
