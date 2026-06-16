@@ -1,9 +1,9 @@
 //! Privacy scrubber for raw MTGA log text.
 //!
 //! Strips sensitive data (auth tokens, bearer tokens, OS-specific user paths,
-//! session identifiers, display names, and hardware fingerprint lines) from
-//! unstructured `Player.log` text. This is a best-effort filter; novel token
-//! formats may slip through.
+//! session identifiers, display names, email addresses, IP addresses, and
+//! hardware fingerprint lines) from unstructured `Player.log` text. This is a
+//! best-effort filter; novel token formats may slip through.
 //!
 //! Regex patterns are compiled once via [`std::sync::LazyLock`] and reused
 //! across all calls.
@@ -16,6 +16,40 @@ use regex::Regex;
 struct ScrubPattern {
     regex: Regex,
     replacement: &'static str,
+    /// When `true`, this pattern redacts a player display name field
+    /// (`screenName` or `playerName`). Used by [`scrub_raw_log_with`] to
+    /// conditionally skip name redaction when [`ScrubOptions::keep_player_names`]
+    /// is set.
+    is_player_name: bool,
+}
+
+/// Options controlling which classes of data are redacted by [`scrub_raw_log_with`].
+///
+/// All fields default to `false`, which reproduces the same behavior as
+/// [`scrub_raw_log`] (maximum redaction).
+///
+/// # Examples
+///
+/// ```
+/// use manasight_parser::{ScrubOptions, scrub_raw_log_with};
+///
+/// // Preserve player names while still redacting everything else.
+/// let opts = ScrubOptions { keep_player_names: true };
+/// let raw = r#"Token: secret123 and "screenName": "Player#999""#;
+/// let clean = scrub_raw_log_with(raw, &opts);
+/// assert!(clean.contains("Token: <redacted>"));
+/// assert!(clean.contains(r#""Player#999""#));
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ScrubOptions {
+    /// When `true`, the `screenName` and `playerName` JSON fields are **not**
+    /// redacted. All other patterns (tokens, bearer tokens, paths, `clientId`,
+    /// `userId`, `sessionId`, email addresses, IP addresses, hardware
+    /// fingerprints) still apply.
+    ///
+    /// Use this when the upload destination should retain both players' handles
+    /// for replay or analytics attribution (AC-OPP-1).
+    pub keep_player_names: bool,
 }
 
 /// Compiled privacy-scrubbing patterns, initialized once on first use.
@@ -32,81 +66,151 @@ struct ScrubPattern {
 /// - Session identifiers (JSON `"token"` and `"sessionId"` values)
 /// - Display names (JSON `"screenName"` and `"playerName"` values)
 /// - Hardware fingerprint lines (Renderer, Vendor, VRAM, Driver)
+/// - Email addresses
+/// - IPv4 dotted-quad addresses
+/// - IPv6 addresses (compressed, full, `::1`, `fe80::` link-local)
 static SCRUB_PATTERNS: LazyLock<Vec<ScrubPattern>> = LazyLock::new(|| {
-    // Patterns and replacements. Each regex is compiled exactly once.
+    // Patterns, replacements, and per-pattern flags.
+    // Each regex is compiled exactly once.
     // Order matters: more specific patterns should come before general ones
     // if there is overlap. Currently there is no overlap between categories.
-    let definitions: &[(&str, &str)] = &[
+    //
+    // Tuple fields: (pattern, replacement, is_player_name)
+    let definitions: &[(&str, &str, bool)] = &[
         // Auth tokens: "Token: <base64-or-hex-value>"
         // Matches "Token:" followed by optional whitespace and a non-whitespace token value.
-        (r"Token:\s*\S+", "Token: <redacted>"),
+        (r"Token:\s*\S+", "Token: <redacted>", false),
         // Bearer tokens in HTTP Authorization headers.
         // Uses word boundary to avoid matching game cosmetics like
         // "Title_StandardBearer" where "Bearer" appears as a substring
         // of a larger word. The \b anchor matches at the start of the
         // string or after a non-word character, so "Bearer" following
         // a letter (as in "StandardBearer") does not match.
-        (r"\bBearer\s+\S+", "Bearer <redacted>"),
+        (r"\bBearer\s+\S+", "Bearer <redacted>", false),
         // WotC account IDs in log line prefixes.
         // Arena logs game messages prefixed with the player's account ID:
         //   "Match to CR4QJUQPDBCVVMGCGNZLWGDFJE: AuthenticateResponse"
-        (r"Match to [A-Z0-9_]+:", "Match to <redacted>:"),
+        (r"Match to [A-Z0-9_]+:", "Match to <redacted>:", false),
         // JSON "clientId" values from authenticateResponse blocks.
         (
             r#""[Cc]lient[Ii]d"\s*:\s*"[^"]+""#,
             r#""clientId": "<redacted>""#,
+            false,
         ),
         // JSON "userId" values from matchGameRoomStateChangedEvent blocks.
         (
             r#""[Uu]ser[Ii]d"\s*:\s*"[^"]+""#,
             r#""userId": "<redacted>""#,
+            false,
         ),
         // Windows paths: C:\Users\<username>\ (any drive letter)
-        (r"[A-Z]:\\Users\\[^\\]+\\", r"<user-path>\"),
+        (r"[A-Z]:\\Users\\[^\\]+\\", r"<user-path>\", false),
         // macOS paths: /Users/<username>/
-        (r"/Users/[^/]+/", "<user-path>/"),
+        (r"/Users/[^/]+/", "<user-path>/", false),
         // Linux paths: /home/<username>/
-        (r"/home/[^/]+/", "<user-path>/"),
+        (r"/home/[^/]+/", "<user-path>/", false),
         // Session identifiers: JSON "token" values from authenticateResponse
         // and similar auth payloads.
-        (r#""[Tt]oken"\s*:\s*"[^"]+""#, r#""token": "<redacted>""#),
+        (
+            r#""[Tt]oken"\s*:\s*"[^"]+""#,
+            r#""token": "<redacted>""#,
+            false,
+        ),
         // Session identifiers: JSON "sessionId" values from auth responses.
         (
             r#""[Ss]ession[Ii]d"\s*:\s*"[^"]+""#,
             r#""sessionId": "<redacted>""#,
+            false,
         ),
         // Display names: JSON "screenName" values from authenticateResponse.
+        // is_player_name = true so scrub_raw_log_with can skip this when
+        // keep_player_names is set.
         (
             r#""[Ss]creen[Nn]ame"\s*:\s*"[^"]+""#,
             r#""screenName": "<redacted>""#,
+            true,
         ),
         // Display names: JSON "playerName" values from match state.
         // Contains BOTH players' display names, meaning opponent PII
         // is leaked without this pattern.
+        // is_player_name = true — skipped when keep_player_names is set.
         (
             r#""[Pp]layer[Nn]ame"\s*:\s*"[^"]+""#,
             r#""playerName": "<redacted>""#,
+            true,
         ),
         // Hardware fingerprint: GPU renderer line in log header.
         // (?m) enables per-line ^ matching since we scrub the full text buffer.
         // Leading whitespace (^\s+) is required to avoid false positives.
-        (r"(?m)^\s+Renderer:\s+.+", "  Renderer: <redacted>"),
+        (r"(?m)^\s+Renderer:\s+.+", "  Renderer: <redacted>", false),
         // Hardware fingerprint: GPU vendor.
-        (r"(?m)^\s+Vendor:\s+.+", "  Vendor: <redacted>"),
+        (r"(?m)^\s+Vendor:\s+.+", "  Vendor: <redacted>", false),
         // Hardware fingerprint: VRAM size in MB.
-        (r"(?m)^\s+VRAM:\s+.+", "  VRAM: <redacted>"),
+        (r"(?m)^\s+VRAM:\s+.+", "  VRAM: <redacted>", false),
         // Hardware fingerprint: GPU driver version.
-        (r"(?m)^\s+Driver:\s+.+", "  Driver: <redacted>"),
+        (r"(?m)^\s+Driver:\s+.+", "  Driver: <redacted>", false),
+        // Email addresses (defense-in-depth; MTGA logs carry no known third-party
+        // emails empirically, but this closes a latent gap for future client changes).
+        (
+            r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}",
+            "<email-redacted>",
+            false,
+        ),
+        // IPv6 addresses — matched BEFORE IPv4 to avoid the embedded IPv4 portion
+        // of IPv4-mapped IPv6 addresses being double-substituted.
+        //
+        // Covers: full 8-group addresses, compressed addresses (::), loopback (::1),
+        // link-local (fe80::...), and IPv4-mapped (::ffff:a.b.c.d).
+        //
+        // Three alternations (leftmost wins):
+        //   1. `::` optionally followed by hex groups — covers `::1`, `::`, `::ffff:...`
+        //   2. One or more hex groups followed by `::` and optional hex tail — covers
+        //      `fe80::1`, `2001:db8::1`
+        //   3. Three or more colon-separated hex groups without `::` — covers full
+        //      8-group addresses like `2001:0db8:85a3:0000:0000:8a2e:0370:7334`
+        //
+        // Alternation 1 uses no leading \b because `::` starts with a non-word
+        // character. Alternations 2 and 3 use \b to avoid partial matches inside
+        // larger tokens.
+        (
+            concat!(
+                r"::(?:[0-9a-fA-F]{1,4}(?::[0-9a-fA-F]{1,4})*)?",
+                r"|\b[0-9a-fA-F]{1,4}(?::[0-9a-fA-F]{1,4})*::[0-9a-fA-F]{0,4}(?::[0-9a-fA-F]{1,4})*",
+                r"|\b(?:[0-9a-fA-F]{1,4}:){3,7}[0-9a-fA-F]{1,4}\b",
+            ),
+            "<ip-redacted>",
+            false,
+        ),
+        // IPv4 dotted-quad addresses (defense-in-depth).
+        //
+        // NOTE: A straightforward dotted-quad regex also matches version strings
+        // of the form "N.N.N.N" (e.g. "Version: 1.2.3.4" in the MTGA log header).
+        // Because the `regex` crate is DFA-based and does not support lookbehind,
+        // there is no way to exclude the version-line context without substantial
+        // added complexity. The deliberate tradeoff here is that a 4-segment version
+        // string is syntactically indistinguishable from an IPv4 address; redacting
+        // it is acceptable as defense-in-depth (AC-PRIV-8). The test fixture
+        // `test_scrub_raw_log_hardware_fingerprint_in_full_log_header` has been
+        // updated accordingly.
+        (
+            r"\b(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\b",
+            "<ip-redacted>",
+            false,
+        ),
     ];
 
     definitions
         .iter()
-        .filter_map(|(pattern, replacement)| {
+        .filter_map(|(pattern, replacement, is_player_name)| {
             // These patterns are static string literals validated by tests.
             // A compilation failure here indicates a programmer error in the
             // pattern definitions above, not a runtime data issue.
             match Regex::new(pattern) {
-                Ok(regex) => Some(ScrubPattern { regex, replacement }),
+                Ok(regex) => Some(ScrubPattern {
+                    regex,
+                    replacement,
+                    is_player_name: *is_player_name,
+                }),
                 Err(e) => {
                     ::log::error!("BUG: failed to compile privacy pattern {pattern:?}: {e}");
                     None
@@ -122,6 +226,8 @@ static SCRUB_PATTERNS: LazyLock<Vec<ScrubPattern>> = LazyLock::new(|| {
 /// replacing all matches with redaction placeholders. Handles empty input,
 /// single-line input, and multi-megabyte files without panicking.
 ///
+/// This is equivalent to `scrub_raw_log_with(input, &ScrubOptions::default())`.
+///
 /// # Examples
 ///
 /// ```
@@ -133,12 +239,36 @@ static SCRUB_PATTERNS: LazyLock<Vec<ScrubPattern>> = LazyLock::new(|| {
 /// assert!(!clean.contains("secret123"));
 /// ```
 pub fn scrub_raw_log(input: &str) -> String {
+    scrub_raw_log_with(input, &ScrubOptions::default())
+}
+
+/// Redact PII and credentials from raw MTGA `Player.log` text with configurable options.
+///
+/// Like [`scrub_raw_log`], but accepts a [`ScrubOptions`] value to control which
+/// data classes are redacted. See [`ScrubOptions`] for available flags.
+///
+/// # Examples
+///
+/// ```
+/// use manasight_parser::{ScrubOptions, scrub_raw_log_with};
+///
+/// // Keep player handles for server-side replay attribution.
+/// let opts = ScrubOptions { keep_player_names: true };
+/// let raw = r#""screenName": "TimCahill#1234", "token": "secret""#;
+/// let clean = scrub_raw_log_with(raw, &opts);
+/// assert!(clean.contains("TimCahill#1234"));
+/// assert!(clean.contains(r#""token": "<redacted>""#));
+/// ```
+pub fn scrub_raw_log_with(input: &str, opts: &ScrubOptions) -> String {
     if input.is_empty() {
         return String::new();
     }
 
     let mut result = input.to_owned();
     for pattern in SCRUB_PATTERNS.iter() {
+        if opts.keep_player_names && pattern.is_player_name {
+            continue;
+        }
         result = pattern
             .regex
             .replace_all(&result, pattern.replacement)
@@ -481,6 +611,13 @@ mod tests {
 
     #[test]
     fn test_scrub_raw_log_hardware_fingerprint_in_full_log_header() {
+        // NOTE: "Version: 1.2.3.4" is intentionally redacted to "<ip-redacted>"
+        // by the IPv4 pattern. A 4-segment numeric string is syntactically
+        // indistinguishable from an IPv4 address without semantic context, and
+        // the `regex` crate (DFA-based) provides no lookbehind to exclude the
+        // version-line context. Redacting it is acceptable as defense-in-depth
+        // (AC-PRIV-8): the version number is not PII and its loss in the
+        // scrubbed upload blob does not affect replay correctness or analytics.
         let input = "\
 [UnityCrossThreadLogger] Version: 1.2.3.4
   SystemInfo:
@@ -493,7 +630,10 @@ mod tests {
         assert!(!result.contains("AMD Radeon RX 6800 XT"));
         assert!(!result.contains("16384"));
         assert!(!result.contains("23.12.1"));
-        assert!(result.contains("Version: 1.2.3.4"));
+        // Version string is redacted by the IPv4 pattern (deliberate tradeoff —
+        // see comment above).
+        assert!(!result.contains("1.2.3.4"));
+        assert!(result.contains("Version: <ip-redacted>"));
         assert!(result.contains("Game starting"));
     }
 
@@ -615,6 +755,212 @@ mod tests {
     fn test_scrub_raw_log_non_user_paths_not_redacted() {
         let input = "/usr/local/bin/mtga\n/etc/config.toml\n/var/log/syslog";
         assert_eq!(scrub_raw_log(input), input);
+    }
+
+    // --- ScrubOptions / keep_player_names ---
+
+    #[test]
+    fn test_scrub_raw_log_with_keep_player_names_false_redacts_names() {
+        let opts = ScrubOptions {
+            keep_player_names: false,
+        };
+        let input = r#""screenName": "Alice#123", "playerName": "Bob#456""#;
+        let result = scrub_raw_log_with(input, &opts);
+        assert!(!result.contains("Alice"));
+        assert!(!result.contains("Bob"));
+        assert!(result.contains(r#""screenName": "<redacted>""#));
+        assert!(result.contains(r#""playerName": "<redacted>""#));
+    }
+
+    #[test]
+    fn test_scrub_raw_log_with_keep_player_names_true_preserves_names() {
+        let opts = ScrubOptions {
+            keep_player_names: true,
+        };
+        let input = r#""screenName": "Alice#123", "playerName": "Bob#456""#;
+        let result = scrub_raw_log_with(input, &opts);
+        assert!(result.contains("Alice#123"));
+        assert!(result.contains("Bob#456"));
+    }
+
+    #[test]
+    fn test_scrub_raw_log_with_keep_player_names_true_still_redacts_tokens() {
+        let opts = ScrubOptions {
+            keep_player_names: true,
+        };
+        let input = r#"Token: secret123 and "screenName": "Alice#123""#;
+        let result = scrub_raw_log_with(input, &opts);
+        assert!(result.contains("Token: <redacted>"));
+        assert!(!result.contains("secret123"));
+        assert!(result.contains("Alice#123"));
+    }
+
+    #[test]
+    fn test_scrub_raw_log_with_keep_player_names_true_still_redacts_session_ids() {
+        let opts = ScrubOptions {
+            keep_player_names: true,
+        };
+        let input = r#"{"sessionId": "sess_xyz789", "screenName": "Alice#123"}"#;
+        let result = scrub_raw_log_with(input, &opts);
+        assert!(result.contains(r#""sessionId": "<redacted>""#));
+        assert!(!result.contains("sess_xyz789"));
+        assert!(result.contains("Alice#123"));
+    }
+
+    #[test]
+    fn test_scrub_raw_log_with_keep_player_names_true_still_redacts_paths() {
+        let opts = ScrubOptions {
+            keep_player_names: true,
+        };
+        let input = r#""playerName": "Alice#123" at /home/alice/.config/app"#;
+        let result = scrub_raw_log_with(input, &opts);
+        assert!(result.contains("Alice#123"));
+        assert!(!result.contains("/home/alice/"));
+        assert!(result.contains("<user-path>/"));
+    }
+
+    #[test]
+    fn test_scrub_raw_log_with_keep_player_names_true_still_redacts_client_id() {
+        let opts = ScrubOptions {
+            keep_player_names: true,
+        };
+        let input = r#"{"clientId": "CR4QJUQP", "screenName": "Alice#123"}"#;
+        let result = scrub_raw_log_with(input, &opts);
+        assert!(result.contains(r#""clientId": "<redacted>""#));
+        assert!(!result.contains("CR4QJUQP"));
+        assert!(result.contains("Alice#123"));
+    }
+
+    #[test]
+    fn test_scrub_raw_log_with_keep_player_names_true_still_redacts_hardware_fingerprints() {
+        let opts = ScrubOptions {
+            keep_player_names: true,
+        };
+        let input = "\"playerName\": \"Alice#123\"\n  Renderer: NVIDIA GeForce RTX 3080";
+        let result = scrub_raw_log_with(input, &opts);
+        assert!(result.contains("Alice#123"));
+        assert!(!result.contains("NVIDIA GeForce RTX 3080"));
+        assert!(result.contains("Renderer: <redacted>"));
+    }
+
+    #[test]
+    fn test_scrub_raw_log_with_default_opts_equals_scrub_raw_log() {
+        // scrub_raw_log_with(.., &ScrubOptions::default()) must produce
+        // identical output to scrub_raw_log(..) for the same input.
+        let inputs = [
+            r#""screenName": "Alice#123", Token: secret"#,
+            "Token: abc Bearer tok123",
+            r#"{"sessionId": "s1", "playerName": "Bob#99"}"#,
+            "[UnityCrossThreadLogger] Game started",
+            "",
+        ];
+        for input in &inputs {
+            assert_eq!(
+                scrub_raw_log(input),
+                scrub_raw_log_with(input, &ScrubOptions::default()),
+                "scrub_raw_log and scrub_raw_log_with(default) differ for input: {input:?}"
+            );
+        }
+    }
+
+    // --- Email redaction ---
+
+    #[test]
+    fn test_scrub_raw_log_email_address_redacted() {
+        let input = "Contact: user@example.com for support";
+        let result = scrub_raw_log(input);
+        assert!(!result.contains("user@example.com"));
+        assert!(result.contains("<email-redacted>"));
+    }
+
+    #[test]
+    fn test_scrub_raw_log_email_in_json_value_redacted() {
+        let input = r#"{"email": "player.one+mtga@arena.wizards.com"}"#;
+        let result = scrub_raw_log(input);
+        assert!(!result.contains("player.one+mtga@arena.wizards.com"));
+        assert!(result.contains("<email-redacted>"));
+    }
+
+    #[test]
+    fn test_scrub_raw_log_multiple_emails_on_same_line_redacted() {
+        let input = "From: alice@example.com To: bob@example.org";
+        let result = scrub_raw_log(input);
+        assert!(!result.contains("alice@example.com"));
+        assert!(!result.contains("bob@example.org"));
+        assert_eq!(result.matches("<email-redacted>").count(), 2);
+    }
+
+    // --- IPv4 redaction ---
+
+    #[test]
+    fn test_scrub_raw_log_ipv4_address_redacted() {
+        let input = "Server address: 192.168.1.100 port 443";
+        let result = scrub_raw_log(input);
+        assert!(!result.contains("192.168.1.100"));
+        assert!(result.contains("<ip-redacted>"));
+    }
+
+    #[test]
+    fn test_scrub_raw_log_ipv4_loopback_redacted() {
+        let input = "Connecting to 127.0.0.1:8080";
+        let result = scrub_raw_log(input);
+        assert!(!result.contains("127.0.0.1"));
+        assert!(result.contains("<ip-redacted>"));
+    }
+
+    #[test]
+    fn test_scrub_raw_log_ipv4_public_address_redacted() {
+        let input = "WotC endpoint: 52.23.1.200";
+        let result = scrub_raw_log(input);
+        assert!(!result.contains("52.23.1.200"));
+        assert!(result.contains("<ip-redacted>"));
+    }
+
+    #[test]
+    fn test_scrub_raw_log_version_string_redacted_as_ipv4_deliberate_tradeoff() {
+        // A 4-segment version string is syntactically indistinguishable from
+        // an IPv4 address without semantic context. The regex crate (DFA-based)
+        // provides no lookbehind to exclude version-line context, so version
+        // strings like "1.2.3.4" are redacted. This is an acceptable
+        // defense-in-depth tradeoff (AC-PRIV-8).
+        let input = "Version: 1.2.3.4";
+        let result = scrub_raw_log(input);
+        assert!(!result.contains("1.2.3.4"));
+        assert!(result.contains("<ip-redacted>"));
+    }
+
+    // --- IPv6 redaction ---
+
+    #[test]
+    fn test_scrub_raw_log_ipv6_loopback_redacted() {
+        let input = "Listening on ::1 port 3000";
+        let result = scrub_raw_log(input);
+        assert!(!result.contains("::1"));
+        assert!(result.contains("<ip-redacted>"));
+    }
+
+    #[test]
+    fn test_scrub_raw_log_ipv6_link_local_redacted() {
+        let input = "Interface address: fe80::1%eth0";
+        let result = scrub_raw_log(input);
+        assert!(!result.contains("fe80::1"));
+        assert!(result.contains("<ip-redacted>"));
+    }
+
+    #[test]
+    fn test_scrub_raw_log_ipv6_full_address_redacted() {
+        let input = "IPv6: 2001:0db8:85a3:0000:0000:8a2e:0370:7334";
+        let result = scrub_raw_log(input);
+        assert!(!result.contains("2001:0db8:85a3:0000:0000:8a2e:0370:7334"));
+        assert!(result.contains("<ip-redacted>"));
+    }
+
+    #[test]
+    fn test_scrub_raw_log_ipv6_compressed_redacted() {
+        let input = "Remote: 2001:db8::1";
+        let result = scrub_raw_log(input);
+        assert!(!result.contains("2001:db8::1"));
+        assert!(result.contains("<ip-redacted>"));
     }
 
     // --- Corpus validation (env-gated, not run in CI) ---

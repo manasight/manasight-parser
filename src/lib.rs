@@ -72,7 +72,7 @@ pub use events::{
     GameResultEvent, GameStateEvent, InventoryEvent, LogFileRotatedEvent, MatchStateEvent,
     PerformanceClass, RankEvent, SessionEvent, TruncationEvent,
 };
-pub use sanitize::scrub_raw_log;
+pub use sanitize::{scrub_raw_log, scrub_raw_log_with, ScrubOptions};
 #[cfg(feature = "tailer")]
 pub use stream::{MtgaEventStream, StreamError};
 pub use util::{compress_log, content_hash};
