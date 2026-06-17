@@ -84,7 +84,7 @@ jobs:
       # It installs wasm-bindgen-cli internally and drives the full
       # wasm-bindgen test pipeline against the Node.js target.
       - name: Install wasm-pack
-        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+        run: cargo install wasm-pack --locked --version 0.15.0
 
       # Run wasm-bindgen-test suite on Node.js.
       # tests/wasm_smoke.rs is gated with #![cfg(target_arch = "wasm32")]

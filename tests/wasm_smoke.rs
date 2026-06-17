@@ -15,7 +15,7 @@
 //! == native output on identical input (AC-ING-3 parity, no name
 //! special-casing required here; redaction is upstream).
 
-#![cfg(target_arch = "wasm32")]
+#![cfg(all(target_arch = "wasm32", feature = "wasm"))]
 
 use manasight_parser::{parse_whole_log, wasm::parse_whole_log_js, GameEvent};
 use wasm_bindgen_test::wasm_bindgen_test;
