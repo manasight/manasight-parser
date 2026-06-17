@@ -1822,7 +1822,9 @@ mod tests {
 
     // -- Brace-depth string-literal handling (property tests) ---------------
 
-    #[cfg(feature = "brace_depth_flush")]
+    // proptest is not available for wasm32 targets (it uses host-only OS APIs);
+    // gate these tests to non-wasm host builds only.
+    #[cfg(all(feature = "brace_depth_flush", not(target_arch = "wasm32")))]
     mod brace_depth_property {
         use super::*;
         use proptest::prelude::*;

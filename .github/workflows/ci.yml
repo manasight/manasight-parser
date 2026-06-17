@@ -63,6 +63,36 @@ jobs:
       - name: cargo check (wasm32-unknown-unknown)
         run: cargo check --target wasm32-unknown-unknown --no-default-features --features brace_depth_flush
 
+      # Also verify that the wasm feature (adds wasm-bindgen exports) compiles.
+      - name: cargo check wasm feature (wasm32-unknown-unknown)
+        run: cargo check --target wasm32-unknown-unknown --no-default-features --features wasm
+
+  wasm-smoke:
+    name: WASM smoke test (Node)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
+
+      - name: Add wasm32 target
+        run: rustup target add wasm32-unknown-unknown
+
+      # wasm-pack is new CI tooling introduced by this issue (#825).
+      # It installs wasm-bindgen-cli internally and drives the full
+      # wasm-bindgen test pipeline against the Node.js target.
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      # Run wasm-bindgen-test suite on Node.js.
+      # tests/wasm_smoke.rs is gated with #![cfg(target_arch = "wasm32")]
+      # so it compiles to nothing on the host and only executes here.
+      # Asserts: parse_whole_log_js(fixture) == parse_whole_log(fixture) (native parity).
+      - name: Run wasm smoke tests (Node)
+        run: wasm-pack test --node -- --no-default-features --features wasm
+
   deny:
     name: cargo deny
     runs-on: ubuntu-latest

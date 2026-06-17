@@ -54,6 +54,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+## Cargo Features
+
+| Feature | Default | Description |
+|---------|---------|-------------|
+| `brace_depth_flush` | ✓ | Flush multi-line entries on JSON brace-balance instead of waiting for the next header. Disable as a rollback mechanism if a regression is detected. |
+| `tailer` | ✓ | File tailer, log discovery, async event stream (`MtgaEventStream`), and event bus. Pulls in `tokio` and `known-folders`. Disable to build the pure-sync WASM-compatible subset. |
+| `wasm` | | wasm-bindgen export of `parseWholeLog` for use in a browser or Node Parse Worker. Implies `brace_depth_flush`; does **not** pull in `tailer` (no tokio/known-folders). |
+
+### WASM / wasm-bindgen build
+
+The `wasm` feature produces a loadable `.wasm` artifact and JS/TypeScript bindings via [`wasm-pack`](https://rustwasm.github.io/wasm-pack/):
+
+```bash
+# Install wasm-pack (once)
+curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+# Build — outputs pkg/ with .wasm + JS + .d.ts
+wasm-pack build --target web --no-default-features --features wasm
+
+# For a Node.js consumer:
+wasm-pack build --target nodejs --no-default-features --features wasm
+
+# For a bundler (webpack / Vite):
+wasm-pack build --target bundler --no-default-features --features wasm
+```
+
+The exported function is `parseWholeLog(input: string): GameEvent[]` — it calls the same synchronous core pipeline as the native `parse_whole_log` and returns a live JS object graph (via `serde-wasm-bindgen`), not a JSON string.
+
+**Note:** npm publishing / package distribution is out of scope for this library. The consuming application (e.g. a Parse Worker) is responsible for vendoring or packaging the built artifact.
+
 ## Log Sanitization
 
 The `sanitize` module strips PII and credentials from raw `Player.log` text before it leaves the user's machine. It redacts auth tokens, bearer tokens, account IDs, display names, session identifiers, OS user paths, and hardware fingerprints.
