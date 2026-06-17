@@ -4,7 +4,7 @@
 
 **manasight-parser** is the log parsing engine behind [Manasight](https://manasight.gg), an MTG Arena companion app.
 
-MTG Arena log file parser — a Rust library crate that reads Arena's `Player.log` and emits typed game events via an async event bus.
+MTG Arena log file parser — a Rust library crate that reads Arena's `Player.log` and emits typed game events. It runs **natively** — tailing a live log through an async event bus — or compiles to **WebAssembly** to parse a whole log in the browser or in Node.
 
 ## Installation
 
@@ -35,8 +35,17 @@ Player.log → File Tailer → Entry Buffer → Router → Parsers → Event Bus
 - **`stream`** — public entry point (`MtgaEventStream`)
 - **`sanitize`** — privacy scrubber for redacting PII from raw log text
 - **`util`** — pipeline utilities (gzip compression, content hashing)
+- **`wasm`** — `wasm-bindgen` export of the synchronous parser (enabled by the `wasm` feature)
+
+The async pipeline above powers the live desktop overlay. The synchronous [`parse_whole_log`](#whole-log-parsing-synchronous) entry point — and its `wasm` export — reuse the same **Router → Parsers** core directly, bypassing the tailer and event bus (no `tokio`, no filesystem).
 
 ## Usage
+
+manasight-parser has two entry points: a **streaming** tailer for live logs, and a **synchronous whole-log** parser (the basis for the WASM build).
+
+### Streaming (live `Player.log`)
+
+`MtgaEventStream` (the default `tailer` feature) tails a live log and fans out events to subscribers as they arrive:
 
 ```rust
 use std::path::Path;
@@ -54,6 +63,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+### Whole-log parsing (synchronous)
+
+`parse_whole_log` parses an entire `Player.log` string in one synchronous call — no async runtime, no filesystem. It is always available (independent of the `tailer` feature) and is the exact entry point the [WASM build](#wasm--wasm-bindgen-build) exposes to JavaScript:
+
+```rust
+use manasight_parser::parse_whole_log;
+
+fn main() -> std::io::Result<()> {
+    let text = std::fs::read_to_string("Player.log")?;
+    let events = parse_whole_log(&text);
+    println!("parsed {} events", events.len());
+    Ok(())
+}
+```
+
 ## Cargo Features
 
 | Feature | Default | Description |
@@ -64,11 +88,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ### WASM / wasm-bindgen build
 
-The `wasm` feature produces a loadable `.wasm` artifact and JS/TypeScript bindings via [`wasm-pack`](https://rustwasm.github.io/wasm-pack/):
+The `wasm` feature wraps the synchronous [`parse_whole_log`](#whole-log-parsing-synchronous) in a [`wasm-bindgen`](https://rustwasm.github.io/wasm-bindgen/) export, producing a loadable `.wasm` artifact plus JS/TypeScript bindings via [`wasm-pack`](https://rustwasm.github.io/wasm-pack/). The *same* parser core then runs in a browser or in Node — no `tokio`, no filesystem, no async runtime.
 
 ```bash
-# Install wasm-pack (once)
-curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+# Install wasm-pack (once) — pin the version for reproducible builds
+cargo install wasm-pack --locked --version 0.15.0
 
 # Build — outputs pkg/ with .wasm + JS + .d.ts
 wasm-pack build --target web --no-default-features --features wasm
@@ -80,9 +104,26 @@ wasm-pack build --target nodejs --no-default-features --features wasm
 wasm-pack build --target bundler --no-default-features --features wasm
 ```
 
-The exported function is `parseWholeLog(input: string): GameEvent[]` — it calls the same synchronous core pipeline as the native `parse_whole_log` and returns a live JS object graph (via `serde-wasm-bindgen`), not a JSON string.
+Consume the generated bindings from JavaScript / TypeScript:
 
-**Note:** npm publishing / package distribution is out of scope for this library. The consuming application (e.g. a Parse Worker) is responsible for vendoring or packaging the built artifact.
+```js
+import init, { parseWholeLog } from "./pkg/manasight_parser.js";
+
+await init();                       // instantiate the .wasm module (web / bundler targets)
+const text = await readPlayerLog(); // the full Player.log contents, as a string
+
+let events;
+try {
+  events = parseWholeLog(text);     // GameEvent[] — see "Event Types" below
+} catch (err) {
+  // parseWholeLog throws only if serialisation to JS fails (extremely unlikely)
+  console.error("parse failed:", err);
+}
+```
+
+**Return type:** at runtime `parseWholeLog` returns a `GameEvent[]` — a live JS object graph (via [`serde-wasm-bindgen`](https://github.com/RReverser/serde-wasm-bindgen)), **not** a JSON string, so there's no second `JSON.parse`. Each element is an externally-tagged enum, e.g. `{ "GameState": { … } }` (see [Event Types](#event-types)). Because the wrapper hands back a `JsValue`, the generated `.d.ts` types the return as `any` and the call can throw — TypeScript consumers will likely want to layer their own types and a `try`/`catch`.
+
+**Distribution:** npm publishing / packaging is intentionally out of scope for this library. The consuming application (e.g. a Parse Worker) vendors or packages the built `pkg/` artifact.
 
 ## Log Sanitization
 
