@@ -59,6 +59,8 @@ pub mod sanitize;
 #[cfg(feature = "tailer")]
 pub mod stream;
 pub mod util;
+#[cfg(feature = "wasm")]
+pub mod wasm;
 
 // ---------------------------------------------------------------------------
 // Re-exports — public API surface
