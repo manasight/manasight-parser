@@ -4,20 +4,81 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.5.0] - 2026-06-16
+
+> Released directly from `0.3.0`. Versions `0.4.0` and `0.5.0` were bumped in
+> `Cargo.toml` during feature work but never published; `0.4.0` is intentionally
+> skipped on crates.io and its changes are folded into this entry.
 
 ### Added
 
-- Linux (Steam/Proton + Lutris) `Player.log` auto-discovery in `discover_log_file()`.
-  Parses `~/.local/share/Steam/steamapps/libraryfolders.vdf` to find the Steam library
+- **WebAssembly build target and synchronous whole-log parser.** New
+  `parse_whole_log(input: &str) -> Vec<GameEvent>` — a pure, synchronous, I/O-free
+  entry point that reuses the same `LineBuffer` + `Router` core as the async
+  desktop path. New `wasm` cargo feature exports `parseWholeLog` via `wasm-bindgen`
+  (`src/wasm.rs`) for a browser/Node parse worker; build with
+  `wasm-pack build --target web --no-default-features --features wasm`. The crate
+  now builds as both `cdylib` and `rlib` (#224, #230).
+- **`tailer` cargo feature (default-on)** gating the async stack — `tokio`,
+  `known-folders`, the file tailer, log discovery, `event_bus`, and `stream`.
+  Building with `--no-default-features` yields a pure-sync, WASM-compatible subset
+  that still exposes `parse_whole_log` without pulling in `tokio` or filesystem
+  access. The default desktop build (`brace_depth_flush` + `tailer`) is unchanged
+  (#224).
+- **`ScrubOptions` and `scrub_raw_log_with`.** New
+  `ScrubOptions { keep_player_names: bool }` (defaults to `false`) and
+  `scrub_raw_log_with(input, &ScrubOptions)`; `scrub_raw_log` keeps its existing
+  signature and behavior, now delegating with default options. Setting
+  `keep_player_names = true` retains in-game screen/player names (needed for seat
+  attribution) while still redacting everything else. Email, IPv4, and IPv6
+  addresses are now scrubbed as well (#225).
+- **`GameEvent::Truncation(TruncationEvent)`** surfacing Arena's
+  `[Message summarized … exceeded the 50 GameObject or 50 Annotation limit.]`
+  marker that replaces an oversized GSM body. The payload carries
+  `{ object_count, annotation_count }`; a new `EntryHeader::TruncationMarker`
+  (classified `MultiLine`) accumulates the marker and its follow-on count lines.
+  `GameEvent` is `#[non_exhaustive]`, so the new variant is additive (#200, #201).
+- **`prev_game_state_id` on game-state-message payloads**, read from inside the
+  `gameStateMessage` sub-object. Always present — serializes to `null` on Full
+  GSMs that omit it — giving consumers a contiguous Diff-sequence signal (#201).
+- **ChoiceResult and LinkInfo annotation details.** `AnnotationType_ChoiceResult`
+  and `AnnotationType_LinkInfo` previously fell through the catch-all arm and
+  dropped all detail. The parser now emits `choice_value` (plus optional
+  `choice_domain` / `choice_sentiment`) and `choose_link_type` /
+  `source_ability_grp_id` / `link_type`, restoring the chosen card name for
+  "name a card" effects (e.g. Pithing Needle, Meddling Mage) that previously
+  reached consumers with base fields only (#221).
+- **Linux (Steam/Proton + Lutris) `Player.log` auto-discovery** in
+  `discover_log_file()`. Parses
+  `~/.local/share/Steam/steamapps/libraryfolders.vdf` to find the Steam library
   containing MTGA (app id 2141910) across any configured disk, with a Lutris prefix
-  fallback. On Linux, `UnsupportedPlatform` is no longer returned; instead, a
-  `LogFileMissing` error (matching the Windows/macOS absent-file contract) is returned
-  when no candidate location contains a `Player.log` (#212).
+  fallback. On Linux, `UnsupportedPlatform` is no longer returned; instead a
+  `LogFileMissing` error (matching the Windows/macOS absent-file contract) is
+  returned when no candidate location contains a `Player.log` (#212, #213).
+
+### Changed
+
+- **`SelectN` client-action payload now reads `selectNResp.ids`** and emits a
+  single `selected_ids: Vec<i64>` field. The previous `selected_option_ids` /
+  `selected_object_ids` fields are **removed** — neither name appears in real MTGA
+  logs (zero corpus hits) and no downstream consumer read them. The optional
+  `useArbitrary` ordering tag remains reachable through `raw_client_action`
+  (#206, #208).
 
 ### Fixed
 
-- GameOver `GameStateMessage`s carrying annotations (e.g. the lethal combat damage that ends the match) no longer drop them silently. When `gameInfo.stage == GameStage_GameOver` and the GSM has a non-empty `annotations` or `persistentAnnotations` array, the parser now emits a `GameEvent::GameState` carrying both arrays immediately before the existing `GameEvent::GameResult`. Per-producer ordering on the broadcast channel guarantees annotation-walker consumers see the killing-blow data before the result payload. GameOver GSMs with empty annotation arrays continue to emit only the `GameResult` event; the `MatchState_MatchComplete` suppression branch is unchanged (#196).
+- GameOver `GameStateMessage`s carrying annotations (e.g. the lethal combat damage that ends the match) no longer drop them silently. When `gameInfo.stage == GameStage_GameOver` and the GSM has a non-empty `annotations` or `persistentAnnotations` array, the parser now emits a `GameEvent::GameState` carrying both arrays immediately before the existing `GameEvent::GameResult`. Per-producer ordering on the broadcast channel guarantees annotation-walker consumers see the killing-blow data before the result payload. GameOver GSMs with empty annotation arrays continue to emit only the `GameResult` event; the `MatchState_MatchComplete` suppression branch is unchanged (#196, #197).
+
+### Removed
+
+- **Dead `EntryHeader::ClientGre` variant.** `[Client GRE]` never appears in real
+  MTGA logs (zero occurrences across 44 sessions / 606k lines); the variant was
+  speculative scaffolding. Removed from the `EntryHeader` enum and all five match
+  arms (#207, #209).
+- **Three zero-corpus-hit parser markers and their dead code paths**:
+  `Updated account. DisplayName:` account-update parsing (`authenticateResponse`
+  is the real identity source), `LogBusinessEvents`, and `PickGrpId`. All had zero
+  occurrences across the corpus (#205).
 
 ## [0.3.0] - 2026-05-13
 
