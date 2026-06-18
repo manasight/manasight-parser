@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.5.1] - 2026-06-17
+
+### Added
+
+- **`GameEvent::DeckSubmission(DeckSubmissionEvent)`** surfacing the submitted
+  deck's registered `Format` and `DeckId` from `EventSetDeckV2` / `EventSetDeckV3`
+  request lines. A new family-matched parser claims the bare `==> EventSetDeck`
+  prefix — covering V2, V3, and any future `Vn` without panicking on an
+  unrecognized version — decodes the double-encoded `request`, and emits a
+  `{ metadata, payload }` event whose payload carries
+  `{ deck_id, deck_format, event_name, is_singleton }`. This gives the format
+  model a precise fallback for generic / bot-match queues whose event name is not
+  format-bearing. `GameEvent` is `#[non_exhaustive]`, so the new variant is
+  additive (#232, #237).
+
 ## [0.5.0] - 2026-06-16
 
 > Released directly from `0.3.0`. Versions `0.4.0` and `0.5.0` were bumped in
