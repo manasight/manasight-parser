@@ -105,10 +105,7 @@ fn correlate_summary(
     deck_map: &serde_json::Map<String, serde_json::Value>,
 ) -> Option<(String, serde_json::Value)> {
     let summary = summary.as_object()?;
-    let deck_id = summary
-        .get("DeckId")
-        .and_then(serde_json::Value::as_str)?
-        .to_string();
+    let deck_id = api_common::extract_deck_id(&serde_json::Value::Object(summary.clone()))?;
 
     let deck = deck_map.get(&deck_id).cloned()?;
 

@@ -122,6 +122,7 @@ macro_rules! delegate_to_inner {
             Self::Rank(e) => e.$method(),
             Self::DeckCollection(e) => e.$method(),
             Self::Inventory(e) => e.$method(),
+            Self::DeckSubmission(e) => e.$method(),
             Self::GameResult(e) => e.$method(),
             Self::LogFileRotated(e) => e.$method(),
             Self::DetailedLoggingStatus(e) => e.$method(),
@@ -193,6 +194,12 @@ pub enum GameEvent {
     /// Inventory snapshot (`<== StartHook` with `InventoryInfo`):
     /// currency, wildcards, etc. Class 2 — durable per-event.
     Inventory(InventoryEvent),
+
+    /// Deck submission (`==> EventSetDeckV2`, `==> EventSetDeckV3`, and
+    /// future `Vn`). Payload: `{ deck_id, deck_format, event_name,
+    /// is_singleton }`. Used as the C-2b format-model fallback signal for
+    /// bot-match queues. Class 2 — durable per-event.
+    DeckSubmission(DeckSubmissionEvent),
 
     /// Game result (`GameStage_GameOver` from GRE `GameStateMessage`).
     /// Class 3 — triggers post-game batch assembly.
@@ -299,7 +306,8 @@ impl GameEvent {
             | Self::Session(_)
             | Self::Rank(_)
             | Self::DeckCollection(_)
-            | Self::Inventory(_) => PerformanceClass::DurablePerEvent,
+            | Self::Inventory(_)
+            | Self::DeckSubmission(_) => PerformanceClass::DurablePerEvent,
             Self::GameResult(_) => PerformanceClass::PostGameBatch,
         }
     }
@@ -570,6 +578,18 @@ define_event! {
     InventoryEvent
 }
 
+define_event! {
+    /// Deck-submission event.
+    ///
+    /// Parsed from `==> EventSetDeckV2`, `==> EventSetDeckV3`, and future
+    /// `Vn` request lines. The payload carries the submitted deck's registered
+    /// `Format`, `DeckId`, `EventName` (queue string), and `is_singleton`
+    /// flag (non-empty `CommandZone`). Used by the C-2b format model as the
+    /// fallback format signal for bot-match queues where `event_id` alone does
+    /// not resolve the format.
+    DeckSubmissionEvent
+}
+
 // ---------------------------------------------------------------------------
 // Class 3: Post-Game Batch
 // ---------------------------------------------------------------------------
@@ -825,6 +845,7 @@ mod tests {
             GameEvent::Rank(RankEvent::new(meta.clone(), payload.clone())),
             GameEvent::DeckCollection(DeckCollectionEvent::new(meta.clone(), payload.clone())),
             GameEvent::Inventory(InventoryEvent::new(meta.clone(), payload.clone())),
+            GameEvent::DeckSubmission(DeckSubmissionEvent::new(meta.clone(), payload.clone())),
             GameEvent::GameResult(GameResultEvent::new(meta.clone(), payload.clone())),
             GameEvent::LogFileRotated(LogFileRotatedEvent::new(meta.clone(), payload.clone())),
             GameEvent::DetailedLoggingStatus(DetailedLoggingStatusEvent::new(
@@ -1081,6 +1102,7 @@ mod tests {
             PerformanceClass::DurablePerEvent,     // Rank
             PerformanceClass::DurablePerEvent,     // DeckCollection
             PerformanceClass::DurablePerEvent,     // Inventory
+            PerformanceClass::DurablePerEvent,     // DeckSubmission
             PerformanceClass::PostGameBatch,       // GameResult
             PerformanceClass::InteractiveDispatch, // LogFileRotated
             PerformanceClass::InteractiveDispatch, // DetailedLoggingStatus
@@ -1201,6 +1223,7 @@ mod tests {
             2, // Rank
             2, // DeckCollection
             2, // Inventory
+            2, // DeckSubmission
             3, // GameResult
             1, // LogFileRotated
             1, // DetailedLoggingStatus
