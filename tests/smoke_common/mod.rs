@@ -128,6 +128,10 @@ pub fn all_parsers() -> Vec<NamedParser> {
             name: "event_lifecycle",
             func: ParserFunc::Single(parsers::event_lifecycle::try_parse),
         },
+        NamedParser {
+            name: "deck_submission",
+            func: ParserFunc::Single(parsers::deck_submission::try_parse),
+        },
     ]
 }
 
@@ -149,6 +153,7 @@ pub fn event_type_name(event: &GameEvent) -> &'static str {
         GameEvent::Rank(_) => "Rank",
         GameEvent::DeckCollection(_) => "DeckCollection",
         GameEvent::Inventory(_) => "Inventory",
+        GameEvent::DeckSubmission(_) => "DeckSubmission",
         GameEvent::GameResult(_) => "GameResult",
         GameEvent::LogFileRotated(_) => "LogFileRotated",
         GameEvent::DetailedLoggingStatus(_) => "DetailedLoggingStatus",

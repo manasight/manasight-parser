@@ -169,6 +169,7 @@ cargo run --bin scrub < Player.log > Player-sanitized.log
 | `Rank` | Constructed and limited rank snapshots | Durable |
 | `DeckCollection` | Deck collection snapshots with correlated decklists | Durable |
 | `Inventory` | Currency, wildcards, boosters, vault progress | Durable |
+| `DeckSubmission` | Submitted deck Format + DeckId from `EventSetDeck` requests | Durable |
 | `GameResult` | Game result / batch trigger | Post-game |
 
 ### Performance Classes
