@@ -1,8 +1,8 @@
 {
   "_meta": {
-    "corpus_tag": "manasight-corpus-v28",
+    "corpus_tag": "manasight-corpus-v32",
     "description": "Smoke test baseline -- per-file, per-parser event counts from Level 1 (parser-only) smoke tests.",
-    "generated_from_commit": "ce47958"
+    "generated_from_commit": "a147f69"
   },
   "files": {
     "session_2026-02-22_0000_ecl-premier-bg-elves.log": {
@@ -1416,6 +1416,166 @@
       "timestamp_failures": 47,
       "total_entries": 339,
       "unclaimed": 72
+    },
+    "session_2026-06-17_1601_pioneer.log": {
+      "double_claims": 0,
+      "event_types": {
+        "ClientAction": 275,
+        "DeckCollection": 2,
+        "DetailedLoggingStatus": 1,
+        "EventLifecycle": 2,
+        "GameResult": 1,
+        "GameState": 769,
+        "Inventory": 2,
+        "MatchState": 2,
+        "Rank": 2,
+        "Session": 1
+      },
+      "parsers": {
+        "client_actions": 275,
+        "deck_collection": 2,
+        "draft_bot": 0,
+        "draft_complete": 0,
+        "draft_human": 0,
+        "event_lifecycle": 2,
+        "gre": 470,
+        "inventory": 2,
+        "match_state": 2,
+        "metadata": 1,
+        "rank": 2,
+        "session": 1
+      },
+      "timestamp_failures": 53,
+      "total_entries": 833,
+      "unclaimed": 78
+    },
+    "session_2026-06-17_1615_pioneer-historic.log": {
+      "double_claims": 0,
+      "event_types": {
+        "ClientAction": 283,
+        "DeckCollection": 2,
+        "DetailedLoggingStatus": 1,
+        "EventLifecycle": 2,
+        "GameResult": 1,
+        "GameState": 578,
+        "Inventory": 2,
+        "MatchState": 2,
+        "Rank": 2,
+        "Session": 1
+      },
+      "parsers": {
+        "client_actions": 283,
+        "deck_collection": 2,
+        "draft_bot": 0,
+        "draft_complete": 0,
+        "draft_human": 0,
+        "event_lifecycle": 2,
+        "gre": 324,
+        "inventory": 2,
+        "match_state": 2,
+        "metadata": 1,
+        "rank": 2,
+        "session": 1
+      },
+      "timestamp_failures": 63,
+      "total_entries": 713,
+      "unclaimed": 96
+    },
+    "session_2026-06-17_1655_timeless.log": {
+      "double_claims": 0,
+      "event_types": {
+        "ClientAction": 269,
+        "DeckCollection": 2,
+        "DetailedLoggingStatus": 1,
+        "EventLifecycle": 2,
+        "GameResult": 1,
+        "GameState": 548,
+        "Inventory": 2,
+        "MatchState": 2,
+        "Rank": 2,
+        "Session": 1
+      },
+      "parsers": {
+        "client_actions": 269,
+        "deck_collection": 2,
+        "draft_bot": 0,
+        "draft_complete": 0,
+        "draft_human": 0,
+        "event_lifecycle": 2,
+        "gre": 346,
+        "inventory": 2,
+        "match_state": 2,
+        "metadata": 1,
+        "rank": 2,
+        "session": 1
+      },
+      "timestamp_failures": 147,
+      "total_entries": 806,
+      "unclaimed": 181
+    },
+    "session_2026-06-17_1708_brawl.log": {
+      "double_claims": 0,
+      "event_types": {
+        "ClientAction": 217,
+        "DeckCollection": 2,
+        "DetailedLoggingStatus": 1,
+        "EventLifecycle": 2,
+        "GameResult": 1,
+        "GameState": 549,
+        "Inventory": 2,
+        "MatchState": 2,
+        "Rank": 2,
+        "Session": 1
+      },
+      "parsers": {
+        "client_actions": 217,
+        "deck_collection": 2,
+        "draft_bot": 0,
+        "draft_complete": 0,
+        "draft_human": 0,
+        "event_lifecycle": 2,
+        "gre": 330,
+        "inventory": 2,
+        "match_state": 2,
+        "metadata": 1,
+        "rank": 2,
+        "session": 1
+      },
+      "timestamp_failures": 59,
+      "total_entries": 645,
+      "unclaimed": 88
+    },
+    "session_2026-06-17_1720_standard-event.log": {
+      "double_claims": 0,
+      "event_types": {
+        "ClientAction": 138,
+        "DeckCollection": 2,
+        "DetailedLoggingStatus": 1,
+        "EventLifecycle": 2,
+        "GameResult": 1,
+        "GameState": 411,
+        "Inventory": 2,
+        "MatchState": 2,
+        "Rank": 2,
+        "Session": 3
+      },
+      "parsers": {
+        "client_actions": 138,
+        "deck_collection": 2,
+        "draft_bot": 0,
+        "draft_complete": 0,
+        "draft_human": 0,
+        "event_lifecycle": 2,
+        "gre": 153,
+        "inventory": 2,
+        "match_state": 2,
+        "metadata": 1,
+        "rank": 2,
+        "session": 3
+      },
+      "timestamp_failures": 69,
+      "total_entries": 399,
+      "unclaimed": 96
     }
   }
 }
