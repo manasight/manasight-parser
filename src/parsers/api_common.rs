@@ -118,6 +118,20 @@ pub(crate) fn parse_json_from_body(body: &str, context: &str) -> Option<serde_js
     }
 }
 
+/// Extracts a `DeckId` string from any JSON object.
+///
+/// Reads `obj["DeckId"]` and returns the value as a `String`.
+/// Returns `None` when the field is absent or not a string.
+///
+/// Callers pass whatever object carries the `DeckId` key — for example,
+/// a `DeckSummaries[]` element or a `request.Summary` object — so the
+/// navigation path to that object is the caller's responsibility.
+pub(crate) fn extract_deck_id(obj: &serde_json::Value) -> Option<String> {
+    obj.get("DeckId")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned)
+}
+
 /// Extracts and parses a nested JSON string field.
 ///
 /// MTG Arena often escapes JSON payloads inside string fields called
@@ -194,6 +208,36 @@ pub(crate) fn extract_event_name(parsed: &serde_json::Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // -- extract_deck_id -------------------------------------------------------
+
+    mod deck_id {
+        use super::*;
+
+        #[test]
+        fn test_extract_deck_id_present_returns_string() {
+            let obj = serde_json::json!({"DeckId": "abc-123"});
+            assert_eq!(extract_deck_id(&obj), Some("abc-123".to_owned()));
+        }
+
+        #[test]
+        fn test_extract_deck_id_missing_returns_none() {
+            let obj = serde_json::json!({"Other": "value"});
+            assert!(extract_deck_id(&obj).is_none());
+        }
+
+        #[test]
+        fn test_extract_deck_id_non_string_returns_none() {
+            let obj = serde_json::json!({"DeckId": 42});
+            assert!(extract_deck_id(&obj).is_none());
+        }
+
+        #[test]
+        fn test_extract_deck_id_null_returns_none() {
+            let obj = serde_json::json!({"DeckId": null});
+            assert!(extract_deck_id(&obj).is_none());
+        }
+    }
 
     // -- is_api_response -------------------------------------------------------
 
