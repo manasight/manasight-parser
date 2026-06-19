@@ -37,17 +37,27 @@
 //! header" behavior for every multi-line entry — kept as a one-flip rollback
 //! in case a string-literal edge case surfaces in live Arena traffic.
 //!
+//! # Frame-counter prefix stripping (#240)
+//!
+//! The newer MTGA Mac client (`UTC_Log` archive variant) prepends a
+//! monotonic Unity frame counter of the form `[<digits>] ` to every line
+//! (e.g. `[2841] [UnityCrossThreadLogger]…`). [`LineBuffer::push_line`]
+//! strips this prefix before any byte-0-anchored detector runs, so the
+//! same log content parses identically whether or not it carries the
+//! prefix. Callers and tests need not pre-strip the counter.
+//!
 //! # Data flow
 //!
 //! ```text
-//! File Tailer ──(raw lines)──▸ LineBuffer ──(complete entries)──▸ Router
+//! File Tailer ──(lines)──▸ LineBuffer ──(complete entries)──▸ Router
 //! ```
 //!
-//! The [`LineBuffer`] receives individual lines from the file tailer. When a
-//! new log entry header is detected, it flushes the previously accumulated
-//! lines as a complete [`LogEntry`] and either emits the new entry
-//! immediately (single-line class) or begins accumulating it (multi-line
-//! class).
+//! The [`LineBuffer`] receives individual lines from the file tailer,
+//! normalizes each line (strips the optional frame-counter prefix), then
+//! classifies and accumulates. When a new log entry header is detected, it
+//! flushes the previously accumulated lines as a complete [`LogEntry`] and
+//! either emits the new entry immediately (single-line class) or begins
+//! accumulating it (multi-line class).
 
 use regex::Regex;
 
@@ -297,11 +307,13 @@ impl LineBuffer {
     /// Callers must strip any trailing `\r` (Windows CRLF) before invoking
     /// this method. [`crate::log::tailer::FileTailer::poll`] already does
     /// this; direct callers in tests must do the same to keep classification
-    /// well-defined.
+    /// well-defined. `push_line` itself strips a leading `[<digits>] ` Unity
+    /// frame-counter prefix before classification, so callers and tests need
+    /// not pre-strip it.
     pub fn push_line(&mut self, line: &str) -> Vec<LogEntry> {
         // Strip the optional Unity frame-counter prefix `[<digits>] ` (e.g.
         // `[2841] `) that the newer MTGA Mac client (`UTC_Log` archive variant)
-        // prepends to every header line. This single chokepoint covers all
+        // prepends to every line. This single chokepoint covers all
         // byte-0-anchored detectors below. Non-numeric bracket content
         // (e.g. `[UnityCrossThreadLogger]`) is left untouched.
         let line = Self::strip_frame_prefix(line);
@@ -416,7 +428,7 @@ impl LineBuffer {
     ///
     /// The newer MTGA Mac client (`UTC_Log` archive variant) prepends a
     /// monotonic Unity frame counter of the form `[<digits>] ` to every
-    /// header line (e.g. `[2841] [UnityCrossThreadLogger]…`). Only a bracket
+    /// line (e.g. `[2841] [UnityCrossThreadLogger]…`). Only a bracket
     /// whose content is one or more ASCII digits followed by `] ` is stripped;
     /// non-numeric bracket content (e.g. `[UnityCrossThreadLogger]`) is
     /// returned unchanged. At most one prefix is stripped.
