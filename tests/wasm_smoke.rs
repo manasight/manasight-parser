@@ -22,15 +22,35 @@ use manasight_parser::{parse_whole_log, wasm::parse_whole_log_js, GameEvent};
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_test::wasm_bindgen_test;
 
-// Use the gsm_with_turn_info fixture (inline to avoid I/O in wasm context).
-const FIXTURE: &str = include_str!("fixtures/gsm_with_turn_info.txt");
+/// A minimal `greToClientEvent` log snippet that produces a real `GameState`
+/// event through `parse_whole_log`.
+///
+/// The header must start with a digit immediately after `]` so the entry is
+/// classified as `MultiLine` and the JSON body on the next line is accumulated.
+/// The `gsm_with_turn_info.txt` fixture uses `[UnityCrossThreadLogger]greToClientEvent`
+/// (non-digit after `]` → `SingleLine`) so its JSON body is orphaned and zero
+/// events are produced — this inline fixture is the correct form.
+const INLINE_GSM_INPUT: &str = "\
+[UnityCrossThreadLogger]3/11/2026 10:00:00 AM greToClientEvent\n\
+{\"greToClientEvent\":{\"greToClientMessages\":[{\"type\":\"GREMessageType_GameStateMessage\",\
+\"msgId\":12,\"gameStateId\":78,\"gameStateMessage\":{\"turnInfo\":{\"turnNumber\":3,\
+\"phase\":\"Phase_Main1\"}}}]}}";
 
 /// Parses the corpus fixture through both code paths and asserts they agree.
 #[wasm_bindgen_test]
 fn test_parse_whole_log_js_parity_with_native() {
-    let native_events: Vec<GameEvent> = parse_whole_log(FIXTURE);
+    // Use an inline input that produces real events so this test is non-vacuous.
+    let native_events: Vec<GameEvent> = parse_whole_log(INLINE_GSM_INPUT);
 
-    let js_value = parse_whole_log_js(FIXTURE).expect("wasm wrapper must not fail");
+    // Guard: if parsing ever regresses to 0 events, the parity assertion
+    // becomes vacuously true (0 == 0) and stops catching bugs.
+    assert!(
+        !native_events.is_empty(),
+        "parse_whole_log(INLINE_GSM_INPUT) must produce >=1 event; got 0 — \
+         check that the header starts with a digit after ']'"
+    );
+
+    let js_value = parse_whole_log_js(INLINE_GSM_INPUT).expect("wasm wrapper must not fail");
 
     let wasm_events: Vec<GameEvent> =
         serde_wasm_bindgen::from_value(js_value).expect("round-trip deserialisation must succeed");
@@ -62,38 +82,38 @@ fn test_parse_whole_log_js_empty_input() {
 
 /// Regression test: event payloads must be plain JS objects, not `Map` instances.
 ///
-/// Constructs a `GameState` event with a known `greToClientEvent` payload
-/// (a `serde_json::Value::Object`) and serialises it through the same
-/// `serde_wasm_bindgen::Serializer` configuration used by `parse_whole_log_js`.
+/// Calls `parse_whole_log_js` end-to-end with a real log snippet that produces
+/// a `GameState` event. Inspects the raw JS output to confirm payloads are plain
+/// objects (`{}`) rather than `Map` instances.
 ///
-/// With the default serializer, dynamic `serde_json::Value::Object` fields
-/// become JS `Map` instances; with `serialize_maps_as_objects(true)` they
-/// become plain JS objects with enumerable string keys, matching the native
-/// `serde_json` output shape.
+/// With the default `serde_wasm_bindgen::to_value` serializer, dynamic
+/// `serde_json::Value::Object` fields become JS `Map` instances. After the fix,
+/// `serialize_maps_as_objects(true)` makes them plain JS objects with enumerable
+/// string keys. The round-trip deserialization in `test_parse_whole_log_js_parity_with_native`
+/// cannot catch this regression because `from_value` deserialises a `Map` just as
+/// happily as a plain object. This test inspects the actual JS structure directly.
 ///
-/// The existing parity test round-trips via `serde_wasm_bindgen::from_value`,
-/// which deserialises a `Map` just as happily as a plain object, so it cannot
-/// catch this regression.  This test inspects the actual JS structure.
+/// If `src/wasm.rs` is reverted to `serde_wasm_bindgen::to_value(&events)`,
+/// `payload_js.is_instance_of::<js_sys::Map>()` becomes `true` and this test
+/// fails — proving it actually guards the production serializer.
 #[wasm_bindgen_test]
 fn test_parse_whole_log_js_payload_is_plain_object_not_map() {
-    use manasight_parser::{EventMetadata, GameEvent, GameStateEvent};
-    use serde::Serialize as _;
+    // Guard: confirm parse_whole_log produces >=1 GameState event so the
+    // end-to-end JS inspection below is not vacuous.
+    let native_events = parse_whole_log(INLINE_GSM_INPUT);
+    assert!(
+        !native_events.is_empty(),
+        "parse_whole_log(INLINE_GSM_INPUT) must produce >=1 event before the \
+         end-to-end JS inspection can be meaningful"
+    );
+    assert!(
+        matches!(native_events[0], GameEvent::GameState(_)),
+        "first event must be GameState; got {:?}",
+        native_events[0]
+    );
 
-    // Construct a minimal GameState event with a known greToClientEvent payload.
-    let payload = serde_json::json!({
-        "greToClientEvent": {
-            "greToClientMessages": [{"type": "GREMessageType_GameStateMessage"}]
-        }
-    });
-    let metadata = EventMetadata::new(None, b"[UnityCrossThreadLogger]greToClientEvent".to_vec());
-    let event = GameEvent::GameState(GameStateEvent::new(metadata, payload));
-    let events = vec![event];
-
-    // Serialise using the same Serializer configuration as parse_whole_log_js.
-    let serializer = serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true);
-    let js_value = events
-        .serialize(&serializer)
-        .expect("events.serialize must not fail");
+    // Drive parse_whole_log_js end-to-end.
+    let js_value = parse_whole_log_js(INLINE_GSM_INPUT).expect("parse_whole_log_js must not fail");
 
     // The result is a JS array; get the first element via Reflect with key "0".
     let first = Reflect::get(&js_value, &JsValue::from_str("0"))
@@ -111,7 +131,7 @@ fn test_parse_whole_log_js_payload_is_plain_object_not_map() {
         "event must be a GameState variant"
     );
 
-    // The `payload` field holds the greToClientEvent JSON as a serde_json::Value.
+    // The `payload` field holds the extracted GSM data as a serde_json::Value.
     // Before the fix it serialised as a JS Map; after the fix it is a plain object.
     let payload_js = Reflect::get(&game_state_inner, &JsValue::from_str("payload"))
         .expect("Reflect::get(payload) must not throw");
@@ -126,11 +146,18 @@ fn test_parse_whole_log_js_payload_is_plain_object_not_map() {
         "payload must be a plain object, not a JS Map (serialize_maps_as_objects regression)"
     );
 
-    // Assert the top-level key is reachable by property access (not .get()).
-    let gre_field = Reflect::get(&payload_js, &JsValue::from_str("greToClientEvent"))
-        .expect("Reflect::get(greToClientEvent) must not throw");
+    // Assert a known field from build_game_state_message_payload is reachable
+    // by property access (not .get()). The extracted payload always has
+    // `"type": "game_state_message"` — use that as the stable key.
+    let type_field = Reflect::get(&payload_js, &JsValue::from_str("type"))
+        .expect("Reflect::get(type) must not throw");
     assert!(
-        !gre_field.is_undefined(),
-        "payload.greToClientEvent must be reachable by property access on a plain object"
+        !type_field.is_undefined(),
+        "payload.type must be reachable by property access on a plain object"
+    );
+    assert_eq!(
+        type_field,
+        JsValue::from_str("game_state_message"),
+        "payload.type must equal \"game_state_message\" for a GameStateMessage"
     );
 }
