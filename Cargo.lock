@@ -416,6 +416,7 @@ dependencies = [
  "base64",
  "chrono",
  "flate2",
+ "js-sys",
  "known-folders",
  "log",
  "proptest",

@@ -28,9 +28,13 @@ use wasm_bindgen::prelude::*;
 /// `GameEvent` objects.
 ///
 /// This is the wasm-bindgen export of [`crate::parse_whole_log`].  The
-/// returned value is a live JS object graph produced by
-/// [`serde_wasm_bindgen::to_value`] — not a JSON string — so callers can
-/// access fields directly without a second `JSON.parse` round-trip.
+/// returned value is a live JS object graph — not a JSON string — so callers
+/// can access fields directly without a second `JSON.parse` round-trip.
+///
+/// All event payloads (and every nested dynamic object) are serialised as
+/// plain JS objects (`{}`), not `Map` instances, matching the shape produced
+/// by the native `serde_json` path.  Fields are reachable by normal property
+/// access (e.g. `event.GameState.payload.greToClientEvent`).
 ///
 /// # Errors
 ///
@@ -45,6 +49,10 @@ use wasm_bindgen::prelude::*;
 /// host (e.g. during `cargo clippy --all-features`).
 #[wasm_bindgen(js_name = parseWholeLog)]
 pub fn parse_whole_log_js(input: &str) -> Result<JsValue, JsValue> {
+    use serde::Serialize as _;
     let events = crate::parse_whole_log(input);
-    serde_wasm_bindgen::to_value(&events).map_err(|e| JsValue::from_str(&e.to_string()))
+    let serializer = serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true);
+    events
+        .serialize(&serializer)
+        .map_err(|e| JsValue::from_str(&e.to_string()))
 }

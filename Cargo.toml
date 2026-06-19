@@ -36,6 +36,7 @@ serde-wasm-bindgen = { version = "0.6", optional = true }
 known-folders = { version = "1", optional = true }
 
 [dev-dependencies]
+js-sys = "0.3"
 wasm-bindgen-test = "0.3"
 
 # Host-only dev-dependencies: excluded from wasm32 test builds to avoid
