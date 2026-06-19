@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.5.3] - 2026-06-19
+
+### Fixed
+
+- **`parse_whole_log_js` (WASM) now serializes event payloads as plain JS
+  objects instead of `Map` instances.** The wasm-bindgen export used the default
+  `serde_wasm_bindgen` serializer, which emits dynamic `serde_json::Value`
+  objects — every `payload` and nested dynamic object — as JS `Map`s, so JS/TS
+  consumers reading fields by property access (`payload.match_id`) got
+  `undefined` and had to fall back to `.get(...)`. This diverged from the native
+  `serde_json` output. The serializer is now configured with
+  `serialize_maps_as_objects(true)`, so WASM output matches the native
+  plain-object shape and the documented externally-tagged event contract. Only
+  WASM consumers were affected; native Rust output is unchanged (#243, #244).
+
 ## [0.5.2] - 2026-06-19
 
 ### Fixed
