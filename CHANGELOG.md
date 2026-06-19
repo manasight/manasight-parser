@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.5.2] - 2026-06-19
+
+### Fixed
+
+- **`parse_whole_log` now parses logs from the newer MTGA Mac client** that
+  prefixes every line with a Unity frame counter
+  (`[<frame>] [UnityCrossThreadLogger]…`, the uploaded `UTC_Log` archive
+  variant). Header and metadata detection is anchored at byte 0, so these
+  otherwise-valid logs produced **0 events**. `LineBuffer::push_line` now strips
+  an optional leading `[<digits>] ` prefix before detection — a single chokepoint
+  covering every byte-0-anchored detector. Output is byte-identical for
+  unprefixed input across the full corpus, so the live `Player.log` path is
+  unaffected (#240, #241).
+
 ## [0.5.1] - 2026-06-17
 
 ### Added
