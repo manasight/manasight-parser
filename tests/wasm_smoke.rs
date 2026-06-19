@@ -22,35 +22,31 @@ use manasight_parser::{parse_whole_log, wasm::parse_whole_log_js, GameEvent};
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_test::wasm_bindgen_test;
 
-/// A minimal `greToClientEvent` log snippet that produces a real `GameState`
-/// event through `parse_whole_log`.
+/// The `gsm_with_turn_info.txt` fixture — a `greToClientEvent` log snippet that
+/// produces a real `GameState` event through `parse_whole_log`.
 ///
-/// The header must start with a digit immediately after `]` so the entry is
-/// classified as `MultiLine` and the JSON body on the next line is accumulated.
-/// The `gsm_with_turn_info.txt` fixture uses `[UnityCrossThreadLogger]greToClientEvent`
-/// (non-digit after `]` → `SingleLine`) so its JSON body is orphaned and zero
-/// events are produced — this inline fixture is the correct form.
-const INLINE_GSM_INPUT: &str = "\
-[UnityCrossThreadLogger]3/11/2026 10:00:00 AM greToClientEvent\n\
-{\"greToClientEvent\":{\"greToClientMessages\":[{\"type\":\"GREMessageType_GameStateMessage\",\
-\"msgId\":12,\"gameStateId\":78,\"gameStateMessage\":{\"turnInfo\":{\"turnNumber\":3,\
-\"phase\":\"Phase_Main1\"}}}]}}";
+/// Its header starts with a digit immediately after `]`
+/// (`[UnityCrossThreadLogger]3/11/2026 …`), so the entry is classified as
+/// `MultiLine` and the JSON body on the next line is accumulated. A timestampless
+/// header (`[UnityCrossThreadLogger]greToClientEvent`) would classify as
+/// `SingleLine`, orphan the JSON body, and produce zero events.
+const FIXTURE: &str = include_str!("fixtures/gsm_with_turn_info.txt");
 
 /// Parses the corpus fixture through both code paths and asserts they agree.
 #[wasm_bindgen_test]
 fn test_parse_whole_log_js_parity_with_native() {
     // Use an inline input that produces real events so this test is non-vacuous.
-    let native_events: Vec<GameEvent> = parse_whole_log(INLINE_GSM_INPUT);
+    let native_events: Vec<GameEvent> = parse_whole_log(FIXTURE);
 
     // Guard: if parsing ever regresses to 0 events, the parity assertion
     // becomes vacuously true (0 == 0) and stops catching bugs.
     assert!(
         !native_events.is_empty(),
-        "parse_whole_log(INLINE_GSM_INPUT) must produce >=1 event; got 0 — \
+        "parse_whole_log(FIXTURE) must produce >=1 event; got 0 — \
          check that the header starts with a digit after ']'"
     );
 
-    let js_value = parse_whole_log_js(INLINE_GSM_INPUT).expect("wasm wrapper must not fail");
+    let js_value = parse_whole_log_js(FIXTURE).expect("wasm wrapper must not fail");
 
     let wasm_events: Vec<GameEvent> =
         serde_wasm_bindgen::from_value(js_value).expect("round-trip deserialisation must succeed");
@@ -100,10 +96,10 @@ fn test_parse_whole_log_js_empty_input() {
 fn test_parse_whole_log_js_payload_is_plain_object_not_map() {
     // Guard: confirm parse_whole_log produces >=1 GameState event so the
     // end-to-end JS inspection below is not vacuous.
-    let native_events = parse_whole_log(INLINE_GSM_INPUT);
+    let native_events = parse_whole_log(FIXTURE);
     assert!(
         !native_events.is_empty(),
-        "parse_whole_log(INLINE_GSM_INPUT) must produce >=1 event before the \
+        "parse_whole_log(FIXTURE) must produce >=1 event before the \
          end-to-end JS inspection can be meaningful"
     );
     assert!(
@@ -113,7 +109,7 @@ fn test_parse_whole_log_js_payload_is_plain_object_not_map() {
     );
 
     // Drive parse_whole_log_js end-to-end.
-    let js_value = parse_whole_log_js(INLINE_GSM_INPUT).expect("parse_whole_log_js must not fail");
+    let js_value = parse_whole_log_js(FIXTURE).expect("parse_whole_log_js must not fail");
 
     // The result is a JS array; get the first element via Reflect with key "0".
     let first = Reflect::get(&js_value, &JsValue::from_str("0"))
