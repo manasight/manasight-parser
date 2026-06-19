@@ -160,3 +160,129 @@ fn test_parse_whole_log_unrecognized_entries_parity_with_router() {
     );
     assert!(via_fn.is_empty());
 }
+
+// ---------------------------------------------------------------------------
+// Frame-counter prefix (#240): UTC_Log archive variant
+// ---------------------------------------------------------------------------
+
+/// Feeds `input` line-by-line through a fresh [`LineBuffer`], returning all
+/// complete [`manasight_parser::log::entry::LogEntry`] values (the layer
+/// below the Router, exercising header/metadata detection directly).
+fn collect_log_entries(input: &str) -> Vec<manasight_parser::log::entry::LogEntry> {
+    let mut buffer = LineBuffer::new();
+    let mut entries = Vec::new();
+    for line in input.lines() {
+        entries.extend(buffer.push_line(line));
+    }
+    if let Some(entry) = buffer.flush() {
+        entries.push(entry);
+    }
+    entries
+}
+
+/// Synthesises a frame-prefixed copy of `flush_timing_corpus_slice.log` by
+/// prepending `[<n>] ` to every line, then asserts the resulting `LogEntry`
+/// stream is byte-identical to parsing the unprefixed original.
+///
+/// This reproduces the failure mode observed on newer MTGA Mac builds
+/// (`UTC_Log` archive variant): before the fix, every prefixed header failed
+/// to match, yielding 0 entries. After the fix the frame-counter prefix is
+/// stripped in `LineBuffer::push_line` before detection, so the prefixed and
+/// unprefixed logs produce the same `LogEntry` output.
+///
+/// The fixture is tested at the `LogEntry` level (below the Router) because
+/// `flush_timing_corpus_slice.log` exercises `LineBuffer` entry-detection
+/// patterns — the same layer where the frame-counter strip applies.
+#[test]
+fn test_frame_prefixed_fixture_log_entries_byte_identical_to_unprefixed() {
+    let unprefixed = include_str!("fixtures/flush_timing_corpus_slice.log");
+
+    // Strip comment lines as the fixture parser helper does, so we get
+    // a clean comparison of real log content.
+    let clean_unprefixed: String = unprefixed
+        .lines()
+        .filter(|line| !line.starts_with('#'))
+        .fold(String::new(), |mut s, line| {
+            use std::fmt::Write as _;
+            let _ = writeln!(s, "{line}");
+            s
+        });
+
+    // Prepend `[<n>] ` to every line with a monotonically incrementing
+    // counter, mirroring the Unity frame-counter format. The exact digit
+    // values must not affect parsing.
+    let prefixed: String =
+        clean_unprefixed
+            .lines()
+            .enumerate()
+            .fold(String::new(), |mut s, (n, line)| {
+                use std::fmt::Write as _;
+                let _ = writeln!(s, "[{n}] {line}");
+                s
+            });
+
+    let entries_unprefixed = collect_log_entries(&clean_unprefixed);
+    let entries_prefixed = collect_log_entries(&prefixed);
+
+    assert!(
+        !entries_unprefixed.is_empty(),
+        "fixture must yield at least one LogEntry — verify fixture path is correct",
+    );
+
+    assert_eq!(
+        entries_prefixed.len(),
+        entries_unprefixed.len(),
+        "frame-prefixed log must yield the same LogEntry count as the unprefixed original \
+         (got {}, expected {})",
+        entries_prefixed.len(),
+        entries_unprefixed.len(),
+    );
+
+    // Full entry-stream equality: headers and bodies must match.
+    assert_eq!(
+        entries_prefixed, entries_unprefixed,
+        "frame-prefixed log must produce a byte-identical LogEntry stream to the unprefixed original",
+    );
+}
+
+/// Verifies the complete `parse_whole_log` path (including Router dispatch)
+/// for a frame-prefixed log that contains events the router can parse.
+/// Uses `deck_submission_v2_constructed.log` which contains an `EventSetDeckV2`
+/// entry that maps to a `GameEvent::DeckSubmission`.
+#[test]
+fn test_parse_whole_log_frame_prefixed_produces_same_game_events_as_unprefixed() {
+    let unprefixed = include_str!("fixtures/deck_submission_v2_constructed.log");
+
+    // Prepend `[<n>] ` to every line.
+    let prefixed: String =
+        unprefixed
+            .lines()
+            .enumerate()
+            .fold(String::new(), |mut s, (n, line)| {
+                use std::fmt::Write as _;
+                let _ = writeln!(s, "[{n}] {line}");
+                s
+            });
+
+    let events_unprefixed = parse_whole_log(unprefixed);
+    let events_prefixed = parse_whole_log(&prefixed);
+
+    assert!(
+        !events_unprefixed.is_empty(),
+        "unprefixed fixture must yield at least one GameEvent",
+    );
+
+    assert_eq!(
+        events_prefixed.len(),
+        events_unprefixed.len(),
+        "frame-prefixed log must yield the same GameEvent count as the unprefixed original \
+         (got {}, expected {})",
+        events_prefixed.len(),
+        events_unprefixed.len(),
+    );
+
+    assert_eq!(
+        events_prefixed, events_unprefixed,
+        "frame-prefixed log must produce a byte-identical GameEvent stream to the unprefixed original",
+    );
+}

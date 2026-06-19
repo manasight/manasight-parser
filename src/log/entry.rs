@@ -37,17 +37,27 @@
 //! header" behavior for every multi-line entry — kept as a one-flip rollback
 //! in case a string-literal edge case surfaces in live Arena traffic.
 //!
+//! # Frame-counter prefix stripping (#240)
+//!
+//! The newer MTGA Mac client (`UTC_Log` archive variant) prepends a
+//! monotonic Unity frame counter of the form `[<digits>] ` to every line
+//! (e.g. `[2841] [UnityCrossThreadLogger]…`). [`LineBuffer::push_line`]
+//! strips this prefix before any byte-0-anchored detector runs, so the
+//! same log content parses identically whether or not it carries the
+//! prefix. Callers and tests need not pre-strip the counter.
+//!
 //! # Data flow
 //!
 //! ```text
-//! File Tailer ──(raw lines)──▸ LineBuffer ──(complete entries)──▸ Router
+//! File Tailer ──(lines)──▸ LineBuffer ──(complete entries)──▸ Router
 //! ```
 //!
-//! The [`LineBuffer`] receives individual lines from the file tailer. When a
-//! new log entry header is detected, it flushes the previously accumulated
-//! lines as a complete [`LogEntry`] and either emits the new entry
-//! immediately (single-line class) or begins accumulating it (multi-line
-//! class).
+//! The [`LineBuffer`] receives individual lines from the file tailer,
+//! normalizes each line (strips the optional frame-counter prefix), then
+//! classifies and accumulates. When a new log entry header is detected, it
+//! flushes the previously accumulated lines as a complete [`LogEntry`] and
+//! either emits the new entry immediately (single-line class) or begins
+//! accumulating it (multi-line class).
 
 use regex::Regex;
 
@@ -297,8 +307,17 @@ impl LineBuffer {
     /// Callers must strip any trailing `\r` (Windows CRLF) before invoking
     /// this method. [`crate::log::tailer::FileTailer::poll`] already does
     /// this; direct callers in tests must do the same to keep classification
-    /// well-defined.
+    /// well-defined. `push_line` itself strips a leading `[<digits>] ` Unity
+    /// frame-counter prefix before classification, so callers and tests need
+    /// not pre-strip it.
     pub fn push_line(&mut self, line: &str) -> Vec<LogEntry> {
+        // Strip the optional Unity frame-counter prefix `[<digits>] ` (e.g.
+        // `[2841] `) that the newer MTGA Mac client (`UTC_Log` archive variant)
+        // prepends to every line. This single chokepoint covers all
+        // byte-0-anchored detectors below. Non-numeric bracket content
+        // (e.g. `[UnityCrossThreadLogger]`) is left untouched.
+        let line = Self::strip_frame_prefix(line);
+
         // Check for metadata lines first — these are self-contained.
         if Self::is_metadata_line(line) {
             let mut out = Vec::new();
@@ -402,6 +421,33 @@ impl LineBuffer {
     /// Returns `true` if no entry is currently being accumulated.
     pub fn is_empty(&self) -> bool {
         self.current_header.is_none()
+    }
+
+    /// Strips a leading Unity frame-counter prefix from `line` and returns
+    /// the remainder.
+    ///
+    /// The newer MTGA Mac client (`UTC_Log` archive variant) prepends a
+    /// monotonic Unity frame counter of the form `[<digits>] ` to every
+    /// line (e.g. `[2841] [UnityCrossThreadLogger]…`). Only a bracket
+    /// whose content is one or more ASCII digits followed by `] ` is stripped;
+    /// non-numeric bracket content (e.g. `[UnityCrossThreadLogger]`) is
+    /// returned unchanged. At most one prefix is stripped.
+    fn strip_frame_prefix(line: &str) -> &str {
+        // Fast-path: must start with `[`.
+        let Some(rest) = line.strip_prefix('[') else {
+            return line;
+        };
+        // Consume one or more ASCII digit characters.
+        let digit_end = rest.as_bytes().iter().position(|b| !b.is_ascii_digit());
+        let digit_end = match digit_end {
+            Some(pos) if pos > 0 => pos,
+            _ => return line, // no digits, or the entire string was digits (no closing `]`)
+        };
+        // Must be followed by exactly `] ` (closing bracket + space).
+        match rest.get(digit_end..) {
+            Some(suffix) if suffix.starts_with("] ") => &rest[digit_end + 2..],
+            _ => line,
+        }
     }
 
     /// Returns `true` if the line is a metadata line that should be
@@ -1327,6 +1373,117 @@ mod tests {
         #[test]
         fn test_entry_header_metadata_display() {
             assert_eq!(EntryHeader::Metadata.to_string(), "METADATA");
+        }
+
+        /// Frame-prefixed `DETAILED LOGS: ENABLED` must be classified as
+        /// metadata after the `[<digits>] ` prefix is stripped. This
+        /// reproduces the newer Mac client `UTC_Log` variant where every
+        /// header line carries a Unity frame counter.
+        #[test]
+        fn test_push_line_frame_prefixed_metadata_classified_correctly() {
+            let mut buf = LineBuffer::new();
+            let result = buf.push_line("[0] DETAILED LOGS: ENABLED");
+            assert_eq!(
+                result,
+                vec![expected(EntryHeader::Metadata, "DETAILED LOGS: ENABLED")],
+                "frame-prefixed metadata line must be stripped and classified as Metadata",
+            );
+            assert!(buf.is_empty());
+        }
+    }
+
+    // -- Frame-counter prefix stripping (#240) ---------------------------------
+
+    mod frame_prefix {
+        use super::*;
+
+        #[test]
+        fn test_strip_frame_prefix_strips_single_digit() {
+            assert_eq!(LineBuffer::strip_frame_prefix("[0] hello"), "hello");
+        }
+
+        #[test]
+        fn test_strip_frame_prefix_strips_multi_digit() {
+            assert_eq!(
+                LineBuffer::strip_frame_prefix("[23336] [UnityCrossThreadLogger]event"),
+                "[UnityCrossThreadLogger]event",
+            );
+        }
+
+        #[test]
+        fn test_strip_frame_prefix_no_strip_non_numeric_bracket() {
+            // `[UnityCrossThreadLogger]` must NOT be stripped — only digits.
+            let line = "[UnityCrossThreadLogger]event";
+            assert_eq!(LineBuffer::strip_frame_prefix(line), line);
+        }
+
+        #[test]
+        fn test_strip_frame_prefix_no_strip_no_space_after_bracket() {
+            // `[123]X` — missing space after `]` — must not strip.
+            let line = "[123]nospace";
+            assert_eq!(LineBuffer::strip_frame_prefix(line), line);
+        }
+
+        #[test]
+        fn test_strip_frame_prefix_no_strip_empty_bracket() {
+            // `[] ` — no digits — must not strip.
+            let line = "[] hello";
+            assert_eq!(LineBuffer::strip_frame_prefix(line), line);
+        }
+
+        #[test]
+        fn test_strip_frame_prefix_no_strip_plain_text() {
+            let line = "DETAILED LOGS: ENABLED";
+            assert_eq!(LineBuffer::strip_frame_prefix(line), line);
+        }
+
+        #[test]
+        fn test_push_line_frame_prefixed_unity_header_parsed_as_header() {
+            let mut buf = LineBuffer::new();
+            // Multi-line date-prefixed Unity header with frame counter.
+            // After stripping `[125] `, the line is
+            // `[UnityCrossThreadLogger]1/1/2025 Event` — multi-line class.
+            let out = buf.push_line("[125] [UnityCrossThreadLogger]1/1/2025 Event");
+            assert!(
+                out.is_empty(),
+                "first frame-prefixed multi-line header should start accumulation, not flush yet",
+            );
+            // Flush at EOF should yield the entry with the stripped body.
+            let flushed = buf.flush();
+            assert!(
+                flushed.is_some(),
+                "flush must return entry for buffered multi-line header",
+            );
+            if let Some(entry) = flushed {
+                assert_eq!(entry.header, EntryHeader::UnityCrossThreadLogger);
+            }
+        }
+
+        #[test]
+        fn test_push_line_frame_prefixed_single_line_uctl_flushes_immediately() {
+            let mut buf = LineBuffer::new();
+            // Single-line UCTL (alpha label, not a date digit after `]`).
+            let out =
+                buf.push_line("[99] [UnityCrossThreadLogger]STATE CHANGED {\"old\":\"None\"}");
+            assert_eq!(out.len(), 1);
+            assert_eq!(out[0].header, EntryHeader::UnityCrossThreadLogger);
+            assert!(buf.is_empty(), "single-line entry must leave buffer idle");
+        }
+
+        #[test]
+        fn test_push_line_frame_prefixed_sequence_flushes_prior_entry() {
+            let mut buf = LineBuffer::new();
+            // Two consecutive frame-prefixed multi-line headers.
+            buf.push_line("[1] [UnityCrossThreadLogger]1/1/2025 Event1");
+            let out = buf.push_line("[2] [UnityCrossThreadLogger]1/1/2025 Event2");
+            // The second header must flush the first.
+            assert_eq!(out.len(), 1);
+            assert_eq!(out[0].header, EntryHeader::UnityCrossThreadLogger);
+            // Body uses the stripped line.
+            assert!(
+                out[0].body.starts_with("[UnityCrossThreadLogger]"),
+                "body must not contain frame-counter prefix",
+            );
         }
     }
 
