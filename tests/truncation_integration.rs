@@ -92,6 +92,7 @@ fn test_truncation_does_not_swallow_adjacent_valid_gsms() {
 }
 
 #[test]
+#[allow(deprecated)]
 fn test_truncation_marker_carries_log_timestamp() {
     // The marker line itself has no embedded timestamp, but the prior
     // UCTL envelope carries one in its header. The marker becomes its own

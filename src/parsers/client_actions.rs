@@ -417,6 +417,7 @@ fn extract_i64_array(value: Option<&serde_json::Value>) -> Vec<i64> {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
     use crate::parsers::test_helpers::{test_timestamp, unity_entry};

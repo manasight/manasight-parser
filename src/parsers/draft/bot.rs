@@ -224,6 +224,7 @@ fn extract_draft_pack(parsed: &serde_json::Value) -> Vec<i64> {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
     use crate::events::PerformanceClass;

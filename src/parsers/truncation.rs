@@ -75,6 +75,7 @@ fn extract_count(body: &str, prefix: &str) -> Option<u32> {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
     use crate::parsers::test_helpers::test_timestamp;

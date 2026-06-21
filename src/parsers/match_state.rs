@@ -18,6 +18,7 @@
 
 use crate::events::{EventMetadata, GameEvent, MatchStateEvent};
 use crate::log::entry::LogEntry;
+use crate::log::timestamp::parse_epoch_millis;
 use crate::parsers::api_common;
 
 /// Marker that identifies a match state change entry in the log.
@@ -57,7 +58,24 @@ pub fn try_parse(
     })?;
 
     let payload = build_payload(state_event);
-    let metadata = EventMetadata::new(timestamp, body.as_bytes().to_vec());
+
+    // Extract the true UTC instant from the embedded epoch-ms `"timestamp"`
+    // field in the `matchGameRoomStateChangedEvent` payload. This is
+    // timezone-independent and avoids the local-time mislabeling of the
+    // log-header value. Falls back to `None` when the field is absent or
+    // cannot be parsed. Arena emits this field as a JSON string
+    // (e.g. `"timestamp": "1771903769076"`); a bare JSON number is also
+    // accepted for defensive compatibility.
+    let instant_utc = parsed
+        .get("timestamp")
+        .or_else(|| state_event.get("timestamp"))
+        .and_then(|v| {
+            v.as_i64()
+                .or_else(|| v.as_str().and_then(|s| s.parse::<i64>().ok()))
+        })
+        .and_then(|ms| parse_epoch_millis(ms).ok());
+
+    let metadata = EventMetadata::with_instant(timestamp, instant_utc, body.as_bytes().to_vec());
     Some(GameEvent::MatchState(MatchStateEvent::new(
         metadata, payload,
     )))
@@ -201,6 +219,7 @@ fn build_game_results(result_list: Option<&Vec<serde_json::Value>>) -> serde_jso
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
     use crate::parsers::test_helpers::{
@@ -1096,6 +1115,161 @@ mod tests {
             assert_eq!(arr.len(), 1);
             assert_eq!(arr[0]["scope"], "MatchScope_Game");
             assert_eq!(arr[0]["winning_team_id"], 1);
+        }
+    }
+
+    // -- instant_utc wiring ---------------------------------------------------
+
+    mod instant_utc {
+        use super::*;
+        use crate::log::timestamp::parse_epoch_millis;
+        use chrono::{TimeZone, Timelike};
+
+        /// Epoch-ms corresponding to 2026-06-19T17:37:13Z (a known-good corpus
+        /// value offset from UTC).
+        const EPOCH_MS: i64 = 1_750_354_633_000;
+
+        /// Build a match-start body with an embedded `"timestamp"` epoch-ms as
+        /// a JSON STRING at the top level — the format Arena actually produces
+        /// (e.g. `"timestamp": "1771903769076"`).
+        fn match_start_with_embedded_ts() -> String {
+            format!(
+                "[UnityCrossThreadLogger]matchGameRoomStateChangedEvent\n{}",
+                serde_json::json!({
+                    "timestamp": EPOCH_MS.to_string(),
+                    "matchGameRoomStateChangedEvent": {
+                        "gameRoomInfo": {
+                            "stateType": "MatchGameRoomStateType_Playing",
+                            "gameRoomConfig": {
+                                "matchId": "ts-match",
+                                "eventId": "Ladder",
+                                "reservedPlayers": []
+                            }
+                        }
+                    }
+                })
+            )
+        }
+
+        /// Build a match-start body with an embedded `"timestamp"` epoch-ms as
+        /// a bare JSON NUMBER — kept for defensive compatibility in case Arena
+        /// ever changes the wire format.
+        fn match_start_with_embedded_ts_numeric() -> String {
+            format!(
+                "[UnityCrossThreadLogger]matchGameRoomStateChangedEvent\n{}",
+                serde_json::json!({
+                    "timestamp": EPOCH_MS,
+                    "matchGameRoomStateChangedEvent": {
+                        "gameRoomInfo": {
+                            "stateType": "MatchGameRoomStateType_Playing",
+                            "gameRoomConfig": {
+                                "matchId": "ts-numeric-match",
+                                "eventId": "Ladder",
+                                "reservedPlayers": []
+                            }
+                        }
+                    }
+                })
+            )
+        }
+
+        /// Build a match-start body WITHOUT an embedded `"timestamp"` field.
+        fn match_start_no_embedded_ts() -> String {
+            format!(
+                "[UnityCrossThreadLogger]matchGameRoomStateChangedEvent\n{}",
+                serde_json::json!({
+                    "matchGameRoomStateChangedEvent": {
+                        "gameRoomInfo": {
+                            "stateType": "MatchGameRoomStateType_Playing",
+                            "gameRoomConfig": {
+                                "matchId": "no-ts-match",
+                                "eventId": "Ladder",
+                                "reservedPlayers": []
+                            }
+                        }
+                    }
+                })
+            )
+        }
+
+        #[test]
+        fn test_instant_utc_populated_from_embedded_epoch_ms_string() {
+            // An entry with header local time + embedded epoch-ms as a JSON
+            // STRING (the real Arena wire format) yields instant_utc() == the
+            // epoch-ms value. This is the primary acceptance criterion from
+            // issue #251.
+            let body = match_start_with_embedded_ts();
+            let entry = unity_entry(&body);
+            let result = try_parse(&entry, Some(test_timestamp()));
+            assert!(result.is_some());
+            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            let expected = parse_epoch_millis(EPOCH_MS).unwrap_or_else(|_| unreachable!());
+            assert_eq!(event.metadata().instant_utc(), Some(expected));
+        }
+
+        #[test]
+        fn test_instant_utc_populated_from_embedded_epoch_ms_numeric() {
+            // A bare JSON number for `"timestamp"` is also accepted — defensive
+            // compatibility in case Arena changes the wire format.
+            let body = match_start_with_embedded_ts_numeric();
+            let entry = unity_entry(&body);
+            let result = try_parse(&entry, Some(test_timestamp()));
+            assert!(result.is_some());
+            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            let expected = parse_epoch_millis(EPOCH_MS).unwrap_or_else(|_| unreachable!());
+            assert_eq!(event.metadata().instant_utc(), Some(expected));
+        }
+
+        #[test]
+        fn test_instant_utc_none_when_no_embedded_timestamp() {
+            // Events without an embedded `"timestamp"` field must leave
+            // instant_utc as None and still emit successfully.
+            let body = match_start_no_embedded_ts();
+            let entry = unity_entry(&body);
+            let result = try_parse(&entry, Some(test_timestamp()));
+            assert!(result.is_some());
+            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert!(event.metadata().instant_utc().is_none());
+        }
+
+        #[test]
+        fn test_local_timestamp_returns_header_as_naive() {
+            // local_timestamp() must return the header value as NaiveDateTime —
+            // the zone-less wall-clock time without any UTC relabeling.
+            let body = match_start_with_embedded_ts();
+            let entry = unity_entry(&body);
+            let ts = chrono::Utc
+                .with_ymd_and_hms(2026, 2, 25, 12, 0, 0)
+                .single()
+                .unwrap_or_default();
+            let result = try_parse(&entry, Some(ts));
+            assert!(result.is_some());
+            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            assert_eq!(event.metadata().local_timestamp(), Some(ts.naive_utc()));
+        }
+
+        #[test]
+        fn test_instant_utc_and_local_timestamp_are_independent() {
+            // The header timestamp and embedded epoch-ms are stored independently —
+            // a UTC-offset header (e.g. UTC-7) will differ from instant_utc by ~7h.
+            let body = match_start_with_embedded_ts();
+            let entry = unity_entry(&body);
+            // Use the header value that matches the real corpus pair (local time,
+            // NOT UTC). If they were equal we would not be testing anything.
+            let local_header_ts = chrono::Utc
+                .with_ymd_and_hms(2026, 6, 19, 10, 37, 13) // local, UTC-7
+                .single()
+                .unwrap_or_default();
+            let result = try_parse(&entry, Some(local_header_ts));
+            assert!(result.is_some());
+            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            let expected_utc = parse_epoch_millis(EPOCH_MS).unwrap_or_else(|_| unreachable!());
+            // instant_utc is the true UTC (17:37 UTC), local_timestamp is the header (10:37).
+            assert_eq!(event.metadata().instant_utc(), Some(expected_utc));
+            assert_ne!(
+                event.metadata().local_timestamp().map(|t| t.hour()),
+                event.metadata().instant_utc().map(|t| t.hour())
+            );
         }
     }
 }

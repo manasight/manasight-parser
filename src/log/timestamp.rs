@@ -2,7 +2,21 @@
 //!
 //! MTGA log timestamps vary by system locale. This module handles all known
 //! formats (11+ locale-dependent variants, epoch milliseconds, .NET ticks,
-//! and ISO 8601) and normalizes them to UTC.
+//! and ISO 8601).
+//!
+//! ## Timestamp semantics
+//!
+//! Log entry **header** timestamps (e.g. `6/19/2026 10:37:13 AM`) are **local
+//! wall-clock time** with no timezone information. `parse_log_timestamp` parses
+//! them into a `NaiveDateTime` and promotes the result with `.and_utc()`, but
+//! this label is misleading — the value is local time, not UTC. See
+//! `EventMetadata::local_timestamp()` for the honest zone-less accessor.
+//!
+//! **Embedded** event-payload timestamps are the true UTC source:
+//! - Epoch-milliseconds (`"timestamp": <i64>`) — decoded by `parse_epoch_millis`
+//!   and exposed via `EventMetadata::instant_utc()` for match-lifecycle events.
+//! - .NET ticks (`"timestamp": "<i64>"`) — decoded by `parse_dotnet_ticks`;
+//!   wiring to additional event types is deferred to a future release.
 
 use chrono::{DateTime, NaiveDateTime, Utc};
 
@@ -78,8 +92,15 @@ pub enum TimestampError {
 /// succeeds. The input should be the timestamp portion extracted from
 /// a log entry header line.
 ///
-/// All timestamps are treated as UTC (MTGA does not include timezone
-/// information in log entry headers).
+/// # Timezone caveat
+///
+/// MTGA log entry headers contain **local wall-clock time** with no timezone
+/// information. The returned `DateTime<Utc>` is a `NaiveDateTime` promoted
+/// with `.and_utc()`, so the UTC label is misleading — the inner value
+/// represents the player's local time, not an absolute UTC instant. Use
+/// `EventMetadata::local_timestamp()` for the honest zone-less view, or
+/// `EventMetadata::instant_utc()` where the true UTC instant is available
+/// from an embedded event-payload field.
 ///
 /// # Ambiguity
 ///

@@ -148,6 +148,7 @@ fn find_screen_name(value: &serde_json::Value) -> Option<String> {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
     use crate::parsers::test_helpers::{session_payload, test_timestamp, unity_entry, EntryHeader};

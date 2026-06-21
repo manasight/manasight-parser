@@ -132,6 +132,7 @@ pub(super) fn build_game_result_payload(gre_msg: &serde_json::Value) -> serde_js
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::super::test_fixtures::*;
     use super::super::try_parse;
