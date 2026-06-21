@@ -277,6 +277,7 @@ fn find_message_by_type<'a>(
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
     use crate::parsers::test_helpers::{

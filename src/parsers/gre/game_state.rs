@@ -409,6 +409,7 @@ fn extract_single_game_object(obj: &serde_json::Value) -> Option<serde_json::Val
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::super::test_fixtures::*;
     use super::super::try_parse;

@@ -7,7 +7,7 @@
 //!
 //! [spec]: https://github.com/manasight/manasight-docs/blob/main/docs/requirements/feature-specs/log-file-parser.md#event-to-class-mapping
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -405,9 +405,25 @@ impl PerformanceClass {
 /// `raw_bytes` during deserialization rather than trusting the serialized value.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct EventMetadata {
-    /// UTC timestamp parsed from the log entry header, or `None` if the
-    /// entry did not contain a parseable timestamp.
+    /// Local wall-clock timestamp parsed from the log entry header, stored
+    /// as `DateTime<Utc>` for historical reasons (the inner value is a
+    /// `NaiveDateTime` promoted with `.and_utc()`, so the UTC label is
+    /// misleading). Use `local_timestamp()` for the honest zone-less view,
+    /// or `instant_utc()` for the true UTC instant when available.
+    ///
+    /// `None` when the log entry header did not contain a parseable
+    /// timestamp.
     timestamp: Option<DateTime<Utc>>,
+
+    /// True UTC instant derived from the embedded epoch-ms field in the
+    /// event payload, or `None` when no embedded timestamp is available for
+    /// this event type.
+    ///
+    /// Populated for match-lifecycle events (`matchGameRoomStateChangedEvent`)
+    /// whose payload carries a `"timestamp"` field expressed as milliseconds
+    /// since the Unix epoch. All other events leave this `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    instant_utc: Option<DateTime<Utc>>,
 
     /// Original log entry bytes, serialized as base64. Private to prevent
     /// mutation that would break the `raw_bytes_hash` invariant.
@@ -429,17 +445,77 @@ impl EventMetadata {
     /// parseable timestamp. This preserves the distinction between "real
     /// timestamp from the log" and "no timestamp available" for downstream
     /// consumers.
+    ///
+    /// `instant_utc` is set to `None`. Use [`EventMetadata::with_instant`]
+    /// when a true UTC instant is available from an embedded epoch-ms field.
     pub fn new(timestamp: Option<DateTime<Utc>>, raw_bytes: Vec<u8>) -> Self {
         let raw_bytes_hash: [u8; 32] = Sha256::digest(&raw_bytes).into();
         Self {
             timestamp,
+            instant_utc: None,
             raw_bytes,
             raw_bytes_hash,
         }
     }
 
-    /// Returns the UTC timestamp parsed from the log entry header, or
+    /// Creates a new `EventMetadata` with a true UTC instant from an embedded
+    /// epoch-ms timestamp in the event payload, computing `raw_bytes_hash` as
+    /// the SHA-256 digest of `raw_bytes`.
+    ///
+    /// `timestamp` is the local wall-clock value parsed from the log entry
+    /// header (mislabeled as UTC — see [`EventMetadata::local_timestamp`]).
+    ///
+    /// `instant_utc` is the true UTC instant derived from the event payload's
+    /// embedded `"timestamp"` field (epoch-milliseconds). Pass `None` when the
+    /// embedded field is absent or unparseable.
+    pub fn with_instant(
+        timestamp: Option<DateTime<Utc>>,
+        instant_utc: Option<DateTime<Utc>>,
+        raw_bytes: Vec<u8>,
+    ) -> Self {
+        let raw_bytes_hash: [u8; 32] = Sha256::digest(&raw_bytes).into();
+        Self {
+            timestamp,
+            instant_utc,
+            raw_bytes,
+            raw_bytes_hash,
+        }
+    }
+
+    /// Returns the local wall-clock timestamp from the log entry header, or
     /// `None` if the entry did not contain a parseable timestamp.
+    ///
+    /// The returned value is a zone-less `NaiveDateTime` representing the
+    /// player's local time as written in the log header. The MTGA log does not
+    /// include timezone information, so no UTC conversion is applied.
+    ///
+    /// For the true UTC instant (where available), use [`EventMetadata::instant_utc`].
+    pub fn local_timestamp(&self) -> Option<NaiveDateTime> {
+        self.timestamp.map(|t| t.naive_utc())
+    }
+
+    /// Returns the true UTC instant derived from the event's embedded
+    /// epoch-ms field, or `None` when no embedded timestamp is available.
+    ///
+    /// Populated for match-lifecycle events (`matchGameRoomStateChangedEvent`).
+    /// All other events return `None`; fall back to [`EventMetadata::local_timestamp`]
+    /// in that case.
+    pub fn instant_utc(&self) -> Option<DateTime<Utc>> {
+        self.instant_utc
+    }
+
+    /// Returns the log-header timestamp, mislabeled as UTC.
+    ///
+    /// The underlying value is a local wall-clock `NaiveDateTime` promoted
+    /// with `.and_utc()`, so the `DateTime<Utc>` type is misleading: the
+    /// inner value is **not** a true UTC instant.
+    ///
+    /// Prefer [`EventMetadata::instant_utc`] for the absolute UTC instant
+    /// (available for match-lifecycle events), or
+    /// [`EventMetadata::local_timestamp`] for the honest zone-less local time.
+    #[deprecated(note = "header timestamps are local wall-clock mislabeled as UTC; \
+                use instant_utc() for the true UTC instant (match-lifecycle events) \
+                or local_timestamp() for the zone-less local header value")]
     pub fn timestamp(&self) -> Option<DateTime<Utc>> {
         self.timestamp
     }
@@ -464,10 +540,14 @@ impl<'de> Deserialize<'de> for EventMetadata {
     {
         /// Wire format for deserializing `EventMetadata`. The
         /// `raw_bytes_hash` field is optional and discarded — the real
-        /// hash is always recomputed from `raw_bytes`.
+        /// hash is always recomputed from `raw_bytes`. `instant_utc` is
+        /// optional with a default of `None` for backward compatibility with
+        /// older serialized payloads that predate this field.
         #[derive(Deserialize)]
         struct EventMetadataWire {
             timestamp: Option<DateTime<Utc>>,
+            #[serde(default)]
+            instant_utc: Option<DateTime<Utc>>,
             #[serde(with = "base64_serde")]
             raw_bytes: Vec<u8>,
             // Accepts any format (hex string, integer array) or absence.
@@ -477,7 +557,11 @@ impl<'de> Deserialize<'de> for EventMetadata {
         }
 
         let wire = EventMetadataWire::deserialize(deserializer)?;
-        Ok(EventMetadata::new(wire.timestamp, wire.raw_bytes))
+        Ok(EventMetadata::with_instant(
+            wire.timestamp,
+            wire.instant_utc,
+            wire.raw_bytes,
+        ))
     }
 }
 
@@ -804,7 +888,7 @@ define_event! {
 mod tests {
     use super::*;
     use base64::prelude::{Engine as _, BASE64_STANDARD};
-    use chrono::{Datelike, TimeZone};
+    use chrono::{Datelike, TimeZone, Timelike};
 
     type TestResult = Result<(), Box<dyn std::error::Error>>;
 
@@ -886,7 +970,7 @@ mod tests {
     #[test]
     fn test_event_metadata_new_stores_timestamp() {
         let meta = make_metadata(b"data");
-        let ts = meta.timestamp();
+        let ts = meta.local_timestamp();
         assert!(ts.is_some());
         let ts = ts.unwrap_or_default();
         assert_eq!(ts.year(), 2026);
@@ -939,7 +1023,7 @@ mod tests {
     #[test]
     fn test_event_metadata_timestamp_getter() {
         let meta = make_metadata(b"data");
-        let ts = meta.timestamp();
+        let ts = meta.local_timestamp();
         assert!(ts.is_some());
         let ts = ts.unwrap_or_default();
         assert_eq!(ts.year(), 2026);
@@ -950,7 +1034,7 @@ mod tests {
     #[test]
     fn test_event_metadata_none_timestamp() {
         let meta = EventMetadata::new(None, b"data".to_vec());
-        assert!(meta.timestamp().is_none());
+        assert!(meta.local_timestamp().is_none());
     }
 
     // -- Per-category struct field access (via accessors) --
@@ -1353,7 +1437,7 @@ mod tests {
         let serialized = serde_json::to_string(&meta)?;
         let deserialized: EventMetadata = serde_json::from_str(&serialized)?;
         assert_eq!(deserialized, meta);
-        assert!(deserialized.timestamp().is_none());
+        assert!(deserialized.local_timestamp().is_none());
         Ok(())
     }
 
@@ -1364,9 +1448,82 @@ mod tests {
             "raw_bytes": BASE64_STANDARD.encode(b"data"),
         });
         let meta: EventMetadata = serde_json::from_value(json)?;
-        assert!(meta.timestamp().is_none());
+        assert!(meta.local_timestamp().is_none());
         assert_eq!(meta.raw_bytes(), b"data");
         Ok(())
+    }
+
+    // -- instant_utc serde round-trips -----------------------------------------
+
+    #[test]
+    fn test_event_metadata_with_instant_utc_serde_round_trip() -> TestResult {
+        // A payload WITH instant_utc must survive a full serialize → deserialize
+        // cycle with the value intact.
+        let ts = Utc
+            .with_ymd_and_hms(2026, 2, 25, 12, 0, 0)
+            .single()
+            .unwrap_or_default();
+        let instant = Utc
+            .with_ymd_and_hms(2026, 2, 25, 19, 0, 0)
+            .single()
+            .unwrap_or_default();
+        let meta = EventMetadata::with_instant(Some(ts), Some(instant), b"match data".to_vec());
+        let serialized = serde_json::to_string(&meta)?;
+        let deserialized: EventMetadata = serde_json::from_str(&serialized)?;
+        assert_eq!(deserialized, meta);
+        assert_eq!(deserialized.instant_utc(), Some(instant));
+        Ok(())
+    }
+
+    #[test]
+    fn test_event_metadata_without_instant_utc_deserializes_to_none() -> TestResult {
+        // Old payloads that do not contain the `instant_utc` field must
+        // deserialize with instant_utc = None (backward compatibility via
+        // #[serde(default)]).
+        let json = serde_json::json!({
+            "timestamp": "2026-02-25T12:00:00Z",
+            "raw_bytes": BASE64_STANDARD.encode(b"old payload"),
+        });
+        let meta: EventMetadata = serde_json::from_value(json)?;
+        assert!(meta.instant_utc().is_none());
+        assert_eq!(meta.raw_bytes(), b"old payload");
+        Ok(())
+    }
+
+    #[test]
+    fn test_event_metadata_new_instant_utc_is_none() {
+        // EventMetadata::new() must always leave instant_utc = None.
+        let meta = EventMetadata::new(None, b"data".to_vec());
+        assert!(meta.instant_utc().is_none());
+    }
+
+    #[test]
+    fn test_event_metadata_with_instant_stores_instant_utc() {
+        // with_instant() must store the provided instant_utc.
+        let instant = Utc
+            .with_ymd_and_hms(2026, 6, 19, 17, 37, 13)
+            .single()
+            .unwrap_or_default();
+        let meta = EventMetadata::with_instant(None, Some(instant), b"data".to_vec());
+        assert_eq!(meta.instant_utc(), Some(instant));
+    }
+
+    #[test]
+    fn test_event_metadata_local_timestamp_returns_naive() {
+        // local_timestamp() must return the NaiveDateTime form of the stored
+        // header value, without any timezone information.
+        let ts = Utc
+            .with_ymd_and_hms(2026, 2, 25, 12, 0, 0)
+            .single()
+            .unwrap_or_default();
+        let meta = EventMetadata::new(Some(ts), b"data".to_vec());
+        let naive = meta.local_timestamp();
+        assert!(naive.is_some());
+        let naive = naive.unwrap_or_default();
+        assert_eq!(naive.year(), 2026);
+        assert_eq!(naive.month(), 2);
+        assert_eq!(naive.day(), 25);
+        assert_eq!(naive.hour(), 12);
     }
 
     // -- LogFileRotatedEvent --
@@ -1388,7 +1545,7 @@ mod tests {
             .single()
             .unwrap_or_default();
         let event = LogFileRotatedEvent::for_rotation(ts, 1000);
-        assert_eq!(event.metadata().timestamp(), Some(ts));
+        assert_eq!(event.metadata().local_timestamp(), Some(ts.naive_utc()));
     }
 
     #[test]
@@ -1456,7 +1613,7 @@ mod tests {
             .single()
             .unwrap_or_default();
         let event = DetailedLoggingStatusEvent::new_status(ts, true);
-        assert_eq!(event.metadata().timestamp(), Some(ts));
+        assert_eq!(event.metadata().local_timestamp(), Some(ts.naive_utc()));
     }
 
     #[test]
@@ -1530,7 +1687,7 @@ mod tests {
     #[test]
     fn test_truncation_event_metadata_carries_timestamp() {
         let event = make_truncation(63, 4);
-        assert!(event.metadata().timestamp().is_some());
+        assert!(event.metadata().local_timestamp().is_some());
     }
 
     #[test]
@@ -1538,7 +1695,7 @@ mod tests {
         // Router passes Option<DateTime> through to the constructor — entries
         // with unparseable timestamps must still produce the event.
         let event = TruncationEvent::new_truncation(None, 51, 0);
-        assert!(event.metadata().timestamp().is_none());
+        assert!(event.metadata().local_timestamp().is_none());
         assert_eq!(event.object_count(), Some(51));
     }
 

@@ -269,6 +269,7 @@ fn try_matchmaking(body: &str) -> Option<serde_json::Value> {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
     use crate::parsers::test_helpers::{

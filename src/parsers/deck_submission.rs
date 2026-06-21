@@ -117,6 +117,7 @@ fn extract_format_attribute(summary: &serde_json::Value) -> Option<String> {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
     use crate::parsers::test_helpers::{deck_submission_payload, test_timestamp, unity_entry};

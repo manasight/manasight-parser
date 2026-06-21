@@ -103,6 +103,7 @@ fn test_corpus_v2_constructed_format_is_traditional_standard() {
 /// Asserts that the `EventSetDeckV2` fixture line's timestamp survives into
 /// the `EventMetadata` so consumers can bind deck → match by time window.
 #[test]
+#[allow(deprecated)]
 fn test_corpus_v2_constructed_timestamp_is_present() {
     let events = parse_via_router(FIXTURE_V2_CONSTRUCTED);
     let submissions = deck_submissions(&events);

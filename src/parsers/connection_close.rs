@@ -124,6 +124,7 @@ fn try_parse_websocket_closed(
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
     use crate::parsers::test_helpers::{

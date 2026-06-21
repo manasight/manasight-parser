@@ -251,6 +251,7 @@ fn parse_comma_separated_ids(s: &str) -> Vec<i64> {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
     use crate::events::PerformanceClass;

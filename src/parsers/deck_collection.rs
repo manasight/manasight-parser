@@ -120,6 +120,7 @@ fn correlate_summary(
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
     use crate::events::PerformanceClass;

@@ -99,6 +99,7 @@ fn extract_draft_id_from_body(body: &str) -> Option<String> {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
     use crate::events::PerformanceClass;

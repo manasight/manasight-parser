@@ -160,6 +160,7 @@ fn try_parse_claim_prize_course(
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
     use crate::events::PerformanceClass;

@@ -54,6 +54,7 @@ pub fn try_parse(
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
     use crate::parsers::test_helpers::test_timestamp;
