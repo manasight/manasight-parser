@@ -63,11 +63,16 @@ pub fn try_parse(
     // field in the `matchGameRoomStateChangedEvent` payload. This is
     // timezone-independent and avoids the local-time mislabeling of the
     // log-header value. Falls back to `None` when the field is absent or
-    // cannot be parsed (e.g. not a valid i64 epoch-ms).
+    // cannot be parsed. Arena emits this field as a JSON string
+    // (e.g. `"timestamp": "1771903769076"`); a bare JSON number is also
+    // accepted for defensive compatibility.
     let instant_utc = parsed
         .get("timestamp")
         .or_else(|| state_event.get("timestamp"))
-        .and_then(serde_json::Value::as_i64)
+        .and_then(|v| {
+            v.as_i64()
+                .or_else(|| v.as_str().and_then(|s| s.parse::<i64>().ok()))
+        })
         .and_then(|ms| parse_epoch_millis(ms).ok());
 
     let metadata = EventMetadata::with_instant(timestamp, instant_utc, body.as_bytes().to_vec());
@@ -1124,9 +1129,32 @@ mod tests {
         /// value offset from UTC).
         const EPOCH_MS: i64 = 1_750_354_633_000;
 
-        /// Build a match-start body with an embedded `"timestamp"` epoch-ms at
-        /// the top level of the parsed JSON object (the format Arena produces).
+        /// Build a match-start body with an embedded `"timestamp"` epoch-ms as
+        /// a JSON STRING at the top level — the format Arena actually produces
+        /// (e.g. `"timestamp": "1771903769076"`).
         fn match_start_with_embedded_ts() -> String {
+            format!(
+                "[UnityCrossThreadLogger]matchGameRoomStateChangedEvent\n{}",
+                serde_json::json!({
+                    "timestamp": EPOCH_MS.to_string(),
+                    "matchGameRoomStateChangedEvent": {
+                        "gameRoomInfo": {
+                            "stateType": "MatchGameRoomStateType_Playing",
+                            "gameRoomConfig": {
+                                "matchId": "ts-match",
+                                "eventId": "Ladder",
+                                "reservedPlayers": []
+                            }
+                        }
+                    }
+                })
+            )
+        }
+
+        /// Build a match-start body with an embedded `"timestamp"` epoch-ms as
+        /// a bare JSON NUMBER — kept for defensive compatibility in case Arena
+        /// ever changes the wire format.
+        fn match_start_with_embedded_ts_numeric() -> String {
             format!(
                 "[UnityCrossThreadLogger]matchGameRoomStateChangedEvent\n{}",
                 serde_json::json!({
@@ -1135,7 +1163,7 @@ mod tests {
                         "gameRoomInfo": {
                             "stateType": "MatchGameRoomStateType_Playing",
                             "gameRoomConfig": {
-                                "matchId": "ts-match",
+                                "matchId": "ts-numeric-match",
                                 "eventId": "Ladder",
                                 "reservedPlayers": []
                             }
@@ -1165,11 +1193,25 @@ mod tests {
         }
 
         #[test]
-        fn test_instant_utc_populated_from_embedded_epoch_ms() {
-            // An entry with header local time + embedded epoch-ms yields
-            // instant_utc() == the epoch-ms value. This is the primary
-            // acceptance criterion from issue #251.
+        fn test_instant_utc_populated_from_embedded_epoch_ms_string() {
+            // An entry with header local time + embedded epoch-ms as a JSON
+            // STRING (the real Arena wire format) yields instant_utc() == the
+            // epoch-ms value. This is the primary acceptance criterion from
+            // issue #251.
             let body = match_start_with_embedded_ts();
+            let entry = unity_entry(&body);
+            let result = try_parse(&entry, Some(test_timestamp()));
+            assert!(result.is_some());
+            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            let expected = parse_epoch_millis(EPOCH_MS).unwrap_or_else(|_| unreachable!());
+            assert_eq!(event.metadata().instant_utc(), Some(expected));
+        }
+
+        #[test]
+        fn test_instant_utc_populated_from_embedded_epoch_ms_numeric() {
+            // A bare JSON number for `"timestamp"` is also accepted — defensive
+            // compatibility in case Arena changes the wire format.
+            let body = match_start_with_embedded_ts_numeric();
             let entry = unity_entry(&body);
             let result = try_parse(&entry, Some(test_timestamp()));
             assert!(result.is_some());
