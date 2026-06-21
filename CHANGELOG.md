@@ -4,6 +4,43 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.6.0] - 2026-06-20
+
+### Added
+
+- **`EventMetadata::instant_utc()`** — returns the true UTC instant for events
+  carrying an embedded epoch-millisecond `"timestamp"` (currently
+  match-lifecycle events from `matchGameRoomStateChangedEvent`). Unlike the
+  log-header timestamp, this is timezone-independent and correct regardless of
+  the host's local zone (including the `wasm`/headless build). Returns `None`
+  for events without an embedded epoch-ms field ([#251], [#252]).
+- **`EventMetadata::local_timestamp()`** — returns the log-header timestamp as a
+  zone-less `chrono::NaiveDateTime`, the honest representation of MTGA's local
+  wall-clock header value ([#251], [#252]).
+- **`EventMetadata::with_instant()`** — constructor that accepts both the header
+  timestamp and an `instant_utc` value ([#251], [#252]).
+
+### Changed
+
+- **`EventMetadata::timestamp()` is now `#[deprecated]`.** MTGA log-header
+  timestamps are local wall-clock time mislabeled as UTC (the inner
+  `NaiveDateTime` is promoted with `.and_utc()`). Use `instant_utc()` for the
+  absolute UTC instant, or `local_timestamp()` for the honest zone-less local
+  value. The accessor still works unchanged; this release only adds the
+  deprecation warning ([#251], [#252]).
+- Corrected the `src/log/timestamp.rs` documentation, which previously claimed
+  log-header timestamps were UTC ([#251], [#252]).
+
+### Notes
+
+- This release is **additive and backward-compatible**. Serialized payloads
+  round-trip with and without the new `instant_utc` field (`#[serde(default)]`).
+  Wiring `instant_utc` for `.NET-ticks` events (e.g. `client_actions`) is
+  deferred to a future release.
+
+[#251]: https://github.com/manasight/manasight-parser/issues/251
+[#252]: https://github.com/manasight/manasight-parser/pull/252
+
 ## [0.5.3] - 2026-06-19
 
 ### Fixed
