@@ -103,7 +103,7 @@ jobs:
           # pipefail is load-bearing: without it, tee's exit 0 masks cargo test failures.
           set -o pipefail
           set +e
-          cargo test --all-features smoke_test_real_logs -- --nocapture 2>&1 | tee /tmp/smoke-output.txt
+          cargo test smoke_test_real_logs -- --nocapture 2>&1 | tee /tmp/smoke-output.txt
           SMOKE_EXIT=$?
           set -e
 
@@ -225,7 +225,7 @@ jobs:
           GH_TOKEN: ${{ secrets.BASELINE_PR_TOKEN }}
         run: |
           # Re-run in bless mode to write updated baseline.
-          if ! cargo test --all-features smoke_test_real_logs -- --nocapture 2>&1; then
+          if ! cargo test smoke_test_real_logs -- --nocapture 2>&1; then
             echo "::warning::Bless mode run exited non-zero — baseline may not have been updated"
           fi
 

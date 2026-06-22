@@ -84,7 +84,7 @@ fn main() -> std::io::Result<()> {
 |---------|---------|-------------|
 | `brace_depth_flush` | ✓ | Flush multi-line entries on JSON brace-balance instead of waiting for the next header. Disable as a rollback mechanism if a regression is detected. |
 | `tailer` | ✓ | File tailer, log discovery, async event stream (`MtgaEventStream`), and event bus. Pulls in `tokio` and `known-folders`. Disable to build the pure-sync WASM-compatible subset. |
-| `wasm` | | wasm-bindgen export of `parseWholeLog` for use in a browser or Node Parse Worker. Implies `brace_depth_flush`; does **not** pull in `tailer` (no tokio/known-folders). |
+| `wasm` | | wasm-bindgen export of `parseWholeLog` and `StreamingParser` for use in a browser or Node Parse Worker. Implies `brace_depth_flush` and `lean` (omits `raw_bytes` + heavy payload fields such as annotations, timers, zones, and deck lists to reduce WASM memory pressure). Does **not** pull in `tailer` (no tokio/known-folders). |
 
 ### WASM / wasm-bindgen build
 
@@ -94,14 +94,14 @@ The `wasm` feature wraps the synchronous [`parse_whole_log`](#whole-log-parsing-
 # Install wasm-pack (once) — pin the version for reproducible builds
 cargo install wasm-pack --locked --version 0.15.0
 
-# Build — outputs pkg/ with .wasm + JS + .d.ts
-wasm-pack build --target web --no-default-features --features wasm
+# Build for a bundler (webpack / Vite) — PRIMARY/recommended target:
+wasm-pack build --target bundler --no-default-features --features wasm
 
 # For a Node.js consumer:
 wasm-pack build --target nodejs --no-default-features --features wasm
 
-# For a bundler (webpack / Vite):
-wasm-pack build --target bundler --no-default-features --features wasm
+# For direct <script type="module"> usage (no bundler):
+wasm-pack build --target web --no-default-features --features wasm
 ```
 
 Consume the generated bindings from JavaScript / TypeScript:

@@ -38,6 +38,12 @@ use super::turn_info::extract_turn_info;
 /// `timers`, and `diff_deleted_instance_ids` are empty arrays when their
 /// respective source arrays are absent.
 ///
+/// Under the `lean` feature, the payload omits `annotations`,
+/// `game_objects`, `timers`, `zones`, and `persistent_annotations` to reduce
+/// WASM memory pressure. Only `type`, `game_state_type`, `msg_id`,
+/// `game_state_id`, `prev_game_state_id`, `game_info`, `turn_info`, and
+/// `diff_deleted_instance_ids` are retained.
+///
 /// `prev_game_state_id` is the `prevGameStateId` field present on every Diff
 /// GSM wire payload. Full GSMs legitimately omit it; the extracted value is
 /// `Option<i64>` and serializes to JSON `null` when absent. Surfacing this

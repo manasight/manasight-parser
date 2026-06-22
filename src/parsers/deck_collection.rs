@@ -60,6 +60,10 @@ const DECKS_FIELD: &str = "Decks";
 /// The `timestamp` is `None` when the log entry header did not contain a
 /// parseable timestamp. It is passed through to [`EventMetadata`] so
 /// downstream consumers can distinguish real vs missing timestamps.
+///
+/// Under the `lean` feature, `raw_start_hook` and `decks` are omitted from
+/// the emitted event payload; only the `type` envelope remains. Consumers
+/// that need the full deck data must use the non-lean build.
 pub fn try_parse(
     entry: &LogEntry,
     timestamp: Option<chrono::DateTime<chrono::Utc>>,

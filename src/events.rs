@@ -407,6 +407,16 @@ impl PerformanceClass {
 ///
 /// Deserialization also enforces this invariant: the hash is recomputed from
 /// `raw_bytes` during deserialization rather than trusting the serialized value.
+///
+/// **Caveat under `lean`:** The `lean` feature omits `raw_bytes` from
+/// serialized output (`skip_serializing`). If a lean-serialized `EventMetadata`
+/// is Rust-deserialized (e.g. in tests using `serde_wasm_bindgen::from_value`),
+/// the custom `Deserialize` impl recomputes `raw_bytes_hash` from the
+/// now-empty `raw_bytes`, yielding a hash of the empty byte slice rather than
+/// the original. Production JS consumers read the correctly-serialized wire
+/// hash (computed at parse time from the real bytes) and are unaffected.
+/// To avoid this, compare serialized `serde_json::Value` forms rather than
+/// round-tripping through the typed `Deserialize` impl under `lean`.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct EventMetadata {
     /// Local wall-clock timestamp parsed from the log entry header, stored
@@ -557,12 +567,14 @@ impl<'de> Deserialize<'de> for EventMetadata {
             #[serde(default)]
             instant_utc: Option<DateTime<Utc>>,
             /// `raw_bytes` may be absent when deserializing a lean-serialized
-            /// event (the `lean` feature skips this field). `#[serde(default)]`
-            /// causes serde to use `Vec::default()` (empty) when the field is
-            /// absent, preserving round-trip compatibility without requiring a
-            /// custom deserializer. Consumers that need the original bytes must
-            /// use the non-lean build.
-            #[serde(default, with = "base64_serde")]
+            /// event (the `lean` feature skips this field on serialization).
+            /// Under `lean`, `#[serde(default)]` causes serde to use
+            /// `Vec::default()` (empty) when the field is absent, preserving
+            /// round-trip compatibility. Under non-lean (the default build),
+            /// the field is strictly required, preserving the hash invariant
+            /// and catching truncated/malformed payloads at deserialization time.
+            #[cfg_attr(feature = "lean", serde(default))]
+            #[serde(with = "base64_serde")]
             raw_bytes: Vec<u8>,
             // Accepts any format (hex string, integer array) or absence.
             // The value is discarded — hash is always recomputed.

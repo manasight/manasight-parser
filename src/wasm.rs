@@ -10,8 +10,11 @@
 //!   transports where holding the whole log is not desirable.
 //!
 //! Both APIs use the same serialiser configuration
-//! (`serialize_maps_as_objects(true)`) so their output is identical to the
-//! native `parse_whole_log` path.
+//! (`serialize_maps_as_objects(true)`), so the serialiser output shape is
+//! identical to the native `parse_whole_log` path. However, the `wasm` build
+//! enables `lean`, which omits `raw_bytes` and heavy payload fields
+//! (annotations, timers, zones, `game_objects`, `raw_start_hook`, decks), so the
+//! wasm output is a lean subset of the full native output — not byte-identical.
 //!
 //! # Building
 //!
@@ -65,6 +68,13 @@ use wasm_bindgen::prelude::*;
 ///   `for line in input.lines()` followed by a `flush()` call.
 ///
 /// Empty chunks are no-ops (tail is unchanged).
+///
+/// # Stability
+///
+/// This type is `pub` only so that host-side tests can drive it without WASM
+/// dependencies. It is **not** part of the stable public API — breaking
+/// changes may occur without a semver bump.
+#[doc(hidden)]
 pub struct StreamingParserCore {
     buffer: crate::log::entry::LineBuffer,
     router: crate::router::Router,
@@ -147,10 +157,14 @@ impl StreamingParserCore {
         let mut events = Vec::new();
 
         // Process the leftover tail (the final line if not terminated by '\n').
+        //
+        // Do NOT strip a lone trailing '\r' here. `str::lines()` only removes
+        // '\r' as part of '\r\n'; the last element returned for a final line
+        // without a trailing '\n' retains any lone '\r'. Stripping it here would
+        // diverge from `parse_whole_log`'s `input.lines()` last element.
         if !self.tail.is_empty() {
             let tail = std::mem::take(&mut self.tail);
-            let line = tail.strip_suffix('\r').unwrap_or(&tail);
-            for entry in self.buffer.push_line(line) {
+            for entry in self.buffer.push_line(&tail) {
                 events.extend(self.router.route(&entry));
             }
         }

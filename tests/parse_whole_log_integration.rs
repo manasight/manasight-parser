@@ -481,6 +481,72 @@ fn test_streaming_core_no_trailing_newline_parity() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// FIX 2 — Trailing-\r parity: finish() must match str::lines() byte-for-byte
+// ---------------------------------------------------------------------------
+
+/// `finish()` must NOT strip a lone trailing `\r` from the final partial line.
+///
+/// `str::lines()` only removes `'\r'` as part of `"\r\n"`. When the final line
+/// has no trailing `'\n'`, the `'\r'` (if any) is part of the line's content
+/// and must be passed through unchanged. Stripping it in `finish()` would
+/// diverge from `parse_whole_log`'s `input.lines()` last element.
+///
+/// These tests confirm byte-for-byte equality between `StreamingParserCore`
+/// and `parse_whole_log` for inputs where the trailing `\r` case matters.
+#[test]
+fn test_streaming_core_crlf_with_trailing_cr_parity() {
+    use manasight_parser::wasm::StreamingParserCore;
+
+    // "a\r\nb\r" — CRLF-terminated first line, then a line ending in bare \r.
+    // str::lines() splits this as ["a", "b\r"] (the \r\n pair is stripped,
+    // but the final \r is not).
+    let input = "DETAILED LOGS: ENABLED\r\n[UnityCrossThreadLogger]authenticateResponse\r\n{\"screenName\":\"TrailingCR\"}\r";
+    let expected = parse_whole_log(input);
+
+    let mut core = StreamingParserCore::new();
+    let mut events: Vec<GameEvent> = core.push_chunk(input);
+    events.extend(core.finish());
+
+    assert_eq!(
+        expected, events,
+        "input ending with bare \\r (not \\r\\n): streaming core must match parse_whole_log"
+    );
+}
+
+#[test]
+fn test_streaming_core_lone_trailing_cr_parity() {
+    use manasight_parser::wasm::StreamingParserCore;
+
+    // "foo\r" — a single line with a bare trailing \r and no \n.
+    // str::lines() returns ["foo\r"] (the \r is NOT stripped because there is no \n).
+    let input = "DETAILED LOGS: ENABLED\rfoo\r";
+    let expected = parse_whole_log(input);
+
+    let mut core = StreamingParserCore::new();
+    let mut events: Vec<GameEvent> = core.push_chunk(input);
+    events.extend(core.finish());
+
+    assert_eq!(
+        expected, events,
+        "input with only bare \\r (no \\n): streaming core must match parse_whole_log"
+    );
+}
+
+/// Regression guard: `"a\r\n"` (CRLF + trailing newline) must still produce
+/// the same events as `parse_whole_log` — the `push_chunk` CRLF stripping
+/// path must remain intact.
+#[test]
+fn test_streaming_core_crlf_trailing_newline_parity() {
+    let input = "DETAILED LOGS: ENABLED\r\n";
+    let expected = parse_whole_log(input);
+    let actual = parse_via_streaming_core(input, input.len());
+    assert_eq!(
+        expected, actual,
+        "CRLF input with trailing newline must match parse_whole_log"
+    );
+}
+
 /// Proptest: random chunk sizes must produce identical events to `parse_whole_log`.
 #[cfg(not(target_arch = "wasm32"))]
 mod streaming_proptest {
