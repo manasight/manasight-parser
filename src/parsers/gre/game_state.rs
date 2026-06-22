@@ -1,6 +1,10 @@
 //! `GameStateMessage` and `QueuedGameStateMessage` payload builder.
 
+// Under `lean`, annotations/zones/game_objects are omitted from the payload
+// so these extraction functions are not referenced.
+#[cfg(not(feature = "lean"))]
 use super::annotations::{extract_annotations, extract_persistent_annotations};
+#[cfg(not(feature = "lean"))]
 use super::helpers::{extract_nested_value, extract_string_array};
 use super::turn_info::extract_turn_info;
 
@@ -81,28 +85,31 @@ pub(super) fn build_game_state_message_payload(gre_msg: &serde_json::Value) -> s
         .and_then(serde_json::Value::as_str)
         .map(String::from);
 
-    // Extract zones from gameStateMessage.zones[].
-    let zones = extract_zones(gsm);
-
-    // Extract game objects from gameStateMessage.gameObjects[].
-    let game_objects = extract_game_objects(gsm);
-
-    // Extract game info metadata.
+    // Extract game info metadata (kept under all feature configurations).
     let game_info = gsm
         .and_then(|g| g.get("gameInfo"))
         .cloned()
         .unwrap_or(serde_json::Value::Null);
 
-    // Extract structured turn info from gameInfo.turnInfo.
+    // Extract structured turn info from gameInfo.turnInfo (kept under all configs).
     let turn_info = extract_turn_info(gsm);
 
-    // Extract annotations from gameStateMessage.annotations[].
+    // Under the `lean` feature, high-volume fields (zones, game objects,
+    // annotations, timers) are excluded from the payload to reduce WASM memory
+    // usage. They are extracted only for the non-lean build.
+    #[cfg(not(feature = "lean"))]
+    let zones = extract_zones(gsm);
+
+    #[cfg(not(feature = "lean"))]
+    let game_objects = extract_game_objects(gsm);
+
+    #[cfg(not(feature = "lean"))]
     let annotations = extract_annotations(gsm);
 
-    // Extract persistent annotations from gameStateMessage.persistentAnnotations[].
+    #[cfg(not(feature = "lean"))]
     let persistent_annotations = extract_persistent_annotations(gsm);
 
-    // Extract inline timers from gameStateMessage.timers[].
+    #[cfg(not(feature = "lean"))]
     let timers = extract_timers(gsm);
 
     // Extract diffDeletedInstanceIds (instance IDs removed from game state).
@@ -116,21 +123,41 @@ pub(super) fn build_game_state_message_payload(gre_msg: &serde_json::Value) -> s
         })
         .unwrap_or_default();
 
-    serde_json::json!({
-        "type": payload_type,
-        "game_state_type": game_state_type,
-        "msg_id": msg_id,
-        "game_state_id": game_state_id,
-        "prev_game_state_id": prev_game_state_id,
-        "zones": zones,
-        "game_objects": game_objects,
-        "game_info": game_info,
-        "turn_info": turn_info,
-        "annotations": annotations,
-        "persistent_annotations": persistent_annotations,
-        "timers": timers,
-        "diff_deleted_instance_ids": diff_deleted_instance_ids,
-    })
+    // Under the `lean` feature, drop high-volume fields (annotations, game
+    // objects, timers, zones) that the WASM consumer does not use, keeping
+    // only the fields needed for result-focused consumers (type, ids,
+    // game_info, turn_info, diff_deleted_instance_ids).
+    #[cfg(feature = "lean")]
+    {
+        serde_json::json!({
+            "type": payload_type,
+            "game_state_type": game_state_type,
+            "msg_id": msg_id,
+            "game_state_id": game_state_id,
+            "prev_game_state_id": prev_game_state_id,
+            "game_info": game_info,
+            "turn_info": turn_info,
+            "diff_deleted_instance_ids": diff_deleted_instance_ids,
+        })
+    }
+    #[cfg(not(feature = "lean"))]
+    {
+        serde_json::json!({
+            "type": payload_type,
+            "game_state_type": game_state_type,
+            "msg_id": msg_id,
+            "game_state_id": game_state_id,
+            "prev_game_state_id": prev_game_state_id,
+            "zones": zones,
+            "game_objects": game_objects,
+            "game_info": game_info,
+            "turn_info": turn_info,
+            "annotations": annotations,
+            "persistent_annotations": persistent_annotations,
+            "timers": timers,
+            "diff_deleted_instance_ids": diff_deleted_instance_ids,
+        })
+    }
 }
 
 /// Extracts timer data from the `gameStateMessage.timers` array.
@@ -140,6 +167,8 @@ pub(super) fn build_game_state_message_payload(gre_msg: &serde_json::Value) -> s
 /// are normalized to `snake_case`.
 ///
 /// Returns an empty `Vec` when `timers` is absent or empty.
+/// Not compiled under the `lean` feature (timers are excluded from the lean payload).
+#[cfg(not(feature = "lean"))]
 fn extract_timers(gsm: Option<&serde_json::Value>) -> Vec<serde_json::Value> {
     let Some(raw_timers) = gsm
         .and_then(|g| g.get("timers"))
@@ -152,6 +181,8 @@ fn extract_timers(gsm: Option<&serde_json::Value>) -> Vec<serde_json::Value> {
 }
 
 /// Extracts a single timer, normalizing field names to `snake_case`.
+/// Not compiled under the `lean` feature.
+#[cfg(not(feature = "lean"))]
 fn extract_single_timer(timer: &serde_json::Value) -> Option<serde_json::Value> {
     let timer_id = timer.get("timerId").and_then(serde_json::Value::as_i64)?;
 
@@ -202,6 +233,7 @@ fn extract_single_timer(timer: &serde_json::Value) -> Option<serde_json::Value> 
 }
 
 /// Extracts zone descriptors from the `gameStateMessage.zones` array.
+/// Not compiled under the `lean` feature (zones are excluded from the lean payload).
 ///
 /// Each zone in the MTGA log has the structure:
 /// ```json
@@ -216,6 +248,7 @@ fn extract_single_timer(timer: &serde_json::Value) -> Option<serde_json::Value> 
 ///
 /// The output normalizes field names to `snake_case` for consistency
 /// with the rest of the parser output.
+#[cfg(not(feature = "lean"))]
 fn extract_zones(gsm: Option<&serde_json::Value>) -> Vec<serde_json::Value> {
     let Some(raw_zones) = gsm
         .and_then(|g| g.get("zones"))
@@ -228,6 +261,8 @@ fn extract_zones(gsm: Option<&serde_json::Value>) -> Vec<serde_json::Value> {
 }
 
 /// Extracts a single zone descriptor, normalizing field names to `snake_case`.
+/// Not compiled under the `lean` feature.
+#[cfg(not(feature = "lean"))]
 fn extract_single_zone(zone: &serde_json::Value) -> Option<serde_json::Value> {
     let zone_id = zone.get("zoneId").and_then(serde_json::Value::as_i64)?;
     let zone_type = zone
@@ -265,6 +300,7 @@ fn extract_single_zone(zone: &serde_json::Value) -> Option<serde_json::Value> {
 }
 
 /// Extracts game object descriptors from the `gameStateMessage.gameObjects` array.
+/// Not compiled under the `lean` feature (game objects are excluded from the lean payload).
 ///
 /// Each game object in the MTGA log has the structure:
 /// ```json
@@ -286,6 +322,7 @@ fn extract_single_zone(zone: &serde_json::Value) -> Option<serde_json::Value> {
 ///
 /// The output normalizes field names to `snake_case`. Not all fields are
 /// present in every object (incremental updates, non-card types, etc.).
+#[cfg(not(feature = "lean"))]
 fn extract_game_objects(gsm: Option<&serde_json::Value>) -> Vec<serde_json::Value> {
     let Some(raw_objects) = gsm
         .and_then(|g| g.get("gameObjects"))
@@ -301,6 +338,8 @@ fn extract_game_objects(gsm: Option<&serde_json::Value>) -> Vec<serde_json::Valu
 }
 
 /// Extracts a single game object, normalizing field names to `snake_case`.
+/// Not compiled under the `lean` feature.
+#[cfg(not(feature = "lean"))]
 fn extract_single_game_object(obj: &serde_json::Value) -> Option<serde_json::Value> {
     let instance_id = obj.get("instanceId").and_then(serde_json::Value::as_i64)?;
 
@@ -413,11 +452,16 @@ fn extract_single_game_object(obj: &serde_json::Value) -> Option<serde_json::Val
 mod tests {
     use super::super::test_fixtures::*;
     use super::super::try_parse;
+    // Under `lean`, zone/object/timer extraction functions are cfg'd away;
+    // the glob import would be empty and trigger an unused-import warning.
+    #[cfg(not(feature = "lean"))]
     use super::*;
     use crate::parsers::test_helpers::{game_state_payload, test_timestamp, unity_entry};
 
     /// Helper: build a minimal `GameStateMessage` body with just one zone
     /// and no game objects (incremental update pattern).
+    /// Only used by tests that check zone contents (gated under not(lean)).
+    #[cfg(not(feature = "lean"))]
     fn minimal_game_state_message_body() -> String {
         format!(
             "[UnityCrossThreadLogger]greToClientEvent\n{}",
@@ -524,8 +568,9 @@ mod tests {
         }
     }
 
-    // -- Zone extraction ------------------------------------------------------
+    // -- Zone extraction (not compiled under `lean` — zones excluded from payload) --
 
+    #[cfg(not(feature = "lean"))]
     mod zone_extraction {
         use super::*;
 
@@ -709,8 +754,9 @@ mod tests {
         }
     }
 
-    // -- Game object extraction -----------------------------------------------
+    // -- Game object extraction (not compiled under `lean`) --------------------
 
+    #[cfg(not(feature = "lean"))]
     mod game_object_extraction {
         use super::*;
 
@@ -995,8 +1041,9 @@ mod tests {
         }
     }
 
-    // -- QueuedGameStateMessage -----------------------------------------------
+    // -- QueuedGameStateMessage (not compiled under `lean`) --------------------
 
+    #[cfg(not(feature = "lean"))]
     mod queued_game_state {
         use super::*;
 
@@ -1081,8 +1128,9 @@ mod tests {
         }
     }
 
-    // -- GameStateMessage edge cases ------------------------------------------
+    // -- GameStateMessage edge cases (not compiled under `lean`) --------------
 
+    #[cfg(not(feature = "lean"))]
     mod game_state_edge_cases {
         use super::*;
 
@@ -1336,10 +1384,11 @@ mod tests {
         }
     }
 
-    // -- Internal helpers ----------------------------------------------------
+    // -- Internal helpers (not compiled under `lean` — functions are gated) ----
 
+    #[cfg(not(feature = "lean"))]
     mod internal_helpers {
-        use super::*;
+        use super::super::{extract_single_game_object, extract_single_zone};
 
         #[test]
         fn test_extract_single_zone_valid() {
@@ -1488,8 +1537,9 @@ mod tests {
         }
     }
 
-    // -- Timer extraction ----------------------------------------------------
+    // -- Timer extraction (not compiled under `lean` — timers excluded) --------
 
+    #[cfg(not(feature = "lean"))]
     mod timer_extraction {
         use super::*;
 
@@ -1746,8 +1796,9 @@ mod tests {
         }
     }
 
-    // -- Ability chain fields (objectSourceGrpId, parentId) -------------------
+    // -- Ability chain fields (not compiled under `lean`) ---------------------
 
+    #[cfg(not(feature = "lean"))]
     #[test]
     fn test_game_object_ability_has_source_grp_id_and_parent_id() {
         let body = format!(
@@ -1788,6 +1839,7 @@ mod tests {
         assert_eq!(obj["parent_id"], 291);
     }
 
+    #[cfg(not(feature = "lean"))]
     #[test]
     fn test_game_object_card_omits_ability_chain_fields() {
         let body = format!(

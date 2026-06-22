@@ -7,16 +7,25 @@
 //! [`Router`] surface — the same code path a real `Player.log` line would
 //! take — and asserts the two-event sequence + annotation contents.
 
+// All items below are used only by the `not(lean)` test.
+#[cfg(not(feature = "lean"))]
 use manasight_parser::events::GameEvent;
+#[cfg(not(feature = "lean"))]
 use manasight_parser::log::entry::{EntryHeader, LogEntry};
+#[cfg(not(feature = "lean"))]
 use manasight_parser::router::Router;
 
 /// Sanitized fixture: a `[UnityCrossThreadLogger]greToClientEvent` entry
 /// whose `GameStateMessage` carries `GameStage_GameOver` plus the lethal
 /// combat damage (`AnnotationType_DamageDealt` x2, `ModifiedLife`,
 /// `LossOfGame`). Mirrors the real-game capture cited in the issue.
+#[cfg(not(feature = "lean"))]
 const FIXTURE: &str = include_str!("fixtures/game_over_with_damage_annotations.txt");
 
+/// Under the `lean` feature, annotations are excluded from the `GameState`
+/// payload — this test cannot verify annotation contents. It is compiled only
+/// for the non-lean build where the full payload is present.
+#[cfg(not(feature = "lean"))]
 #[test]
 fn test_game_over_with_damage_annotations_emits_game_state_then_game_result() {
     let entry = LogEntry {

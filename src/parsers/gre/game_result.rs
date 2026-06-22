@@ -658,6 +658,8 @@ mod tests {
     /// `GameResult` so annotation-walker consumers see the killing-blow data.
     mod game_over_dual_emit {
         use super::*;
+        // `game_state_payload` is only used by lean-gated tests.
+        #[cfg(not(feature = "lean"))]
         use crate::parsers::test_helpers::game_state_payload;
 
         /// Body: `GameOver` GSM with a non-empty `annotations` array carrying
@@ -748,6 +750,8 @@ mod tests {
             );
         }
 
+        // Under `lean`, annotations are excluded from the GameState payload.
+        #[cfg(not(feature = "lean"))]
         #[test]
         fn test_game_state_carries_killing_damage_annotations() {
             let entry = unity_entry(&game_over_body_with_killing_damage());
@@ -792,6 +796,8 @@ mod tests {
             assert!(matches!(events[0], GameEvent::GameResult(_)));
         }
 
+        // Under `lean`, persistent_annotations are excluded from payload.
+        #[cfg(not(feature = "lean"))]
         #[test]
         fn test_game_over_persistent_annotations_only_still_emits_game_state() {
             // Persistent annotations alone (no regular annotations) are also
