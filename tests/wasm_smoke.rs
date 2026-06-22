@@ -9,11 +9,24 @@
 //! ```
 //!
 //! The test asserts that the wasm-bindgen wrapper [`parse_whole_log_js`]
-//! produces a JS object graph that round-trips back through
-//! `serde_wasm_bindgen::from_value` to the same `Vec<GameEvent>` that the
-//! native [`parse_whole_log`] returns on the same input — proving wasm output
+//! produces a JS object graph whose **serialised JSON** matches the
+//! `serde_json` serialisation of the same `Vec<GameEvent>` that the native
+//! [`parse_whole_log`] returns on the same input — proving wasm output
 //! == native output on identical input (AC-ING-3 parity, no name
 //! special-casing required here; redaction is upstream).
+//!
+//! ## Why serialised JSON and not struct equality?
+//!
+//! The `wasm` feature implies `lean`.  Under `lean`,
+//! `EventMetadata.raw_bytes` is `#[serde(skip_serializing)]`.  A round-trip
+//! through the wasm JS object (serialize → deserialize) therefore yields
+//! `raw_bytes = []` and recomputes `raw_bytes_hash` from empty bytes, making
+//! the deserialized struct unequal to the native in-memory struct.  Both
+//! serialised forms are correct: `raw_bytes` is absent and `raw_bytes_hash`
+//! holds the real hash (computed at parse time, not during round-trip).
+//! Comparing `serde_json` output of native events (where lean also skips
+//! `raw_bytes`) to the stringified wasm output avoids this lossiness while
+//! still verifying all semantically meaningful fields.
 
 #![cfg(all(target_arch = "wasm32", feature = "wasm"))]
 
@@ -33,6 +46,23 @@ use wasm_bindgen_test::wasm_bindgen_test;
 const FIXTURE: &str = include_str!("fixtures/gsm_with_turn_info.txt");
 
 /// Parses the corpus fixture through both code paths and asserts they agree.
+///
+/// Parity is verified by comparing the **serialised JSON structure** of both
+/// paths — specifically `serde_json::Value` representations:
+/// - Native: `serde_json::to_value(&native_events)` — under `lean`,
+///   `raw_bytes` is `skip_serializing`, so the value omits that field and
+///   retains the correct `raw_bytes_hash`.
+/// - Wasm: `serde_wasm_bindgen::from_value::<serde_json::Value>(js_value)` —
+///   converts the JsValue to a generic JSON value without going through
+///   `EventMetadata`'s custom `Deserialize`.  The JsValue was produced by the
+///   wasm serialiser (lean), so `raw_bytes` is absent and `raw_bytes_hash` is
+///   the correct hash.
+///
+/// A typed struct round-trip (`serde_wasm_bindgen::from_value::<Vec<GameEvent>>`)
+/// is intentionally avoided: the custom `Deserialize` for `EventMetadata`
+/// recomputes `raw_bytes_hash` from the (now-empty) `raw_bytes`, producing a
+/// hash mismatch against the native struct even though both serialised forms
+/// are identical.
 #[wasm_bindgen_test]
 fn test_parse_whole_log_js_parity_with_native() {
     // Use an inline input that produces real events so this test is non-vacuous.
@@ -48,17 +78,21 @@ fn test_parse_whole_log_js_parity_with_native() {
 
     let js_value = parse_whole_log_js(FIXTURE).expect("wasm wrapper must not fail");
 
-    let wasm_events: Vec<GameEvent> =
-        serde_wasm_bindgen::from_value(js_value).expect("round-trip deserialisation must succeed");
+    // Serialise native events to a generic JSON value.  Under `lean`,
+    // `raw_bytes` is `skip_serializing`, so the value is structurally
+    // identical to what the wasm serialiser emits.
+    let native_value: serde_json::Value = serde_json::to_value(&native_events)
+        .expect("native events must serialise to serde_json::Value without error");
+
+    // Deserialise the wasm JsValue to a generic JSON value — this bypasses
+    // `EventMetadata`'s custom `Deserialize` (which would recompute the hash
+    // from empty bytes) and instead gives us the raw serialised shape directly.
+    let wasm_value: serde_json::Value =
+        serde_wasm_bindgen::from_value(js_value).expect("wasm JsValue must convert to JSON value");
 
     assert_eq!(
-        native_events.len(),
-        wasm_events.len(),
-        "event count must match between native and wasm paths"
-    );
-    assert_eq!(
-        native_events, wasm_events,
-        "every event must be identical between native and wasm paths"
+        native_value, wasm_value,
+        "serialised JSON structure must be identical between native and wasm paths"
     );
 }
 

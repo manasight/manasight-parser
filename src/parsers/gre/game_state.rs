@@ -452,10 +452,6 @@ fn extract_single_game_object(obj: &serde_json::Value) -> Option<serde_json::Val
 mod tests {
     use super::super::test_fixtures::*;
     use super::super::try_parse;
-    // Under `lean`, zone/object/timer extraction functions are cfg'd away;
-    // the glob import would be empty and trigger an unused-import warning.
-    #[cfg(not(feature = "lean"))]
-    use super::*;
     use crate::parsers::test_helpers::{game_state_payload, test_timestamp, unity_entry};
 
     /// Helper: build a minimal `GameStateMessage` body with just one zone
