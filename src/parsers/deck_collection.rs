@@ -60,6 +60,10 @@ const DECKS_FIELD: &str = "Decks";
 /// The `timestamp` is `None` when the log entry header did not contain a
 /// parseable timestamp. It is passed through to [`EventMetadata`] so
 /// downstream consumers can distinguish real vs missing timestamps.
+///
+/// Under the `lean` feature, `raw_start_hook` and `decks` are omitted from
+/// the emitted event payload; only the `type` envelope remains. Consumers
+/// that need the full deck data must use the non-lean build.
 pub fn try_parse(
     entry: &LogEntry,
     timestamp: Option<chrono::DateTime<chrono::Utc>>,
@@ -71,14 +75,32 @@ pub fn try_parse(
     }
 
     let parsed = api_common::parse_json_from_body(body, "StartHook deck collection")?;
-    let deck_summaries = parsed.get(DECK_SUMMARIES_FIELD)?.as_array()?;
-    let decks = parsed.get(DECKS_FIELD)?.as_object()?;
 
-    let payload = serde_json::json!({
-        "type": "deck_collection_snapshot",
-        "decks": correlate_decks(deck_summaries, decks),
-        "raw_start_hook": parsed,
-    });
+    // Under the `lean` feature, drop `raw_start_hook` (the full StartHook
+    // JSON, ~large) and the `decks` payload (deck lists, also large).
+    // Keep the variant envelope key (`type`) so consumers doing
+    // `Object.keys(e)[0]` still see `DeckCollection`.
+    //
+    // We must still validate that DeckSummaries and Decks are present (to
+    // match/not-match correctly) but we don't build the correlated payload.
+    #[cfg(feature = "lean")]
+    let payload = {
+        // Validate presence of required fields for entry-matching purposes.
+        let _deck_summaries = parsed.get(DECK_SUMMARIES_FIELD)?.as_array()?;
+        let _decks = parsed.get(DECKS_FIELD)?.as_object()?;
+        serde_json::json!({ "type": "deck_collection_snapshot" })
+    };
+
+    #[cfg(not(feature = "lean"))]
+    let payload = {
+        let deck_summaries = parsed.get(DECK_SUMMARIES_FIELD)?.as_array()?;
+        let decks = parsed.get(DECKS_FIELD)?.as_object()?;
+        serde_json::json!({
+            "type": "deck_collection_snapshot",
+            "decks": correlate_decks(deck_summaries, decks),
+            "raw_start_hook": parsed,
+        })
+    };
 
     let metadata = EventMetadata::new(timestamp, body.as_bytes().to_vec());
     Some(GameEvent::DeckCollection(DeckCollectionEvent::new(
@@ -87,6 +109,8 @@ pub fn try_parse(
 }
 
 /// Correlates `DeckSummaries` entries with `Decks` payloads by `DeckId`.
+/// Not compiled under the `lean` feature (deck list data is excluded from the lean payload).
+#[cfg(not(feature = "lean"))]
 fn correlate_decks(
     deck_summaries: &[serde_json::Value],
     decks: &serde_json::Map<String, serde_json::Value>,
@@ -100,6 +124,8 @@ fn correlate_decks(
 }
 
 /// Builds a single correlated deck record from a summary and deck-map lookup.
+/// Not compiled under the `lean` feature.
+#[cfg(not(feature = "lean"))]
 fn correlate_summary(
     summary: &serde_json::Value,
     deck_map: &serde_json::Map<String, serde_json::Value>,
@@ -124,10 +150,15 @@ fn correlate_summary(
 mod tests {
     use super::*;
     use crate::events::PerformanceClass;
-    use crate::parsers::test_helpers::{deck_collection_payload, test_timestamp, unity_entry};
+    use crate::parsers::test_helpers::{test_timestamp, unity_entry};
+    // `deck_collection_payload` is only referenced by the `matching` sub-module,
+    // which is gated under `not(lean)`.
+    #[cfg(not(feature = "lean"))]
+    use crate::parsers::test_helpers::deck_collection_payload;
 
-    // -- Matching entries (StartHook with DeckSummaries and Decks) ------------
+    // -- Matching entries (not compiled under `lean` — deck payload excluded) --
 
+    #[cfg(not(feature = "lean"))]
     mod matching {
         use super::*;
 

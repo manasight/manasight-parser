@@ -59,7 +59,8 @@ pub mod sanitize;
 #[cfg(feature = "tailer")]
 pub mod stream;
 pub mod util;
-#[cfg(feature = "wasm")]
+// The `wasm` module always exposes `StreamingParserCore` for host-side tests.
+// The `#[wasm_bindgen]` exports within are gated on the `wasm` feature.
 pub mod wasm;
 
 // ---------------------------------------------------------------------------

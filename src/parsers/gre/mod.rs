@@ -56,10 +56,14 @@
 //! `GameObjectType_Ability` objects include `object_source_grp_id` and
 //! `parent_id` for resolving ability instances back to their source cards.
 
+// Annotations module is not compiled under `lean` — the lean game_state
+// payload omits annotations and persistent_annotations entirely.
+#[cfg(not(feature = "lean"))]
 mod annotations;
 mod connect_resp;
 mod game_result;
 mod game_state;
+#[cfg(not(feature = "lean"))]
 mod helpers;
 mod turn_info;
 

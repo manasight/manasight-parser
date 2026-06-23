@@ -1,8 +1,14 @@
-//! Integration tests for [`manasight_parser::parse_whole_log`].
+//! Integration tests for [`manasight_parser::parse_whole_log`] and
+//! [`manasight_parser::wasm::StreamingParserCore`].
 //!
 //! Verifies that the sync entry point produces the same events as the
 //! entry-by-entry [`Router`] path, including trailing entries not followed
 //! by a header.
+//!
+//! Also verifies that [`StreamingParserCore`] (the host-testable streaming
+//! core) yields event-for-event equality with `parse_whole_log` across
+//! deterministic chunk sizes, CRLF inputs, mid-line splits, and random
+//! chunk sizes (via `proptest`).
 
 use manasight_parser::log::entry::LineBuffer;
 use manasight_parser::router::Router;
@@ -285,4 +291,279 @@ fn test_parse_whole_log_frame_prefixed_produces_same_game_events_as_unprefixed()
         events_prefixed, events_unprefixed,
         "frame-prefixed log must produce a byte-identical GameEvent stream to the unprefixed original",
     );
+}
+
+// ---------------------------------------------------------------------------
+// StreamingParserCore parity tests (#254)
+// ---------------------------------------------------------------------------
+
+/// Feeds `input` through a fresh [`StreamingParserCore`] in chunks of `chunk_size`
+/// bytes (clamped to valid UTF-8 boundaries by splitting on char boundaries),
+/// then finalises with `finish()`. Returns all collected events.
+///
+/// `chunk_size == 0` is treated as "whole input in one chunk".
+fn parse_via_streaming_core(input: &str, chunk_size: usize) -> Vec<GameEvent> {
+    use manasight_parser::wasm::StreamingParserCore;
+
+    let mut core = StreamingParserCore::new();
+    let mut events = Vec::new();
+
+    if chunk_size == 0 || chunk_size >= input.len() {
+        events.extend(core.push_chunk(input));
+    } else {
+        // Split on char boundaries so `&str` slices are always valid UTF-8.
+        let bytes = input.as_bytes();
+        let mut pos = 0;
+        while pos < bytes.len() {
+            let end = (pos + chunk_size).min(bytes.len());
+            // Advance end to the next char boundary.
+            let end = input
+                .char_indices()
+                .map(|(i, _)| i)
+                .find(|&i| i >= end)
+                .unwrap_or(bytes.len());
+            let chunk = &input[pos..end];
+            events.extend(core.push_chunk(chunk));
+            pos = end;
+        }
+    }
+
+    events.extend(core.finish());
+    events
+}
+
+// Multi-event fixture used across streaming parity tests.
+fn multi_event_input() -> String {
+    let gs_payload = serde_json::json!({
+        "greToClientEvent": {
+            "greToClientMessages": [{
+                "type": "GREMessageType_GameStateMessage",
+                "gameStateMessage": {
+                    "gameInfo": { "stage": "GameStage_Play" },
+                    "gameObjects": [],
+                    "zones": []
+                }
+            }]
+        }
+    });
+    format!(
+        "DETAILED LOGS: ENABLED\n\
+         [UnityCrossThreadLogger]authenticateResponse\n\
+         {{\"screenName\":\"TestPlayer\"}}\n\
+         [UnityCrossThreadLogger]2/25/2026 12:00:00 PM\n{gs_payload}\n\
+         [UnityCrossThreadLogger]2/25/2026 12:00:01 PM\nfiller\n"
+    )
+}
+
+#[test]
+fn test_streaming_core_chunk_size_1_parity() {
+    let input = multi_event_input();
+    let expected = parse_whole_log(&input);
+    let actual = parse_via_streaming_core(&input, 1);
+    assert_eq!(
+        expected, actual,
+        "chunk_size=1 must yield identical events to parse_whole_log"
+    );
+}
+
+#[test]
+fn test_streaming_core_chunk_size_2_parity() {
+    let input = multi_event_input();
+    let expected = parse_whole_log(&input);
+    let actual = parse_via_streaming_core(&input, 2);
+    assert_eq!(
+        expected, actual,
+        "chunk_size=2 must yield identical events to parse_whole_log"
+    );
+}
+
+#[test]
+fn test_streaming_core_chunk_size_3_parity() {
+    let input = multi_event_input();
+    let expected = parse_whole_log(&input);
+    let actual = parse_via_streaming_core(&input, 3);
+    assert_eq!(
+        expected, actual,
+        "chunk_size=3 must yield identical events to parse_whole_log"
+    );
+}
+
+#[test]
+fn test_streaming_core_chunk_size_7_parity() {
+    let input = multi_event_input();
+    let expected = parse_whole_log(&input);
+    let actual = parse_via_streaming_core(&input, 7);
+    assert_eq!(
+        expected, actual,
+        "chunk_size=7 must yield identical events to parse_whole_log"
+    );
+}
+
+#[test]
+fn test_streaming_core_chunk_size_64_parity() {
+    let input = multi_event_input();
+    let expected = parse_whole_log(&input);
+    let actual = parse_via_streaming_core(&input, 64);
+    assert_eq!(
+        expected, actual,
+        "chunk_size=64 must yield identical events to parse_whole_log"
+    );
+}
+
+#[test]
+fn test_streaming_core_whole_input_single_chunk_parity() {
+    let input = multi_event_input();
+    let expected = parse_whole_log(&input);
+    let actual = parse_via_streaming_core(&input, input.len());
+    assert_eq!(
+        expected, actual,
+        "whole-input single chunk must yield identical events to parse_whole_log"
+    );
+}
+
+/// CRLF line endings — `\r\n` sequences must be handled identically to `\n`.
+#[test]
+fn test_streaming_core_crlf_parity() {
+    // Build an input with CRLF line endings.
+    let lf_input = "DETAILED LOGS: ENABLED\n\
+                     [UnityCrossThreadLogger]authenticateResponse\n\
+                     {\"screenName\":\"CrlfPlayer\"}\n";
+    let crlf_input = lf_input.replace('\n', "\r\n");
+
+    let expected = parse_whole_log(lf_input);
+    // Feed the CRLF version through the streaming core in a single chunk.
+    let actual = parse_via_streaming_core(&crlf_input, crlf_input.len());
+    assert_eq!(
+        expected, actual,
+        "CRLF line endings must produce identical events to LF-only input"
+    );
+}
+
+/// Mid-line split: chunk boundary falls inside a line (not at `\n`).
+#[test]
+fn test_streaming_core_mid_line_split_parity() {
+    let input = "DETAILED LOGS: ENABLED\n\
+                  [UnityCrossThreadLogger]authenticateResponse\n\
+                  {\"screenName\":\"MidLinePlayer\"}\n";
+    let expected = parse_whole_log(input);
+    // chunk_size=5 is deliberately chosen to split mid-line.
+    let actual = parse_via_streaming_core(input, 5);
+    assert_eq!(
+        expected, actual,
+        "mid-line chunk split must not lose or duplicate events"
+    );
+}
+
+/// No trailing newline + empty-chunk case: final line ends without `\n`, and
+/// an additional empty chunk after finish must not cause panics or lost events.
+#[test]
+fn test_streaming_core_no_trailing_newline_parity() {
+    use manasight_parser::wasm::StreamingParserCore;
+
+    // The authenticateResponse entry has no trailing newline.
+    let input = "[UnityCrossThreadLogger]authenticateResponse\n\
+                  {\"screenName\":\"NoNewline\"}";
+    let expected = parse_whole_log(input);
+
+    let mut core = StreamingParserCore::new();
+    // Push the input, then push an empty chunk, then finish.
+    let mut events: Vec<GameEvent> = core.push_chunk(input);
+    let empty_batch = core.push_chunk(""); // must be a no-op
+    assert!(
+        empty_batch.is_empty(),
+        "empty chunk must return no events (tail unchanged)"
+    );
+    events.extend(core.finish());
+
+    assert_eq!(
+        expected, events,
+        "no-trailing-newline input must produce the same events via streaming core"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// FIX 2 — Trailing-\r parity: finish() must match str::lines() byte-for-byte
+// ---------------------------------------------------------------------------
+
+/// `finish()` must NOT strip a lone trailing `\r` from the final partial line.
+///
+/// `str::lines()` only removes `'\r'` as part of `"\r\n"`. When the final line
+/// has no trailing `'\n'`, the `'\r'` (if any) is part of the line's content
+/// and must be passed through unchanged. Stripping it in `finish()` would
+/// diverge from `parse_whole_log`'s `input.lines()` last element.
+///
+/// These tests confirm byte-for-byte equality between `StreamingParserCore`
+/// and `parse_whole_log` for inputs where the trailing `\r` case matters.
+#[test]
+fn test_streaming_core_crlf_with_trailing_cr_parity() {
+    use manasight_parser::wasm::StreamingParserCore;
+
+    // "a\r\nb\r" — CRLF-terminated first line, then a line ending in bare \r.
+    // str::lines() splits this as ["a", "b\r"] (the \r\n pair is stripped,
+    // but the final \r is not).
+    let input = "DETAILED LOGS: ENABLED\r\n[UnityCrossThreadLogger]authenticateResponse\r\n{\"screenName\":\"TrailingCR\"}\r";
+    let expected = parse_whole_log(input);
+
+    let mut core = StreamingParserCore::new();
+    let mut events: Vec<GameEvent> = core.push_chunk(input);
+    events.extend(core.finish());
+
+    assert_eq!(
+        expected, events,
+        "input ending with bare \\r (not \\r\\n): streaming core must match parse_whole_log"
+    );
+}
+
+#[test]
+fn test_streaming_core_lone_trailing_cr_parity() {
+    use manasight_parser::wasm::StreamingParserCore;
+
+    // "foo\r" — a single line with a bare trailing \r and no \n.
+    // str::lines() returns ["foo\r"] (the \r is NOT stripped because there is no \n).
+    let input = "DETAILED LOGS: ENABLED\rfoo\r";
+    let expected = parse_whole_log(input);
+
+    let mut core = StreamingParserCore::new();
+    let mut events: Vec<GameEvent> = core.push_chunk(input);
+    events.extend(core.finish());
+
+    assert_eq!(
+        expected, events,
+        "input with only bare \\r (no \\n): streaming core must match parse_whole_log"
+    );
+}
+
+/// Regression guard: `"a\r\n"` (CRLF + trailing newline) must still produce
+/// the same events as `parse_whole_log` — the `push_chunk` CRLF stripping
+/// path must remain intact.
+#[test]
+fn test_streaming_core_crlf_trailing_newline_parity() {
+    let input = "DETAILED LOGS: ENABLED\r\n";
+    let expected = parse_whole_log(input);
+    let actual = parse_via_streaming_core(input, input.len());
+    assert_eq!(
+        expected, actual,
+        "CRLF input with trailing newline must match parse_whole_log"
+    );
+}
+
+/// Proptest: random chunk sizes must produce identical events to `parse_whole_log`.
+#[cfg(not(target_arch = "wasm32"))]
+mod streaming_proptest {
+    use super::{multi_event_input, parse_via_streaming_core};
+    use manasight_parser::parse_whole_log;
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn test_streaming_core_random_chunk_size_parity(chunk_size in 1usize..=512) {
+            let input = multi_event_input();
+            let expected = parse_whole_log(&input);
+            let actual = parse_via_streaming_core(&input, chunk_size);
+            prop_assert_eq!(
+                expected, actual,
+                "chunk_size={} must yield identical events", chunk_size
+            );
+        }
+    }
 }

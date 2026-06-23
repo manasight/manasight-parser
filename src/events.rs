@@ -18,11 +18,15 @@ use sha2::{Digest, Sha256};
 /// Serialize `Vec<u8>` as a base64 string (RFC 4648 standard alphabet).
 mod base64_serde {
     use base64::prelude::{Engine as _, BASE64_STANDARD};
-    use serde::{Deserialize, Deserializer, Serializer};
+    use serde::{Deserialize, Deserializer};
 
+    // `serialize` is only referenced by `EventMetadata`'s `Serialize` impl for the
+    // `raw_bytes` field. Under the `lean` feature, that field is `skip_serializing`,
+    // so the serializer is never called — gate the function accordingly.
+    #[cfg(not(feature = "lean"))]
     pub fn serialize<S>(bytes: &[u8], serializer: S) -> Result<S::Ok, S::Error>
     where
-        S: Serializer,
+        S: serde::Serializer,
     {
         serializer.serialize_str(&BASE64_STANDARD.encode(bytes))
     }
@@ -403,6 +407,16 @@ impl PerformanceClass {
 ///
 /// Deserialization also enforces this invariant: the hash is recomputed from
 /// `raw_bytes` during deserialization rather than trusting the serialized value.
+///
+/// **Caveat under `lean`:** The `lean` feature omits `raw_bytes` from
+/// serialized output (`skip_serializing`). If a lean-serialized `EventMetadata`
+/// is Rust-deserialized (e.g. in tests using `serde_wasm_bindgen::from_value`),
+/// the custom `Deserialize` impl recomputes `raw_bytes_hash` from the
+/// now-empty `raw_bytes`, yielding a hash of the empty byte slice rather than
+/// the original. Production JS consumers read the correctly-serialized wire
+/// hash (computed at parse time from the real bytes) and are unaffected.
+/// To avoid this, compare serialized `serde_json::Value` forms rather than
+/// round-tripping through the typed `Deserialize` impl under `lean`.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct EventMetadata {
     /// Local wall-clock timestamp parsed from the log entry header, stored
@@ -427,6 +441,10 @@ pub struct EventMetadata {
 
     /// Original log entry bytes, serialized as base64. Private to prevent
     /// mutation that would break the `raw_bytes_hash` invariant.
+    ///
+    /// Under the `lean` feature this field is omitted from serialized output
+    /// (but `raw_bytes_hash` is always retained for server-side deduplication).
+    #[cfg_attr(feature = "lean", serde(skip_serializing))]
     #[serde(with = "base64_serde")]
     raw_bytes: Vec<u8>,
 
@@ -548,6 +566,14 @@ impl<'de> Deserialize<'de> for EventMetadata {
             timestamp: Option<DateTime<Utc>>,
             #[serde(default)]
             instant_utc: Option<DateTime<Utc>>,
+            /// `raw_bytes` may be absent when deserializing a lean-serialized
+            /// event (the `lean` feature skips this field on serialization).
+            /// Under `lean`, `#[serde(default)]` causes serde to use
+            /// `Vec::default()` (empty) when the field is absent, preserving
+            /// round-trip compatibility. Under non-lean (the default build),
+            /// the field is strictly required, preserving the hash invariant
+            /// and catching truncated/malformed payloads at deserialization time.
+            #[cfg_attr(feature = "lean", serde(default))]
             #[serde(with = "base64_serde")]
             raw_bytes: Vec<u8>,
             // Accepts any format (hex string, integer array) or absence.
@@ -1324,7 +1350,12 @@ mod tests {
     }
 
     // -- Serialization round-trip --
+    // Under `lean`, `raw_bytes` is skip_serializing, so the serialized
+    // output does not contain `raw_bytes`. The deserialized metadata will
+    // have empty `raw_bytes` (and thus a different hash), making these
+    // round-trip equality checks invalid under lean. Gate them accordingly.
 
+    #[cfg(not(feature = "lean"))]
     #[test]
     fn test_game_event_serde_round_trip_all_variants() -> TestResult {
         for event in all_variants() {
@@ -1335,6 +1366,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(not(feature = "lean"))]
     #[test]
     fn test_event_metadata_serde_round_trip() -> TestResult {
         let meta = make_metadata(b"round trip test");
@@ -1345,6 +1377,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(not(feature = "lean"))]
     #[test]
     fn test_event_metadata_deserialize_recomputes_hash() -> TestResult {
         let meta = make_metadata(b"test data");
@@ -1378,6 +1411,9 @@ mod tests {
 
     // -- Wire format --
 
+    /// Under lean, `raw_bytes` is skipped during serialization; this test
+    /// only makes sense for the non-lean build where raw_bytes is present.
+    #[cfg(not(feature = "lean"))]
     #[test]
     fn test_event_metadata_serializes_raw_bytes_as_base64() -> TestResult {
         let meta = make_metadata(b"hello world");
@@ -1431,6 +1467,9 @@ mod tests {
         Ok(())
     }
 
+    /// Under lean, `raw_bytes` is skipped in serialized output so the
+    /// round-trip equality check does not hold. Gate under not(lean).
+    #[cfg(not(feature = "lean"))]
     #[test]
     fn test_event_metadata_none_timestamp_serde_round_trip() -> TestResult {
         let meta = EventMetadata::new(None, b"no timestamp".to_vec());
@@ -1455,6 +1494,9 @@ mod tests {
 
     // -- instant_utc serde round-trips -----------------------------------------
 
+    /// Under lean, `raw_bytes` is skipped in serialized output; gate the
+    /// round-trip equality check accordingly.
+    #[cfg(not(feature = "lean"))]
     #[test]
     fn test_event_metadata_with_instant_utc_serde_round_trip() -> TestResult {
         // A payload WITH instant_utc must survive a full serialize → deserialize

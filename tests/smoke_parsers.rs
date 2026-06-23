@@ -16,24 +16,35 @@
 
 mod smoke_common;
 
+// Imports used only by the full (non-lean) smoke test are gated accordingly.
+#[cfg(not(feature = "lean"))]
 use std::collections::HashMap;
+#[cfg(not(feature = "lean"))]
 use std::fmt::Write as FmtWrite;
+#[cfg(not(feature = "lean"))]
 use std::path::Path;
 
+#[cfg(not(feature = "lean"))]
 use manasight_parser::events::GameEvent;
+#[cfg(not(feature = "lean"))]
 use manasight_parser::log::entry::LineBuffer;
+#[cfg(not(feature = "lean"))]
 use manasight_parser::log::timestamp::parse_log_timestamp;
 
+#[cfg(not(feature = "lean"))]
 use smoke_common::{
-    all_parsers, compare_against_baseline, event_type_name, is_bless_mode, read_baseline,
-    write_baseline, Baseline, BaselineFile, BaselineMeta, NamedParser, ParserStats,
+    all_parsers, compare_against_baseline, event_type_name, is_bless_mode, write_baseline,
+    Baseline, BaselineFile, BaselineMeta, NamedParser, ParserStats,
 };
+// `read_baseline` is also used by `test_baseline_meta_fields_present` (non-gated).
+use smoke_common::read_baseline;
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
 /// Aggregated report for a single log file.
+#[cfg(not(feature = "lean"))]
 struct FileReport {
     filename: String,
     /// Set when the file could not be read; remaining fields are zeroed.
@@ -69,6 +80,7 @@ struct FileReport {
     deck_collection_invariant_violations: usize,
 }
 
+#[cfg(not(feature = "lean"))]
 impl FileReport {
     /// Converts this report into a `BaselineFile` for ratchet comparison.
     fn to_baseline_file(&self) -> BaselineFile {
@@ -100,6 +112,7 @@ impl FileReport {
 // ---------------------------------------------------------------------------
 
 /// Tracks presence and counts of fields within `GameStateMessage` payloads.
+#[cfg(not(feature = "lean"))]
 #[derive(Default)]
 struct GsmFieldStats {
     turn_info_present: usize,
@@ -113,6 +126,7 @@ struct GsmFieldStats {
     diff_deleted_total: usize,
 }
 
+#[cfg(not(feature = "lean"))]
 impl GsmFieldStats {
     /// Updates stats from a single `GameState` event payload.
     fn track(&mut self, payload: &serde_json::Value) {
@@ -169,12 +183,14 @@ impl GsmFieldStats {
 // ---------------------------------------------------------------------------
 
 /// Tracks corpus-derived payload invariants for `DeckCollection` events.
+#[cfg(not(feature = "lean"))]
 #[derive(Default)]
 struct DeckCollectionStats {
     events: usize,
     invariant_violations: usize,
 }
 
+#[cfg(not(feature = "lean"))]
 impl DeckCollectionStats {
     /// Updates stats from a single `DeckCollection` event payload.
     fn track(&mut self, payload: &serde_json::Value) {
@@ -250,6 +266,7 @@ impl DeckCollectionStats {
 /// the remaining text as a timestamp. If the full text doesn't parse
 /// (e.g. timestamp followed by event content on the same line), tries
 /// progressively shorter prefixes.
+#[cfg(not(feature = "lean"))]
 fn try_extract_timestamp(body: &str) -> Option<chrono::DateTime<chrono::Utc>> {
     let first_line = body.lines().next()?;
     let content = match first_line.find(']') {
@@ -290,6 +307,7 @@ fn try_extract_timestamp(body: &str) -> Option<chrono::DateTime<chrono::Utc>> {
 /// `<== StartHook` responses contain both `InventoryInfo` and `Decks`/`DeckSummaries`,
 /// so the `inventory` and `collection` parsers legitimately claim the same
 /// entry -- each extracting different data from the shared response.
+#[cfg(not(feature = "lean"))]
 fn is_known_overlap(claimants: &[&str]) -> bool {
     claimants
         .iter()
@@ -301,6 +319,7 @@ fn is_known_overlap(claimants: &[&str]) -> bool {
 // ---------------------------------------------------------------------------
 
 /// Creates an error `FileReport` when a file cannot be read.
+#[cfg(not(feature = "lean"))]
 fn error_report(filename: String, parsers: &[NamedParser]) -> FileReport {
     FileReport {
         filename,
@@ -329,6 +348,7 @@ fn error_report(filename: String, parsers: &[NamedParser]) -> FileReport {
 }
 
 /// Processes a single log file through all parsers and returns a report.
+#[cfg(not(feature = "lean"))]
 fn process_file(path: &Path, parsers: &[NamedParser]) -> FileReport {
     let filename = path
         .file_name()
@@ -436,6 +456,7 @@ fn process_file(path: &Path, parsers: &[NamedParser]) -> FileReport {
     }
 }
 
+#[cfg(not(feature = "lean"))]
 fn write_deck_collection_report(out: &mut String, report: &FileReport) {
     let _ = writeln!(out, "  DeckCollection payloads:");
     let _ = writeln!(
@@ -450,6 +471,7 @@ fn write_deck_collection_report(out: &mut String, report: &FileReport) {
     );
 }
 
+#[cfg(not(feature = "lean"))]
 fn write_event_type_breakdown(out: &mut String, report: &FileReport) {
     let _ = writeln!(out, "  Event type breakdown:");
     let mut sorted_types: Vec<(&&'static str, &usize)> = report.event_type_counts.iter().collect();
@@ -468,6 +490,7 @@ fn write_event_type_breakdown(out: &mut String, report: &FileReport) {
 // ---------------------------------------------------------------------------
 
 /// Formats all file reports into a human-readable summary.
+#[cfg(not(feature = "lean"))]
 fn format_report(reports: &[FileReport]) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "\n=== Smoke Test Report ===\n");
@@ -578,6 +601,7 @@ fn format_report(reports: &[FileReport]) -> String {
 
 /// Converts file reports into a map suitable for ratchet comparison
 /// or baseline generation.
+#[cfg(not(feature = "lean"))]
 fn reports_to_baseline_files(
     reports: &[FileReport],
 ) -> std::collections::BTreeMap<String, BaselineFile> {
@@ -592,11 +616,13 @@ fn reports_to_baseline_files(
 ///
 /// In CI, this is set to the release tag of the downloaded corpus (e.g.
 /// `manasight-corpus-v3`).  For local runs it falls back to `"local"`.
+#[cfg(not(feature = "lean"))]
 fn read_corpus_tag() -> String {
     std::env::var("CORPUS_TAG").unwrap_or_else(|_| "local".to_string())
 }
 
 /// Builds a full `Baseline` from actual results for bless mode.
+#[cfg(not(feature = "lean"))]
 fn build_baseline(actual: &std::collections::BTreeMap<String, BaselineFile>) -> Baseline {
     // Get current git commit hash for metadata, falling back gracefully.
     let commit = std::process::Command::new("git")
@@ -630,7 +656,12 @@ fn build_baseline(actual: &std::collections::BTreeMap<String, BaselineFile>) -> 
 // Test entry point
 // ---------------------------------------------------------------------------
 
+/// Corpus-fidelity smoke test. Skipped under `lean` because `lean` intentionally
+/// omits payload fields (DeckCollection `raw_start_hook`/`decks`, GameState
+/// annotations/timers/zones/game_objects) that these invariants assert. CI runs
+/// this test on default (non-lean) features only.
 #[test]
+#[cfg(not(feature = "lean"))]
 fn smoke_test_real_logs() {
     let Some(logs_dir) = smoke_common::logs_dir_or_skip("smoke_test_real_logs") else {
         return;

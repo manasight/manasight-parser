@@ -105,6 +105,10 @@ define_payload_extractor!(draft_human_payload, DraftHuman);
 define_payload_extractor!(draft_complete_payload, DraftComplete);
 define_payload_extractor!(lifecycle_payload, EventLifecycle);
 define_payload_extractor!(rank_payload, Rank);
+// `deck_collection_payload` is only used by the matching sub-module of
+// deck_collection tests, which is gated under not(lean) because the lean
+// build omits the deck payload. Gate accordingly to silence dead_code.
+#[cfg(not(feature = "lean"))]
 define_payload_extractor!(deck_collection_payload, DeckCollection);
 define_payload_extractor!(inventory_payload, Inventory);
 define_payload_extractor!(match_connection_state_payload, MatchConnectionState);

@@ -55,11 +55,18 @@ brace_depth_flush = []
 # tokio and known-folders. Disable to build a pure-sync WASM-compatible
 # subset of the crate (see `parse_whole_log`).
 tailer = ["dep:tokio", "dep:known-folders"]
-# wasm-bindgen export of `parseWholeLog` for use in a browser/Node Parse Worker.
-# Build with: wasm-pack build --target web --no-default-features --features wasm
+# Lean serialization: omits `raw_bytes` from EventMetadata and drops heavy payload
+# fields (annotations, game objects, zones, etc.) that the WASM consumer does not
+# use. The default/native build is byte-identical when this feature is disabled.
+# `raw_bytes_hash` is always retained for server-side event deduplication.
+lean = []
+# wasm-bindgen export of `parseWholeLog` and `StreamingParser` for use in a
+# browser/Node Parse Worker.
+# Build with: wasm-pack build --target bundler --no-default-features --features wasm
 # Includes brace_depth_flush for consistent flush semantics as the desktop default.
+# Automatically enables `lean` to minimize WASM memory usage.
 # Does NOT pull in tailer (no tokio / known-folders), keeping the artifact wasm-safe.
-wasm = ["dep:wasm-bindgen", "dep:serde-wasm-bindgen", "brace_depth_flush"]
+wasm = ["dep:wasm-bindgen", "dep:serde-wasm-bindgen", "brace_depth_flush", "lean"]
 
 [lints.clippy]
 # Pedantic lints as warnings
