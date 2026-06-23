@@ -4,6 +4,46 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.6.1] - 2026-06-22
+
+### Added
+
+- **`StreamingParser`** (`wasm` feature) — an incremental parse API
+  (`pushChunk` / `finish`) so consumers can stream very large logs at bounded
+  memory instead of materializing the whole log at once. Backed by a
+  host-testable `StreamingParserCore`; feeding a log in arbitrary byte chunks
+  yields event-for-event equality with `parse_whole_log` (`pushChunk` replicates
+  `str::lines()` exactly, including CRLF and split-boundary handling)
+  ([#254], [#255]).
+- **`lean` Cargo feature** — omits `raw_bytes` from `EventMetadata` (retaining
+  `raw_bytes_hash` for server-side deduplication) and drops never-read payload
+  fields (GameState `annotations` / `game_objects` / `zones` / `timers` /
+  `persistent_annotations`, the `DeckCollection` deck lists, and the inner
+  payload of never-consumed event variants) to minimize WASM memory and
+  bandwidth. Automatically enabled by the `wasm` feature; the default/native
+  build is byte-identical ([#254], [#255]).
+
+### Changed
+
+- Documentation: reconciled the WASM build command to `wasm-pack build
+  --target bundler` and documented the `lean` payload omissions across the
+  module, parser, and `README` docs ([#254], [#255]).
+- Internal dependency and CI bumps: `wasm-bindgen-test` 0.3.63 → 0.3.75
+  ([#250]), `log` 0.4.32 → 0.4.33 ([#249]), `actions/checkout` 4 → 7 ([#247]),
+  and `rust-lang/crates-io-auth-action` 1.0.4 → 1.0.5.
+
+### Notes
+
+- This release is **additive and backward-compatible**. The default (non-`lean`)
+  serialized output is unchanged; `lean` field omission and the `StreamingParser`
+  API are opt-in via the `wasm`/`lean` features.
+
+[#247]: https://github.com/manasight/manasight-parser/pull/247
+[#249]: https://github.com/manasight/manasight-parser/pull/249
+[#250]: https://github.com/manasight/manasight-parser/pull/250
+[#254]: https://github.com/manasight/manasight-parser/issues/254
+[#255]: https://github.com/manasight/manasight-parser/pull/255
+
 ## [0.6.0] - 2026-06-20
 
 ### Added
