@@ -72,8 +72,9 @@ pub use event_bus::Subscriber;
 pub use events::{
     ClientActionEvent, DeckCollectionEvent, DeckSubmissionEvent, DetailedLoggingStatusEvent,
     DraftBotEvent, DraftCompleteEvent, DraftHumanEvent, EventLifecycleEvent, EventMetadata,
-    GameEvent, GameResultEvent, GameStateEvent, InventoryEvent, LogFileRotatedEvent,
-    MatchStateEvent, PerformanceClass, RankEvent, SessionEvent, TruncationEvent,
+    GameEvent, GameResultEvent, GameStateEvent, InventoryEvent, LocalSeatEvent,
+    LogFileRotatedEvent, MatchStateEvent, PerformanceClass, RankEvent, SessionEvent,
+    TruncationEvent,
 };
 pub use sanitize::{scrub_raw_log, scrub_raw_log_with, ScrubOptions};
 #[cfg(feature = "tailer")]

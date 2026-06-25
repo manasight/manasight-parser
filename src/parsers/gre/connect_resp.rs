@@ -500,7 +500,10 @@ mod tests {
         /// `greToClientMessages` array carries `[ConnectResp,
         /// DieRollResultsResp, GameStateMessage]`. The parser must emit the
         /// `ConnectResp` event first, followed by the GSM in source-array
-        /// order; the unhandled `DieRollResultsResp` is dropped.
+        /// order; the unhandled `DieRollResultsResp` is dropped. No `LocalSeat`
+        /// event is produced: a `ConnectResp` is present, so its `connect_resp`
+        /// channel is the authoritative local-seat source and the sibling GSM's
+        /// wrapper seat is not second-guessed.
         #[test]
         fn test_try_parse_connect_resp_bundled_with_gsm_emits_two_events() {
             let body = connect_resp_with_bundled_gsm_body();

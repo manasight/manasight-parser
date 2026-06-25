@@ -135,6 +135,7 @@ macro_rules! delegate_to_inner {
             Self::WebSocketClosed(e) => e.$method(),
             Self::ConnectionError(e) => e.$method(),
             Self::Truncation(e) => e.$method(),
+            Self::LocalSeat(e) => e.$method(),
         }
     };
 }
@@ -283,6 +284,26 @@ pub enum GameEvent {
     /// `{"object_count": N, "annotation_count": M}`; timestamp lives in
     /// `EventMetadata`. Class 1 — interactive dispatch.
     Truncation(TruncationEvent),
+
+    /// Local player's seat, recovered from a client-directed GRE message.
+    ///
+    /// The local seat is normally surfaced via `connect_resp.system_seat_ids`,
+    /// but when the client summarizes a `ConnectResp` (game state exceeds its
+    /// internal `GameObject` limit) no `connect_resp` event is emitted for the
+    /// match and that seat channel is lost. Client-directed GRE messages
+    /// (`GameStateMessage`, `PromptReq`, `MulliganReq`, …) carry a wrapper
+    /// `systemSeatIds` array; a singleton `[N]` identifies the local player's
+    /// seat and survives summarization (valid GRE envelopes flank the
+    /// `Truncation` marker). This event surfaces that seat so consumers can
+    /// resolve the local player even with no `connect_resp`.
+    ///
+    /// Payload is `{"system_seat_id": N}`. Emitted (idempotently) for each
+    /// client-directed entry carrying a singleton wrapper seat — the parser is
+    /// stateless per entry, so consumers dedup by match using event ordering
+    /// relative to `match_started` / `match_completed`, exactly as they
+    /// already associate the seatless `connect_resp` channel.
+    /// Class 1 — interactive dispatch.
+    LocalSeat(LocalSeatEvent),
 }
 
 impl GameEvent {
@@ -302,7 +323,8 @@ impl GameEvent {
             | Self::TcpConnectionClose(_)
             | Self::WebSocketClosed(_)
             | Self::ConnectionError(_)
-            | Self::Truncation(_) => PerformanceClass::InteractiveDispatch,
+            | Self::Truncation(_)
+            | Self::LocalSeat(_) => PerformanceClass::InteractiveDispatch,
             Self::DraftBot(_)
             | Self::DraftHuman(_)
             | Self::DraftComplete(_)
@@ -832,6 +854,38 @@ impl TruncationEvent {
 }
 
 define_event! {
+    /// Local player's seat, recovered from a client-directed GRE message.
+    ///
+    /// Surfaces the local seat from the wrapper `systemSeatIds` of a
+    /// client-directed GRE message (a singleton `[N]`), independent of
+    /// `ConnectResp` — which the client may summarize away (see
+    /// [`GameEvent::LocalSeat`]). The payload carries `{"system_seat_id": N}`.
+    ///
+    /// `raw_bytes` is empty (like [`TruncationEvent`], the payload is the whole
+    /// event). Unlike `TruncationEvent` — whose source body is irrecoverable —
+    /// this event *does* have a source GRE envelope, but the sibling
+    /// [`GameStateEvent`] / [`GameResultEvent`] parsed from the same entry
+    /// already carries that body's `raw_bytes`; the seat is a derived signal, so
+    /// re-fingerprinting the parent entry here would only duplicate it.
+    LocalSeatEvent
+}
+
+impl LocalSeatEvent {
+    /// Creates a local-seat event from a recovered system seat id.
+    pub fn new_local_seat(timestamp: Option<DateTime<Utc>>, system_seat_id: i64) -> Self {
+        let metadata = EventMetadata::new(timestamp, Vec::new());
+        let payload = serde_json::json!({ "system_seat_id": system_seat_id });
+        Self::new(metadata, payload)
+    }
+
+    /// Returns the recovered local system seat id, or `None` if the payload
+    /// was manually constructed without the field.
+    pub fn system_seat_id(&self) -> Option<i64> {
+        self.payload()["system_seat_id"].as_i64()
+    }
+}
+
+define_event! {
     /// Match connection state machine transition event.
     ///
     /// Parsed from `[UnityCrossThreadLogger]STATE CHANGED {...}` entries.
@@ -973,6 +1027,7 @@ mod tests {
             GameEvent::WebSocketClosed(WebSocketClosedEvent::new(meta.clone(), payload.clone())),
             GameEvent::ConnectionError(ConnectionErrorEvent::new(meta.clone(), payload.clone())),
             GameEvent::Truncation(TruncationEvent::new(meta.clone(), payload.clone())),
+            GameEvent::LocalSeat(LocalSeatEvent::new(meta.clone(), payload.clone())),
         ]
     }
 
@@ -1221,6 +1276,7 @@ mod tests {
             PerformanceClass::InteractiveDispatch, // WebSocketClosed
             PerformanceClass::InteractiveDispatch, // ConnectionError
             PerformanceClass::InteractiveDispatch, // Truncation
+            PerformanceClass::InteractiveDispatch, // LocalSeat
         ];
 
         assert_eq!(
@@ -1342,6 +1398,7 @@ mod tests {
             1, // WebSocketClosed
             1, // ConnectionError
             1, // Truncation
+            1, // LocalSeat
         ];
         assert_eq!(events.len(), expected_numbers.len());
         for (event, expected_num) in events.iter().zip(expected_numbers.iter()) {
@@ -1739,6 +1796,32 @@ mod tests {
         let event = TruncationEvent::new_truncation(None, 51, 0);
         assert!(event.metadata().local_timestamp().is_none());
         assert_eq!(event.object_count(), Some(51));
+    }
+
+    // -- LocalSeatEvent --
+
+    #[test]
+    fn test_local_seat_event_payload_contains_seat() {
+        let event = LocalSeatEvent::new_local_seat(None, 1);
+        assert_eq!(event.payload()["system_seat_id"], 1);
+        assert_eq!(event.system_seat_id(), Some(1));
+    }
+
+    #[test]
+    fn test_local_seat_event_metadata_has_empty_raw_bytes() {
+        // Following the TruncationEvent precedent — the seat is derived, not a
+        // distinct loggable body, so raw_bytes adds no fingerprint value.
+        let event = LocalSeatEvent::new_local_seat(None, 2);
+        assert!(event.metadata().raw_bytes().is_empty());
+    }
+
+    #[test]
+    fn test_local_seat_event_is_interactive_dispatch() {
+        let event = GameEvent::LocalSeat(LocalSeatEvent::new_local_seat(None, 1));
+        assert_eq!(
+            event.performance_class(),
+            PerformanceClass::InteractiveDispatch
+        );
     }
 
     #[test]

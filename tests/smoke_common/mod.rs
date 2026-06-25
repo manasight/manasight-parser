@@ -155,6 +155,7 @@ pub fn event_type_name(event: &GameEvent) -> &'static str {
         GameEvent::Inventory(_) => "Inventory",
         GameEvent::DeckSubmission(_) => "DeckSubmission",
         GameEvent::GameResult(_) => "GameResult",
+        GameEvent::LocalSeat(_) => "LocalSeat",
         GameEvent::LogFileRotated(_) => "LogFileRotated",
         GameEvent::DetailedLoggingStatus(_) => "DetailedLoggingStatus",
         // `GameEvent` is `#[non_exhaustive]`; this branch keeps the compiler

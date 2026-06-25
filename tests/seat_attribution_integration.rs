@@ -194,6 +194,96 @@ fn test_graceful_degradation_no_connect_resp_no_panic() {
 }
 
 // ---------------------------------------------------------------------------
+// Test 5: Truncation-resilient local seat — no ConnectResp
+// ---------------------------------------------------------------------------
+
+/// Verifies that when no `ConnectResp` is present (so the usual
+/// `connect_resp.system_seat_ids` seat channel is absent), the local player's
+/// seat is still recovered from a client-directed GSM's wrapper
+/// `systemSeatIds` and surfaced as a `GameEvent::LocalSeat`.
+///
+/// Uses the `no_connect_resp` fixture, which carries a `GameStateMessage`
+/// addressed to seat 1 (singleton wrapper) but no `ConnectResp`.
+#[test]
+fn test_local_seat_recovered_without_connect_resp() {
+    let events = parse_whole_log(FIXTURE_NO_CONNECT_RESP);
+
+    // No ConnectResp event — the only seat channel is the recovered LocalSeat.
+    let has_connect_resp = events
+        .iter()
+        .any(|e| matches!(e, GameEvent::GameState(_)) && e.payload()["type"] == "connect_resp");
+    assert!(
+        !has_connect_resp,
+        "fixture must not produce a connect_resp event"
+    );
+
+    let local_seat_event = events
+        .iter()
+        .find(|e| matches!(e, GameEvent::LocalSeat(_)))
+        .unwrap_or_else(|| {
+            unreachable!("expected a LocalSeat event recovered from the GSM wrapper seat")
+        });
+
+    assert_eq!(
+        local_seat_event.payload()["system_seat_id"],
+        1,
+        "recovered local seat must be 1 (the singleton wrapper systemSeatIds)"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 6: Truncation-resilient local seat — summarized ConnectResp
+// ---------------------------------------------------------------------------
+
+/// The exact production shape from the issue: a match whose `ConnectResp` was
+/// summarized away (emitted as a `Truncation` marker), so zero `connect_resp`
+/// events exist — yet a surrounding client-directed GSM still carries the
+/// wrapper seat. The local seat must still be surfaced via `LocalSeat`.
+#[test]
+fn test_local_seat_recovered_with_summarized_connect_resp() {
+    // A summarized-ConnectResp marker block flanked by a valid GSM that carries
+    // the wrapper `systemSeatIds: [1]`. Mirrors the real Player.log shape where
+    // Arena emits the marker in place of the over-limit message while
+    // surrounding GRE envelopes continue to log normally.
+    let log = "\
+[UnityCrossThreadLogger]5/13/2026 10:01:11 AM\n\
+{\"greToClientEvent\":{\"greToClientMessages\":[{\"type\":\"GREMessageType_GameStateMessage\",\"systemSeatIds\":[1],\"msgId\":2,\"gameStateId\":1,\"gameStateMessage\":{\"type\":\"GameStateType_Diff\",\"prevGameStateId\":0,\"zones\":[],\"gameObjects\":[]}}]}}\n\
+[UnityCrossThreadLogger]5/13/2026 10:01:12 AM: Match to <transaction>: GreToClientEvent\n\
+[Message summarized because one or more GameStateMessages exceeded the 50 GameObject or 50 Annotation limit.]\n\
+::: GameStateMessage\n\
+:: GameObject Count = 63\n\
+:: Annotation Count = 4\n\
+::: ConnectResp\n\
+[UnityCrossThreadLogger]5/13/2026 10:01:13 AM Next\n";
+
+    let events = parse_whole_log(log);
+
+    // The summarized block becomes a Truncation event (no seat), and there is
+    // no connect_resp event for the match.
+    let has_truncation = events.iter().any(|e| matches!(e, GameEvent::Truncation(_)));
+    assert!(
+        has_truncation,
+        "summarized block must emit a Truncation event"
+    );
+    let has_connect_resp = events
+        .iter()
+        .any(|e| matches!(e, GameEvent::GameState(_)) && e.payload()["type"] == "connect_resp");
+    assert!(
+        !has_connect_resp,
+        "a summarized ConnectResp must not produce a connect_resp event"
+    );
+
+    // The local seat is still recovered from the surrounding GSM wrapper seat.
+    let local_seat_event = events
+        .iter()
+        .find(|e| matches!(e, GameEvent::LocalSeat(_)))
+        .unwrap_or_else(|| {
+            unreachable!("expected a LocalSeat event despite the summarized ConnectResp")
+        });
+    assert_eq!(local_seat_event.payload()["system_seat_id"], 1);
+}
+
+// ---------------------------------------------------------------------------
 // Test 4: Scrub-path — keep_player_names: false
 // ---------------------------------------------------------------------------
 
