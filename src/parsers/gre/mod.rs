@@ -183,6 +183,24 @@ pub fn try_parse(
         events.extend(emit_gsm_events(msg, body, timestamp));
     }
 
+    // If no rich event (ConnectResp / GSM) was produced, fall back to a
+    // low-value noise-type marker (UIMessage, TimerStateMessage,
+    // SetSettingsResp). Claimed with a minimal payload so they don't inflate
+    // the unclaimed-entry residual. This is *pushed* (not early-returned) so
+    // the `LocalSeat` append below stays purely additive and can never preempt
+    // it — a seat-bearing sibling message must not delete this noise marker.
+    if events.is_empty() {
+        for &noise_type in NOISE_MESSAGE_TYPES {
+            if find_message_by_type(messages, noise_type).is_some() {
+                ::log::trace!("greToClientEvent: claimed noise type {noise_type}");
+                let payload = serde_json::json!({ "recognized_type": noise_type });
+                let metadata = EventMetadata::new(timestamp, body.as_bytes().to_vec());
+                events.push(GameEvent::GameState(GameStateEvent::new(metadata, payload)));
+                break;
+            }
+        }
+    }
+
     // Recover the local player's seat from the wrapper `systemSeatIds` of a
     // client-directed GRE message (a singleton `[N]`). This is the
     // summarization-resilient seat channel: when the client summarizes a
@@ -190,33 +208,21 @@ pub fn try_parse(
     // surrounding GRE envelopes still carry the wrapper seat. Stateless and
     // per-entry — emitted (idempotently) whenever a singleton wrapper seat is
     // observed, so consumers associate it to a match via event ordering, just
-    // as they do the seatless `connect_resp` channel. Appended after the GSM
-    // events to preserve their existing ordering guarantees.
+    // as they do the seatless `connect_resp` channel. Appended LAST so it is
+    // purely additive — it never preempts the ConnectResp/GSM or noise events
+    // above (which would otherwise drop their `GameState`).
     if let Some(seat) = find_local_seat(messages) {
         events.push(GameEvent::LocalSeat(LocalSeatEvent::new_local_seat(
             timestamp, seat,
         )));
     }
 
-    if !events.is_empty() {
-        return events;
+    if events.is_empty() {
+        // Unrecognized GRE message type — log and skip.
+        ::log::debug!("greToClientEvent: no recognized message type found");
     }
 
-    // Check for low-value noise types (UIMessage, TimerStateMessage,
-    // SetSettingsResp). Claimed with a minimal payload so they don't inflate
-    // the unclaimed-entry residual.
-    for &noise_type in NOISE_MESSAGE_TYPES {
-        if find_message_by_type(messages, noise_type).is_some() {
-            ::log::trace!("greToClientEvent: claimed noise type {noise_type}");
-            let payload = serde_json::json!({ "recognized_type": noise_type });
-            let metadata = EventMetadata::new(timestamp, body.as_bytes().to_vec());
-            return vec![GameEvent::GameState(GameStateEvent::new(metadata, payload))];
-        }
-    }
-
-    // Unrecognized GRE message type — log and skip.
-    ::log::debug!("greToClientEvent: no recognized message type found");
-    Vec::new()
+    events
 }
 
 /// Builds the [`GameEvent`]s produced by a `GameStateMessage` /
@@ -321,6 +327,15 @@ fn find_message_by_type<'a>(
 /// singleton seat. Multi-element wrappers (a message addressed to both seats)
 /// are ignored, again so the opponent's seat is never mistaken for the local
 /// one.
+///
+/// Low-value **noise** message types ([`NOISE_MESSAGE_TYPES`]: `UIMessage`,
+/// `TimerStateMessage`, `SetSettingsResp`) are skipped. They are not part of
+/// the seat signal scoped by #257 (`GameStateMessage` / `PromptReq` /
+/// `MulliganReq`) — a `UIMessage` in particular is an emote/hover notification,
+/// not game-state-bearing. Skipping them keeps the seat a game signal and,
+/// crucially, lets a noise-only entry fall through to the noise fallback in
+/// [`try_parse`] (which emits its `GameState { recognized_type }` marker)
+/// instead of being preempted by a `LocalSeat` early-return.
 fn find_local_seat(messages: &[serde_json::Value]) -> Option<i64> {
     // When a ConnectResp is present, the connect_resp channel is the
     // authoritative local-seat source — do not recover from a sibling wrapper.
@@ -328,6 +343,12 @@ fn find_local_seat(messages: &[serde_json::Value]) -> Option<i64> {
         return None;
     }
     messages.iter().find_map(|msg| {
+        // Skip noise types — the seat is a game signal, and skipping them lets a
+        // noise-only entry reach the noise GameState fallback in `try_parse`.
+        let msg_type = msg.get("type").and_then(serde_json::Value::as_str);
+        if matches!(msg_type, Some(t) if NOISE_MESSAGE_TYPES.contains(&t)) {
+            return None;
+        }
         let seats = msg
             .get("systemSeatIds")
             .and_then(serde_json::Value::as_array)?;
@@ -1182,6 +1203,54 @@ mod tests {
                 seat_pos > result_pos,
                 "LocalSeat must be appended after GameResult"
             );
+        }
+
+        #[test]
+        fn test_noise_only_entry_emits_noise_gamestate_not_local_seat() {
+            // Regression: a noise-only entry (UIMessage) carrying a singleton
+            // wrapper seat must NOT have its noise `GameState { recognized_type }`
+            // marker preempted by a LocalSeat early-return. The seat is not
+            // recovered from noise traffic (an emote concerns either player), so
+            // the entry falls through to the noise fallback exactly as before.
+            let body = gre_body(&serde_json::json!([{
+                "type": "GREMessageType_UIMessage",
+                "systemSeatIds": [1],
+                "msgId": 7,
+                "gameStateId": 3
+            }]));
+            let entry = unity_entry(&body);
+            let results = try_parse(&entry, Some(test_timestamp()));
+
+            assert!(
+                !results.iter().any(|e| matches!(e, GameEvent::LocalSeat(_))),
+                "a noise-only UIMessage must not recover a local seat"
+            );
+            assert!(
+                results.iter().any(|e| matches!(e, GameEvent::GameState(_))
+                    && e.payload()["recognized_type"] == "GREMessageType_UIMessage"),
+                "the noise GameState marker must still be emitted"
+            );
+        }
+
+        #[test]
+        fn test_noise_plus_seat_bearing_sibling_keeps_noise_gamestate() {
+            // A noise message (UIMessage) bundled with a non-noise, non-GSM
+            // request that carries a singleton wrapper seat, and NO GSM. The
+            // seat is recovered from the request, but the noise `GameState`
+            // marker must NOT be preempted — both events are emitted.
+            let body = gre_body(&serde_json::json!([
+                { "type": "GREMessageType_UIMessage", "systemSeatIds": [1], "msgId": 5 },
+                { "type": "GREMessageType_ActionsAvailableReq", "systemSeatIds": [1], "msgId": 6 }
+            ]));
+            let entry = unity_entry(&body);
+            let results = try_parse(&entry, Some(test_timestamp()));
+
+            assert!(
+                results.iter().any(|e| matches!(e, GameEvent::GameState(_))
+                    && e.payload()["recognized_type"] == "GREMessageType_UIMessage"),
+                "the noise GameState marker must survive a seat-bearing sibling"
+            );
+            assert_eq!(local_seat_id(&results), Some(1));
         }
     }
 }
