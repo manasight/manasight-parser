@@ -20,6 +20,14 @@
 //! `QueuedGameStateMessage` wraps a deferred game state update with the same
 //! structure.
 //!
+//! In addition to the per-message events above, an entry that carries a
+//! **singleton** wrapper `systemSeatIds` (`[N]`) on any client-directed
+//! message other than `ConnectResp` also emits a single
+//! [`GameEvent::LocalSeat`] recovering the local player's seat — see
+//! [`find_local_seat`]. This is a truncation-resilient seat channel: when the
+//! client summarizes a `ConnectResp`, no `connect_resp` event is emitted, but
+//! the surrounding GRE envelopes still carry the local seat.
+//!
 //! Most messages are Class 1 (Interactive Dispatch). The exception is when
 //! `gameInfo.stage` equals `GameStage_GameOver` with
 //! `matchState != MatchState_MatchComplete` — these are emitted as
@@ -124,6 +132,11 @@ const GAME_STAGE_GAME_OVER: &str = "GameStage_GameOver";
 /// single `greToClientMessages` array. This function iterates **all**
 /// matching messages and returns a `Vec<GameEvent>` — one event per
 /// message. `ConnectResp` and noise types remain single-event.
+///
+/// If any client-directed message (other than `ConnectResp`) carries a
+/// singleton wrapper `systemSeatIds` (`[N]`), a single
+/// [`GameEvent::LocalSeat`] is appended after the per-message events to
+/// surface the local player's seat — see [`find_local_seat`].
 ///
 /// Returns an empty `Vec` if the entry does not match.
 ///
@@ -293,35 +306,36 @@ fn find_message_by_type<'a>(
 
 /// Recovers the local player's seat from a client-directed GRE message.
 ///
-/// Client-directed GRE messages carry a wrapper `systemSeatIds` array. A
-/// **singleton** `[N]` is addressed to a single seat — the local player's
-/// own seat (e.g. a `MulliganReq` / `PromptReq` directed at the local client,
-/// or a `GameStateMessage` delivered to it). A `ConnectResp`'s own
-/// `systemSeatIds` is excluded here because the existing `connect_resp`
-/// channel already surfaces it; this helper exists for the case where that
-/// channel is absent (summarized `ConnectResp`).
+/// This helper exists **only** for the case the existing `connect_resp` seat
+/// channel is absent for an entry (a summarized / dropped `ConnectResp`). When
+/// a `ConnectResp` is present **anywhere** in the entry, its `systemSeatIds`
+/// already surfaces the local seat authoritatively via the `connect_resp`
+/// event, so this returns `None` — we never second-guess that channel from a
+/// sibling message (a bundled GSM's wrapper `systemSeatIds` may be addressed to
+/// the *opponent's* seat and must not be mistaken for the local one).
 ///
-/// Returns the first singleton wrapper seat found across the entry's messages,
-/// or `None` if no client-directed singleton seat is present. Multi-element
-/// wrappers (e.g. a message addressed to both seats) are ignored so the
-/// opponent's seat is never mistaken for the local one.
+/// Otherwise, client-directed GRE messages carry a wrapper `systemSeatIds`
+/// array; a **singleton** `[N]` is addressed to a single seat — the local
+/// player's own seat (e.g. a `MulliganReq` / `PromptReq` directed at the local
+/// client, or a `GameStateMessage` delivered to it). Returns the first such
+/// singleton seat. Multi-element wrappers (a message addressed to both seats)
+/// are ignored, again so the opponent's seat is never mistaken for the local
+/// one.
 fn find_local_seat(messages: &[serde_json::Value]) -> Option<i64> {
-    messages
-        .iter()
-        .filter(|msg| {
-            // Skip ConnectResp — its seat is already surfaced via the
-            // dedicated `connect_resp` event.
-            msg.get("type").and_then(serde_json::Value::as_str) != Some(CONNECT_RESP_TYPE)
-        })
-        .find_map(|msg| {
-            let seats = msg
-                .get("systemSeatIds")
-                .and_then(serde_json::Value::as_array)?;
-            match seats.as_slice() {
-                [only] => only.as_i64(),
-                _ => None,
-            }
-        })
+    // When a ConnectResp is present, the connect_resp channel is the
+    // authoritative local-seat source — do not recover from a sibling wrapper.
+    if find_message_by_type(messages, CONNECT_RESP_TYPE).is_some() {
+        return None;
+    }
+    messages.iter().find_map(|msg| {
+        let seats = msg
+            .get("systemSeatIds")
+            .and_then(serde_json::Value::as_array)?;
+        match seats.as_slice() {
+            [only] => only.as_i64(),
+            _ => None,
+        }
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1097,6 +1111,76 @@ mod tests {
             assert!(
                 !results.iter().any(|e| matches!(e, GameEvent::LocalSeat(_))),
                 "ConnectResp seat must not also emit a LocalSeat event"
+            );
+        }
+
+        #[test]
+        fn test_no_local_seat_when_connect_resp_bundled_with_singleton_gsm() {
+            // When a ConnectResp is present in the entry, its connect_resp
+            // channel is authoritative — a sibling GSM's singleton wrapper seat
+            // (which may be the OPPONENT's seat) must NOT produce a LocalSeat.
+            let body = gre_body(&serde_json::json!([
+                {
+                    "type": "GREMessageType_ConnectResp",
+                    "systemSeatIds": [1, 2],
+                    "msgId": 1,
+                    "gameStateId": 0,
+                    "connectResp": { "deckMessage": { "deckCards": [1, 2, 3] } }
+                },
+                {
+                    "type": "GREMessageType_GameStateMessage",
+                    "systemSeatIds": [2],
+                    "msgId": 2,
+                    "gameStateId": 1,
+                    "gameStateMessage": { "type": "GameStateType_Diff", "prevGameStateId": 0 }
+                }
+            ]));
+            let entry = unity_entry(&body);
+            let results = try_parse(&entry, Some(test_timestamp()));
+            assert!(
+                !results.iter().any(|e| matches!(e, GameEvent::LocalSeat(_))),
+                "a bundled ConnectResp suppresses LocalSeat recovery from a sibling GSM"
+            );
+        }
+
+        #[test]
+        fn test_local_seat_appended_after_game_result_on_game_over_gsm() {
+            // A GameOver GSM carrying a singleton wrapper seat emits the
+            // GameResult first; the LocalSeat is appended after it (no
+            // ConnectResp present), preserving the GameState/GameResult
+            // ordering guarantee.
+            let body = gre_body(&serde_json::json!([{
+                "type": "GREMessageType_GameStateMessage",
+                "systemSeatIds": [1],
+                "msgId": 9,
+                "gameStateId": 5,
+                "gameStateMessage": {
+                    "type": "GameStateType_Full",
+                    "gameInfo": {
+                        "stage": "GameStage_GameOver",
+                        "matchState": "MatchState_GameComplete",
+                        "results": [{
+                            "scope": "MatchScope_Game",
+                            "result": "ResultType_WinLoss",
+                            "winningTeamId": 1
+                        }]
+                    }
+                }
+            }]));
+            let entry = unity_entry(&body);
+            let results = try_parse(&entry, Some(test_timestamp()));
+
+            let result_pos = results
+                .iter()
+                .position(|e| matches!(e, GameEvent::GameResult(_)));
+            let seat_pos = results
+                .iter()
+                .position(|e| matches!(e, GameEvent::LocalSeat(_)));
+            assert!(result_pos.is_some(), "expected a GameResult event");
+            assert!(seat_pos.is_some(), "expected a LocalSeat event");
+            assert!(
+                seat_pos > result_pos,
+                "LocalSeat must be appended after GameResult"
             );
         }
     }

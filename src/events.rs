@@ -859,9 +859,14 @@ define_event! {
     /// Surfaces the local seat from the wrapper `systemSeatIds` of a
     /// client-directed GRE message (a singleton `[N]`), independent of
     /// `ConnectResp` — which the client may summarize away (see
-    /// [`GameEvent::LocalSeat`]). Following the header-only convention used by
-    /// [`TruncationEvent`], `raw_bytes` is empty (the seat is derived, not a
-    /// distinct loggable body) and the payload carries `{"system_seat_id": N}`.
+    /// [`GameEvent::LocalSeat`]). The payload carries `{"system_seat_id": N}`.
+    ///
+    /// `raw_bytes` is empty (like [`TruncationEvent`], the payload is the whole
+    /// event). Unlike `TruncationEvent` — whose source body is irrecoverable —
+    /// this event *does* have a source GRE envelope, but the sibling
+    /// [`GameStateEvent`] / [`GameResultEvent`] parsed from the same entry
+    /// already carries that body's `raw_bytes`; the seat is a derived signal, so
+    /// re-fingerprinting the parent entry here would only duplicate it.
     LocalSeatEvent
 }
 
@@ -1022,6 +1027,7 @@ mod tests {
             GameEvent::WebSocketClosed(WebSocketClosedEvent::new(meta.clone(), payload.clone())),
             GameEvent::ConnectionError(ConnectionErrorEvent::new(meta.clone(), payload.clone())),
             GameEvent::Truncation(TruncationEvent::new(meta.clone(), payload.clone())),
+            GameEvent::LocalSeat(LocalSeatEvent::new(meta.clone(), payload.clone())),
         ]
     }
 
@@ -1270,6 +1276,7 @@ mod tests {
             PerformanceClass::InteractiveDispatch, // WebSocketClosed
             PerformanceClass::InteractiveDispatch, // ConnectionError
             PerformanceClass::InteractiveDispatch, // Truncation
+            PerformanceClass::InteractiveDispatch, // LocalSeat
         ];
 
         assert_eq!(
@@ -1391,6 +1398,7 @@ mod tests {
             1, // WebSocketClosed
             1, // ConnectionError
             1, // Truncation
+            1, // LocalSeat
         ];
         assert_eq!(events.len(), expected_numbers.len());
         for (event, expected_num) in events.iter().zip(expected_numbers.iter()) {
