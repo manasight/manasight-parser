@@ -70,7 +70,7 @@ mod turn_info;
 #[cfg(test)]
 mod test_fixtures;
 
-use crate::events::{EventMetadata, GameEvent, GameResultEvent, GameStateEvent};
+use crate::events::{EventMetadata, GameEvent, GameResultEvent, GameStateEvent, LocalSeatEvent};
 use crate::log::entry::LogEntry;
 use crate::parsers::api_common;
 
@@ -168,6 +168,21 @@ pub fn try_parse(
     // processing only the first silently discards the majority of updates.
     for msg in messages {
         events.extend(emit_gsm_events(msg, body, timestamp));
+    }
+
+    // Recover the local player's seat from the wrapper `systemSeatIds` of a
+    // client-directed GRE message (a singleton `[N]`). This is the
+    // summarization-resilient seat channel: when the client summarizes a
+    // `ConnectResp`, no `connect_resp` event is emitted for the match, but the
+    // surrounding GRE envelopes still carry the wrapper seat. Stateless and
+    // per-entry — emitted (idempotently) whenever a singleton wrapper seat is
+    // observed, so consumers associate it to a match via event ordering, just
+    // as they do the seatless `connect_resp` channel. Appended after the GSM
+    // events to preserve their existing ordering guarantees.
+    if let Some(seat) = find_local_seat(messages) {
+        events.push(GameEvent::LocalSeat(LocalSeatEvent::new_local_seat(
+            timestamp, seat,
+        )));
     }
 
     if !events.is_empty() {
@@ -274,6 +289,39 @@ fn find_message_by_type<'a>(
     messages
         .iter()
         .find(|msg| msg.get("type").and_then(serde_json::Value::as_str) == Some(msg_type))
+}
+
+/// Recovers the local player's seat from a client-directed GRE message.
+///
+/// Client-directed GRE messages carry a wrapper `systemSeatIds` array. A
+/// **singleton** `[N]` is addressed to a single seat — the local player's
+/// own seat (e.g. a `MulliganReq` / `PromptReq` directed at the local client,
+/// or a `GameStateMessage` delivered to it). A `ConnectResp`'s own
+/// `systemSeatIds` is excluded here because the existing `connect_resp`
+/// channel already surfaces it; this helper exists for the case where that
+/// channel is absent (summarized `ConnectResp`).
+///
+/// Returns the first singleton wrapper seat found across the entry's messages,
+/// or `None` if no client-directed singleton seat is present. Multi-element
+/// wrappers (e.g. a message addressed to both seats) are ignored so the
+/// opponent's seat is never mistaken for the local one.
+fn find_local_seat(messages: &[serde_json::Value]) -> Option<i64> {
+    messages
+        .iter()
+        .filter(|msg| {
+            // Skip ConnectResp — its seat is already surfaced via the
+            // dedicated `connect_resp` event.
+            msg.get("type").and_then(serde_json::Value::as_str) != Some(CONNECT_RESP_TYPE)
+        })
+        .find_map(|msg| {
+            let seats = msg
+                .get("systemSeatIds")
+                .and_then(serde_json::Value::as_array)?;
+            match seats.as_slice() {
+                [only] => only.as_i64(),
+                _ => None,
+            }
+        })
 }
 
 // ---------------------------------------------------------------------------
@@ -951,6 +999,105 @@ mod tests {
             for event in &results {
                 assert_eq!(event.metadata().timestamp(), ts);
             }
+        }
+    }
+
+    // -- LocalSeat recovery ---------------------------------------------------
+
+    mod local_seat {
+        use super::*;
+
+        /// Builds a GRE entry body wrapping the given messages array.
+        fn gre_body(messages: &serde_json::Value) -> String {
+            format!(
+                "[UnityCrossThreadLogger]greToClientEvent\n{}",
+                serde_json::json!({ "greToClientEvent": { "greToClientMessages": messages } })
+            )
+        }
+
+        /// Returns the `system_seat_id` of the single `LocalSeat` event in
+        /// `results`, asserting exactly one is present.
+        fn local_seat_id(results: &[GameEvent]) -> Option<i64> {
+            let local = results
+                .iter()
+                .find(|e| matches!(e, GameEvent::LocalSeat(_)))
+                .unwrap_or_else(|| unreachable!("expected exactly one LocalSeat event"));
+            let GameEvent::LocalSeat(ref ev) = local else {
+                unreachable!("filter guard");
+            };
+            ev.system_seat_id()
+        }
+
+        #[test]
+        fn test_local_seat_emitted_from_singleton_gsm_wrapper() {
+            // A GSM addressed to seat 1 (singleton wrapper) — no ConnectResp.
+            let body = gre_body(&serde_json::json!([{
+                "type": "GREMessageType_GameStateMessage",
+                "systemSeatIds": [1],
+                "msgId": 2,
+                "gameStateId": 1,
+                "gameStateMessage": { "type": "GameStateType_Diff", "prevGameStateId": 0 }
+            }]));
+            let entry = unity_entry(&body);
+            let results = try_parse(&entry, Some(test_timestamp()));
+            assert_eq!(local_seat_id(&results), Some(1));
+        }
+
+        #[test]
+        fn test_local_seat_recovered_for_seat_two() {
+            // A MulliganReq alone is not a GSM, so the only event is the LocalSeat.
+            let body = gre_body(&serde_json::json!([{
+                "type": "GREMessageType_MulliganReq",
+                "systemSeatIds": [2],
+                "msgId": 3,
+                "gameStateId": 1
+            }]));
+            let entry = unity_entry(&body);
+            let results = try_parse(&entry, Some(test_timestamp()));
+            assert_eq!(local_seat_id(&results), Some(2));
+        }
+
+        #[test]
+        fn test_no_local_seat_from_multi_element_wrapper() {
+            // A message addressed to BOTH seats must not surface a local seat —
+            // the opponent's seat must never be mistaken for the local one.
+            let body = gre_body(&serde_json::json!([{
+                "type": "GREMessageType_PromptReq",
+                "systemSeatIds": [1, 2],
+                "msgId": 4,
+                "gameStateId": 1
+            }]));
+            let entry = unity_entry(&body);
+            let results = try_parse(&entry, Some(test_timestamp()));
+            assert!(
+                !results.iter().any(|e| matches!(e, GameEvent::LocalSeat(_))),
+                "multi-element wrapper systemSeatIds must not produce a LocalSeat"
+            );
+        }
+
+        #[test]
+        fn test_connect_resp_seat_does_not_double_emit_local_seat() {
+            // A ConnectResp's own systemSeatIds is surfaced via connect_resp;
+            // it must NOT also produce a LocalSeat (no double channel).
+            let body = gre_body(&serde_json::json!([{
+                "type": "GREMessageType_ConnectResp",
+                "systemSeatIds": [1],
+                "msgId": 1,
+                "gameStateId": 0,
+                "connectResp": { "deckMessage": { "deckCards": [1, 2, 3] } }
+            }]));
+            let entry = unity_entry(&body);
+            let results = try_parse(&entry, Some(test_timestamp()));
+
+            assert!(
+                results.iter().any(|e| matches!(e, GameEvent::GameState(_))
+                    && e.payload()["type"] == "connect_resp"),
+                "connect_resp event must still be emitted"
+            );
+            assert!(
+                !results.iter().any(|e| matches!(e, GameEvent::LocalSeat(_))),
+                "ConnectResp seat must not also emit a LocalSeat event"
+            );
         }
     }
 }

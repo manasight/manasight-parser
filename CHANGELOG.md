@@ -4,6 +4,27 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.6.2] - 2026-06-24
+
+### Added
+
+- **`GameEvent::LocalSeat`** — a new event that surfaces the local player's
+  seat from the wrapper `systemSeatIds` of a client-directed GRE message (a
+  singleton `[N]`). The local seat was previously recoverable only via
+  `connect_resp.system_seat_ids`; when the client summarizes a `ConnectResp`
+  (a game state exceeding its internal GameObject limit), no `connect_resp`
+  event is emitted for the match and that seat channel is lost — leaving a
+  match with an authoritative outcome unresolvable. The new event recovers the
+  seat from the surrounding GRE envelopes, which still carry it (valid
+  envelopes flank the `Truncation` marker). Payload: `{"system_seat_id": N}`.
+  Emitted (idempotently) per client-directed entry carrying a singleton
+  wrapper seat — the parser is stateless per entry, so consumers associate it
+  to a match via event ordering relative to `match_started` /
+  `match_completed`, exactly as they already do for the seatless
+  `connect_resp` channel. Existing event variants are unchanged.
+
+  This adds a variant to the lean output → consumers re-parse.
+
 ## [0.6.1] - 2026-06-22
 
 ### Added
