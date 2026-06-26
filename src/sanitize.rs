@@ -65,7 +65,13 @@ pub struct ScrubOptions {
 /// - Linux user paths (`/home/<username>/`)
 /// - Session identifiers (JSON `"token"` and `"sessionId"` values)
 /// - Display names (JSON `"screenName"` and `"playerName"` values)
-/// - Hardware fingerprint lines (Renderer, Vendor, VRAM, Driver)
+/// - Hardware fingerprint lines, across three log formats:
+///   - Windows `GfxDevice` block (Renderer, Vendor, VRAM, Driver)
+///   - macOS Metal `GfxDevice` block (preferred device, Using device, Initializing
+///     Metal device caps, enumerated Metal devices, Metal device count)
+///   - Unity `SystemInfo` block on both platforms (graphicsDeviceName,
+///     graphicsDeviceVendor, graphicsDeviceVersion, deviceModel, operatingSystem,
+///     processorType)
 /// - Email addresses
 /// - IPv4 dotted-quad addresses
 /// - IPv6 addresses (compressed, full, `::1`, `fe80::` link-local)
@@ -149,6 +155,81 @@ static SCRUB_PATTERNS: LazyLock<Vec<ScrubPattern>> = LazyLock::new(|| {
         (r"(?m)^\s+VRAM:\s+.+", "  VRAM: <redacted>", false),
         // Hardware fingerprint: GPU driver version.
         (r"(?m)^\s+Driver:\s+.+", "  Driver: <redacted>", false),
+        // Hardware fingerprint: macOS Metal GPU — "preferred device" line.
+        // Has one leading space in the real log. ^\s* (zero-or-more) is used across
+        // all macOS Metal patterns because sibling lines ("Using device",
+        // "Initializing Metal device caps", and the enumerated "N: …" line) start at
+        // column 0; a one-or-more ^\s+ anchor would miss those column-0 lines.
+        // ^\s* matches both the single-space-indented "preferred device:" line and
+        // the column-0 lines uniformly.
+        (
+            r"(?m)^\s*preferred device:\s+.+",
+            " preferred device: <redacted>",
+            false,
+        ),
+        // Hardware fingerprint: macOS Metal GPU — device count line.
+        // "Metal devices available: <N>" carries only a count (not a model), but
+        // is redacted for symmetry with the adjacent GPU-model lines.
+        (
+            r"(?m)^\s*Metal devices available:\s+.+",
+            "Metal devices available: <redacted>",
+            false,
+        ),
+        // Hardware fingerprint: macOS Metal GPU — enumerated device line.
+        // Format: "N: <gpu-model> (high power)" / "N: <gpu-model> (low power)".
+        // Anchored on the Metal power suffix to avoid over-matching other
+        // "N: …" log lines (e.g. numbered list items in game output).
+        (
+            r"(?m)^\s*\d+:\s+.+\((?:high|low) power\)$",
+            "<N>: <redacted>",
+            false,
+        ),
+        // Hardware fingerprint: macOS Metal GPU — "Using device" line.
+        // Starts at column 0; the Windows ^\s+ anchor does not match it.
+        (
+            r"(?m)^\s*Using device\s+.+",
+            "Using device <redacted>",
+            false,
+        ),
+        // Hardware fingerprint: macOS Metal GPU — "Initializing Metal device caps" line.
+        // Starts at column 0; the Windows ^\s+ anchor does not match it.
+        (
+            r"(?m)^\s*Initializing Metal device caps:\s+.+",
+            "Initializing Metal device caps: <redacted>",
+            false,
+        ),
+        // Hardware fingerprint: Unity `SystemInfo` block (newer MTGA builds,
+        // >= 2026.58, on BOTH macOS and Windows). Emitted at the very start of the
+        // log as `key value` lines — no leading whitespace, no colon — so neither
+        // the Windows `^\s+Renderer:` patterns nor the macOS Metal patterns above
+        // match them. Each identifying key (GPU/vendor/API, device model, OS
+        // version, CPU) is redacted; innocuous capability keys (graphicsMemorySize,
+        // processorCount, maxTextureSize, graphicsShaderLevel, …) are left intact.
+        // `^graphicsDeviceName ` (trailing space) does not match
+        // `graphicsDeviceType`/`graphicsDeviceVendor`, and `^operatingSystem ` does
+        // not match `operatingSystemFamily` — the space falls at a different offset.
+        (
+            r"(?m)^graphicsDeviceName .+",
+            "graphicsDeviceName <redacted>",
+            false,
+        ),
+        (
+            r"(?m)^graphicsDeviceVendor .+",
+            "graphicsDeviceVendor <redacted>",
+            false,
+        ),
+        (
+            r"(?m)^graphicsDeviceVersion .+",
+            "graphicsDeviceVersion <redacted>",
+            false,
+        ),
+        (r"(?m)^deviceModel .+", "deviceModel <redacted>", false),
+        (
+            r"(?m)^operatingSystem .+",
+            "operatingSystem <redacted>",
+            false,
+        ),
+        (r"(?m)^processorType .+", "processorType <redacted>", false),
         // Email addresses (defense-in-depth; MTGA logs carry no known third-party
         // emails empirically, but this closes a latent gap for future client changes).
         (
@@ -649,6 +730,182 @@ mod tests {
         assert_eq!(scrub_raw_log(input), input);
     }
 
+    // --- macOS Metal GPU fingerprint patterns ---
+
+    #[test]
+    fn test_scrub_raw_log_macos_metal_gpu_fingerprint_all_lines_redacted() {
+        // Verbatim macOS Player.log GfxDevice header format — GPU model is
+        // the fingerprint present in four distinct line shapes. Whitespace,
+        // casing, and punctuation match the real log exactly; the GPU model
+        // value has been replaced by "Apple M1 Pro" as a representative token.
+        let input = concat!(
+            " preferred device: Apple M1 Pro (high power)\n",
+            "Metal devices available: 1\n",
+            "0: Apple M1 Pro (high power)\n",
+            "Using device Apple M1 Pro (high power)\n",
+            "Initializing Metal device caps: Apple M1 Pro",
+        );
+        let result = scrub_raw_log(input);
+
+        // GPU model must not survive in any form.
+        assert!(
+            !result.contains("Apple M1 Pro"),
+            "GPU model leaked: {result:?}"
+        );
+
+        // Each line shape must be replaced with its canonical placeholder.
+        assert!(result.contains("preferred device: <redacted>"));
+        assert!(result.contains("Metal devices available: <redacted>"));
+        assert!(result.contains("<N>: <redacted>"));
+        assert!(result.contains("Using device <redacted>"));
+        assert!(result.contains("Initializing Metal device caps: <redacted>"));
+    }
+
+    #[test]
+    fn test_scrub_raw_log_macos_metal_gpu_fingerprint_high_and_low_power_redacted() {
+        // The enumerated device line uses either "(high power)" or "(low power)".
+        // Both suffixes must be matched so that multi-GPU Macs (iGPU + dGPU)
+        // are fully redacted.
+        let input = concat!(
+            "0: Apple M1 Pro (high power)\n",
+            "1: Apple M2 Ultra (low power)\n",
+        );
+        let result = scrub_raw_log(input);
+        assert!(!result.contains("Apple M1 Pro"), "high-power model leaked");
+        assert!(!result.contains("Apple M2 Ultra"), "low-power model leaked");
+        assert_eq!(result.matches("<N>: <redacted>").count(), 2);
+    }
+
+    #[test]
+    fn test_scrub_raw_log_macos_metal_gpu_fingerprint_in_full_log_header() {
+        // Realistic macOS Player.log header fragment — Metal GfxDevice block
+        // embedded between Unity cross-thread logger lines.
+        let input = concat!(
+            "[UnityCrossThreadLogger] GfxDevice init\n",
+            " preferred device: AMD Radeon Pro 5500M (high power)\n",
+            "Metal devices available: 2\n",
+            "0: AMD Radeon Pro 5500M (high power)\n",
+            "1: Intel UHD Graphics 630 (low power)\n",
+            "Using device AMD Radeon Pro 5500M (high power)\n",
+            "Initializing Metal device caps: AMD Radeon Pro 5500M\n",
+            "[UnityCrossThreadLogger] Game started\n",
+        );
+        let result = scrub_raw_log(input);
+
+        // GPU model strings must be gone.
+        assert!(
+            !result.contains("AMD Radeon Pro 5500M"),
+            "dGPU model leaked"
+        );
+        assert!(
+            !result.contains("Intel UHD Graphics 630"),
+            "iGPU model leaked"
+        );
+
+        // Non-sensitive surrounding context must be preserved.
+        assert!(result.contains("[UnityCrossThreadLogger] GfxDevice init"));
+        assert!(result.contains("[UnityCrossThreadLogger] Game started"));
+
+        // Placeholder shapes must appear.
+        assert!(result.contains("preferred device: <redacted>"));
+        assert!(result.contains("Metal devices available: <redacted>"));
+        assert!(result.contains("Using device <redacted>"));
+        assert!(result.contains("Initializing Metal device caps: <redacted>"));
+        assert_eq!(result.matches("<N>: <redacted>").count(), 2);
+    }
+
+    #[test]
+    fn test_scrub_raw_log_macos_metal_numbered_line_not_matched_without_power_suffix() {
+        // The enumerated-device pattern is anchored on "(high|low power)" to
+        // avoid false-positives on other numbered-list log lines that happen to
+        // start with "N: …". Without the power suffix, the line must not be
+        // redacted.
+        let input = "0: some other numbered log entry";
+        assert_eq!(scrub_raw_log(input), input);
+    }
+
+    // --- Unity SystemInfo block (newer MTGA builds, both platforms) ---
+
+    #[test]
+    fn test_scrub_raw_log_systeminfo_macos_fingerprint_redacted() {
+        // Verbatim header format from a real macOS Player.log (MTGA >= 2026.58):
+        // `key value` lines at column 0, no colon. GPU / CPU / device / OS strings
+        // are the fingerprint; capability counts are innocuous and must survive.
+        let input = concat!(
+            "graphicsDeviceName Apple M5 Pro\n",
+            "graphicsDeviceType Metal\n",
+            "graphicsDeviceVendor Apple\n",
+            "graphicsDeviceVersion Metal\n",
+            "graphicsMemorySize 38338\n",
+            "deviceModel Mac17,8\n",
+            "deviceType Desktop\n",
+            "operatingSystem Mac OS X 26.5.1\n",
+            "operatingSystemFamily MacOSX\n",
+            "processorCount 18\n",
+            "processorType Apple M5 Pro\n",
+            "systemMemorySize 49152",
+        );
+        let result = scrub_raw_log(input);
+
+        // Identifying hardware values must not survive (GPU + CPU share a string).
+        assert!(
+            !result.contains("Apple M5 Pro"),
+            "GPU/CPU model leaked: {result:?}"
+        );
+        assert!(!result.contains("Mac17,8"), "device model leaked");
+        assert!(!result.contains("Mac OS X 26.5.1"), "OS version leaked");
+
+        // Each identifying key redacted in place.
+        assert!(result.contains("graphicsDeviceName <redacted>"));
+        assert!(result.contains("graphicsDeviceVendor <redacted>"));
+        assert!(result.contains("graphicsDeviceVersion <redacted>"));
+        assert!(result.contains("deviceModel <redacted>"));
+        assert!(result.contains("operatingSystem <redacted>"));
+        assert!(result.contains("processorType <redacted>"));
+
+        // Innocuous capability keys must be preserved verbatim (no over-redaction).
+        assert!(result.contains("graphicsDeviceType Metal"));
+        assert!(result.contains("graphicsMemorySize 38338"));
+        assert!(result.contains("deviceType Desktop"));
+        assert!(result.contains("operatingSystemFamily MacOSX"));
+        assert!(result.contains("processorCount 18"));
+        assert!(result.contains("systemMemorySize 49152"));
+    }
+
+    #[test]
+    fn test_scrub_raw_log_systeminfo_windows_fingerprint_redacted() {
+        // Same SystemInfo format on Windows — the values differ but the keys are
+        // identical, so the same patterns redact them (one fix covers both OSes).
+        let input = concat!(
+            "graphicsDeviceName NVIDIA GeForce RTX 4060 Laptop GPU\n",
+            "graphicsDeviceVendor NVIDIA\n",
+            "graphicsDeviceVersion Direct3D 11.0 [level 11.1]\n",
+            "deviceModel Zenbook UX8402VV_UX8402VV (ASUSTeK COMPUTER INC.)\n",
+            "operatingSystem Windows 11  (10.0.26200) 64bit\n",
+            "processorType 13th Gen Intel(R) Core(TM) i9-13900H\n",
+        );
+        let result = scrub_raw_log(input);
+
+        assert!(
+            !result.contains("NVIDIA GeForce RTX 4060 Laptop GPU"),
+            "GPU leaked"
+        );
+        assert!(!result.contains("Zenbook"), "device model leaked");
+        assert!(!result.contains("i9-13900H"), "CPU leaked");
+        assert!(!result.contains("10.0.26200"), "OS build leaked");
+        assert!(result.contains("graphicsDeviceName <redacted>"));
+        assert!(result.contains("deviceModel <redacted>"));
+        assert!(result.contains("processorType <redacted>"));
+    }
+
+    #[test]
+    fn test_scrub_raw_log_systeminfo_does_not_redact_innocuous_family_key() {
+        // `^operatingSystem ` (trailing space) must not match `operatingSystemFamily`
+        // — the space falls at a different offset, so the family key is preserved.
+        let input = "operatingSystemFamily MacOSX";
+        assert_eq!(scrub_raw_log(input), input);
+    }
+
     // --- Multiple patterns in one block ---
 
     #[test]
@@ -965,21 +1222,13 @@ mod tests {
 
     // --- Corpus validation (env-gated, not run in CI) ---
 
-    /// Run `scrub_raw_log` against every `.log` file in the corpus directory
-    /// and verify that none of the PII patterns survive scrubbing.
+    /// Build the PII-detection patterns used by [`test_corpus_scrub_no_pii_survives`].
     ///
-    /// Skipped unless `SCRUBBER_CORPUS_DIR` is set:
-    /// ```sh
-    /// SCRUBBER_CORPUS_DIR=/tmp/smoke-corpus cargo test corpus_scrub -- --nocapture
-    /// ```
-    #[test]
-    fn test_corpus_scrub_no_pii_survives() {
-        let Ok(dir) = std::env::var("SCRUBBER_CORPUS_DIR") else {
-            return;
-        };
-        let corpus_dir = std::path::PathBuf::from(dir);
-
-        let pii_patterns: Vec<(&str, Regex)> = vec![
+    /// Each entry is a human-readable label paired with a regex that captures
+    /// the sensitive value in group 1. The corpus guard compares the captured
+    /// value against `"<redacted>"` to decide whether the pattern leaked.
+    fn corpus_pii_patterns() -> Vec<(&'static str, Regex)> {
+        vec![
             (
                 "screenName",
                 Regex::new(r#""[Ss]creen[Nn]ame"\s*:\s*"([^"]+)""#)
@@ -990,6 +1239,7 @@ mod tests {
                 Regex::new(r#""[Pp]layer[Nn]ame"\s*:\s*"([^"]+)""#)
                     .unwrap_or_else(|_| unreachable!()),
             ),
+            // Windows GPU fingerprint patterns.
             (
                 "Renderer",
                 Regex::new(r"(?m)^\s+Renderer:\s+(.+)").unwrap_or_else(|_| unreachable!()),
@@ -1006,7 +1256,72 @@ mod tests {
                 "Driver",
                 Regex::new(r"(?m)^\s+Driver:\s+(.+)").unwrap_or_else(|_| unreachable!()),
             ),
-        ];
+            // macOS Metal GPU fingerprint patterns.
+            (
+                "macOS preferred device",
+                Regex::new(r"(?m)^\s*preferred device:\s+(.+)").unwrap_or_else(|_| unreachable!()),
+            ),
+            (
+                "macOS Metal devices available",
+                Regex::new(r"(?m)^\s*Metal devices available:\s+(.+)")
+                    .unwrap_or_else(|_| unreachable!()),
+            ),
+            (
+                "macOS enumerated Metal device",
+                Regex::new(r"(?m)^\s*\d+:\s+(.+?)\s*\((?:high|low) power\)")
+                    .unwrap_or_else(|_| unreachable!()),
+            ),
+            (
+                "macOS Using device",
+                Regex::new(r"(?m)^\s*Using device\s+(.+)").unwrap_or_else(|_| unreachable!()),
+            ),
+            (
+                "macOS Initializing Metal device caps",
+                Regex::new(r"(?m)^\s*Initializing Metal device caps:\s+(.+)")
+                    .unwrap_or_else(|_| unreachable!()),
+            ),
+            // Unity SystemInfo block (newer MTGA builds, both platforms).
+            (
+                "SystemInfo graphicsDeviceName",
+                Regex::new(r"(?m)^graphicsDeviceName (.+)").unwrap_or_else(|_| unreachable!()),
+            ),
+            (
+                "SystemInfo graphicsDeviceVendor",
+                Regex::new(r"(?m)^graphicsDeviceVendor (.+)").unwrap_or_else(|_| unreachable!()),
+            ),
+            (
+                "SystemInfo graphicsDeviceVersion",
+                Regex::new(r"(?m)^graphicsDeviceVersion (.+)").unwrap_or_else(|_| unreachable!()),
+            ),
+            (
+                "SystemInfo deviceModel",
+                Regex::new(r"(?m)^deviceModel (.+)").unwrap_or_else(|_| unreachable!()),
+            ),
+            (
+                "SystemInfo operatingSystem",
+                Regex::new(r"(?m)^operatingSystem (.+)").unwrap_or_else(|_| unreachable!()),
+            ),
+            (
+                "SystemInfo processorType",
+                Regex::new(r"(?m)^processorType (.+)").unwrap_or_else(|_| unreachable!()),
+            ),
+        ]
+    }
+
+    /// Run `scrub_raw_log` against every `.log` file in the corpus directory
+    /// and verify that none of the PII patterns survive scrubbing.
+    ///
+    /// Skipped unless `SCRUBBER_CORPUS_DIR` is set:
+    /// ```sh
+    /// SCRUBBER_CORPUS_DIR=/tmp/smoke-corpus cargo test corpus_scrub -- --nocapture
+    /// ```
+    #[test]
+    fn test_corpus_scrub_no_pii_survives() {
+        let Ok(dir) = std::env::var("SCRUBBER_CORPUS_DIR") else {
+            return;
+        };
+        let corpus_dir = std::path::PathBuf::from(dir);
+        let pii_patterns = corpus_pii_patterns();
 
         let mut total_before = 0u32;
         let mut failures: Vec<String> = Vec::new();
