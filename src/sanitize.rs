@@ -65,7 +65,8 @@ pub struct ScrubOptions {
 /// - Linux user paths (`/home/<username>/`)
 /// - Session identifiers (JSON `"token"` and `"sessionId"` values)
 /// - Display names (JSON `"screenName"` and `"playerName"` values)
-/// - Hardware fingerprint lines (Renderer, Vendor, VRAM, Driver)
+/// - Hardware fingerprint lines (Renderer, Vendor, VRAM, Driver on Windows;
+///   preferred device, Using device, Initializing Metal device caps on macOS)
 /// - Email addresses
 /// - IPv4 dotted-quad addresses
 /// - IPv6 addresses (compressed, full, `::1`, `fe80::` link-local)
@@ -149,6 +150,46 @@ static SCRUB_PATTERNS: LazyLock<Vec<ScrubPattern>> = LazyLock::new(|| {
         (r"(?m)^\s+VRAM:\s+.+", "  VRAM: <redacted>", false),
         // Hardware fingerprint: GPU driver version.
         (r"(?m)^\s+Driver:\s+.+", "  Driver: <redacted>", false),
+        // Hardware fingerprint: macOS Metal GPU — "preferred device" line.
+        // Has one leading space in the real log; ^\s* (zero-or-more) is required
+        // because the Windows ^\s+ (one-or-more) anchor would also match, but
+        // these macOS lines are NOT indented by two spaces like the Windows block.
+        (
+            r"(?m)^\s*preferred device:\s+.+",
+            " preferred device: <redacted>",
+            false,
+        ),
+        // Hardware fingerprint: macOS Metal GPU — device count line.
+        // "Metal devices available: <N>" carries only a count (not a model), but
+        // is redacted for symmetry with the adjacent GPU-model lines.
+        (
+            r"(?m)^\s*Metal devices available:\s+.+",
+            "Metal devices available: <redacted>",
+            false,
+        ),
+        // Hardware fingerprint: macOS Metal GPU — enumerated device line.
+        // Format: "N: <gpu-model> (high power)" / "N: <gpu-model> (low power)".
+        // Anchored on the Metal power suffix to avoid over-matching other
+        // "N: …" log lines (e.g. numbered list items in game output).
+        (
+            r"(?m)^\s*\d+:\s+.+\((?:high|low) power\)$",
+            "<N>: <redacted>",
+            false,
+        ),
+        // Hardware fingerprint: macOS Metal GPU — "Using device" line.
+        // Starts at column 0; the Windows ^\s+ anchor does not match it.
+        (
+            r"(?m)^\s*Using device\s+.+",
+            "Using device <redacted>",
+            false,
+        ),
+        // Hardware fingerprint: macOS Metal GPU — "Initializing Metal device caps" line.
+        // Starts at column 0; the Windows ^\s+ anchor does not match it.
+        (
+            r"(?m)^\s*Initializing Metal device caps:\s+.+",
+            "Initializing Metal device caps: <redacted>",
+            false,
+        ),
         // Email addresses (defense-in-depth; MTGA logs carry no known third-party
         // emails empirically, but this closes a latent gap for future client changes).
         (
@@ -649,6 +690,100 @@ mod tests {
         assert_eq!(scrub_raw_log(input), input);
     }
 
+    // --- macOS Metal GPU fingerprint patterns ---
+
+    #[test]
+    fn test_scrub_raw_log_macos_metal_gpu_fingerprint_all_lines_redacted() {
+        // Verbatim macOS Player.log GfxDevice header format — GPU model is
+        // the fingerprint present in four distinct line shapes. Whitespace,
+        // casing, and punctuation match the real log exactly; the GPU model
+        // value has been replaced by "Apple M1 Pro" as a representative token.
+        let input = concat!(
+            " preferred device: Apple M1 Pro (high power)\n",
+            "Metal devices available: 1\n",
+            "0: Apple M1 Pro (high power)\n",
+            "Using device Apple M1 Pro (high power)\n",
+            "Initializing Metal device caps: Apple M1 Pro",
+        );
+        let result = scrub_raw_log(input);
+
+        // GPU model must not survive in any form.
+        assert!(
+            !result.contains("Apple M1 Pro"),
+            "GPU model leaked: {result:?}"
+        );
+
+        // Each line shape must be replaced with its canonical placeholder.
+        assert!(result.contains("preferred device: <redacted>"));
+        assert!(result.contains("Metal devices available: <redacted>"));
+        assert!(result.contains("<N>: <redacted>"));
+        assert!(result.contains("Using device <redacted>"));
+        assert!(result.contains("Initializing Metal device caps: <redacted>"));
+    }
+
+    #[test]
+    fn test_scrub_raw_log_macos_metal_gpu_fingerprint_high_and_low_power_redacted() {
+        // The enumerated device line uses either "(high power)" or "(low power)".
+        // Both suffixes must be matched so that multi-GPU Macs (iGPU + dGPU)
+        // are fully redacted.
+        let input = concat!(
+            "0: Apple M1 Pro (high power)\n",
+            "1: Apple M2 Ultra (low power)\n",
+        );
+        let result = scrub_raw_log(input);
+        assert!(!result.contains("Apple M1 Pro"), "high-power model leaked");
+        assert!(!result.contains("Apple M2 Ultra"), "low-power model leaked");
+        assert_eq!(result.matches("<N>: <redacted>").count(), 2);
+    }
+
+    #[test]
+    fn test_scrub_raw_log_macos_metal_gpu_fingerprint_in_full_log_header() {
+        // Realistic macOS Player.log header fragment — Metal GfxDevice block
+        // embedded between Unity cross-thread logger lines.
+        let input = concat!(
+            "[UnityCrossThreadLogger] GfxDevice init\n",
+            " preferred device: AMD Radeon Pro 5500M (high power)\n",
+            "Metal devices available: 2\n",
+            "0: AMD Radeon Pro 5500M (high power)\n",
+            "1: Intel UHD Graphics 630 (low power)\n",
+            "Using device AMD Radeon Pro 5500M (high power)\n",
+            "Initializing Metal device caps: AMD Radeon Pro 5500M\n",
+            "[UnityCrossThreadLogger] Game started\n",
+        );
+        let result = scrub_raw_log(input);
+
+        // GPU model strings must be gone.
+        assert!(
+            !result.contains("AMD Radeon Pro 5500M"),
+            "dGPU model leaked"
+        );
+        assert!(
+            !result.contains("Intel UHD Graphics 630"),
+            "iGPU model leaked"
+        );
+
+        // Non-sensitive surrounding context must be preserved.
+        assert!(result.contains("[UnityCrossThreadLogger] GfxDevice init"));
+        assert!(result.contains("[UnityCrossThreadLogger] Game started"));
+
+        // Placeholder shapes must appear.
+        assert!(result.contains("preferred device: <redacted>"));
+        assert!(result.contains("Metal devices available: <redacted>"));
+        assert!(result.contains("Using device <redacted>"));
+        assert!(result.contains("Initializing Metal device caps: <redacted>"));
+        assert_eq!(result.matches("<N>: <redacted>").count(), 2);
+    }
+
+    #[test]
+    fn test_scrub_raw_log_macos_metal_numbered_line_not_matched_without_power_suffix() {
+        // The enumerated-device pattern is anchored on "(high|low power)" to
+        // avoid false-positives on other numbered-list log lines that happen to
+        // start with "N: …". Without the power suffix, the line must not be
+        // redacted.
+        let input = "0: some other numbered log entry";
+        assert_eq!(scrub_raw_log(input), input);
+    }
+
     // --- Multiple patterns in one block ---
 
     #[test]
@@ -965,21 +1100,13 @@ mod tests {
 
     // --- Corpus validation (env-gated, not run in CI) ---
 
-    /// Run `scrub_raw_log` against every `.log` file in the corpus directory
-    /// and verify that none of the PII patterns survive scrubbing.
+    /// Build the PII-detection patterns used by [`test_corpus_scrub_no_pii_survives`].
     ///
-    /// Skipped unless `SCRUBBER_CORPUS_DIR` is set:
-    /// ```sh
-    /// SCRUBBER_CORPUS_DIR=/tmp/smoke-corpus cargo test corpus_scrub -- --nocapture
-    /// ```
-    #[test]
-    fn test_corpus_scrub_no_pii_survives() {
-        let Ok(dir) = std::env::var("SCRUBBER_CORPUS_DIR") else {
-            return;
-        };
-        let corpus_dir = std::path::PathBuf::from(dir);
-
-        let pii_patterns: Vec<(&str, Regex)> = vec![
+    /// Each entry is a human-readable label paired with a regex that captures
+    /// the sensitive value in group 1. The corpus guard compares the captured
+    /// value against `"<redacted>"` to decide whether the pattern leaked.
+    fn corpus_pii_patterns() -> Vec<(&'static str, Regex)> {
+        vec![
             (
                 "screenName",
                 Regex::new(r#""[Ss]creen[Nn]ame"\s*:\s*"([^"]+)""#)
@@ -990,6 +1117,7 @@ mod tests {
                 Regex::new(r#""[Pp]layer[Nn]ame"\s*:\s*"([^"]+)""#)
                     .unwrap_or_else(|_| unreachable!()),
             ),
+            // Windows GPU fingerprint patterns.
             (
                 "Renderer",
                 Regex::new(r"(?m)^\s+Renderer:\s+(.+)").unwrap_or_else(|_| unreachable!()),
@@ -1006,7 +1134,47 @@ mod tests {
                 "Driver",
                 Regex::new(r"(?m)^\s+Driver:\s+(.+)").unwrap_or_else(|_| unreachable!()),
             ),
-        ];
+            // macOS Metal GPU fingerprint patterns.
+            (
+                "macOS preferred device",
+                Regex::new(r"(?m)^\s*preferred device:\s+(.+)").unwrap_or_else(|_| unreachable!()),
+            ),
+            (
+                "macOS Metal devices available",
+                Regex::new(r"(?m)^\s*Metal devices available:\s+(.+)")
+                    .unwrap_or_else(|_| unreachable!()),
+            ),
+            (
+                "macOS enumerated Metal device",
+                Regex::new(r"(?m)^\s*\d+:\s+(.+?)\s*\((?:high|low) power\)")
+                    .unwrap_or_else(|_| unreachable!()),
+            ),
+            (
+                "macOS Using device",
+                Regex::new(r"(?m)^\s*Using device\s+(.+)").unwrap_or_else(|_| unreachable!()),
+            ),
+            (
+                "macOS Initializing Metal device caps",
+                Regex::new(r"(?m)^\s*Initializing Metal device caps:\s+(.+)")
+                    .unwrap_or_else(|_| unreachable!()),
+            ),
+        ]
+    }
+
+    /// Run `scrub_raw_log` against every `.log` file in the corpus directory
+    /// and verify that none of the PII patterns survive scrubbing.
+    ///
+    /// Skipped unless `SCRUBBER_CORPUS_DIR` is set:
+    /// ```sh
+    /// SCRUBBER_CORPUS_DIR=/tmp/smoke-corpus cargo test corpus_scrub -- --nocapture
+    /// ```
+    #[test]
+    fn test_corpus_scrub_no_pii_survives() {
+        let Ok(dir) = std::env::var("SCRUBBER_CORPUS_DIR") else {
+            return;
+        };
+        let corpus_dir = std::path::PathBuf::from(dir);
+        let pii_patterns = corpus_pii_patterns();
 
         let mut total_before = 0u32;
         let mut failures: Vec<String> = Vec::new();
