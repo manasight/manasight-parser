@@ -66,7 +66,8 @@ pub struct ScrubOptions {
 /// - Session identifiers (JSON `"token"` and `"sessionId"` values)
 /// - Display names (JSON `"screenName"` and `"playerName"` values)
 /// - Hardware fingerprint lines (Renderer, Vendor, VRAM, Driver on Windows;
-///   preferred device, Using device, Initializing Metal device caps on macOS)
+///   preferred device, Using device, Initializing Metal device caps, enumerated
+///   Metal devices, and Metal device count on macOS)
 /// - Email addresses
 /// - IPv4 dotted-quad addresses
 /// - IPv6 addresses (compressed, full, `::1`, `fe80::` link-local)
@@ -151,9 +152,12 @@ static SCRUB_PATTERNS: LazyLock<Vec<ScrubPattern>> = LazyLock::new(|| {
         // Hardware fingerprint: GPU driver version.
         (r"(?m)^\s+Driver:\s+.+", "  Driver: <redacted>", false),
         // Hardware fingerprint: macOS Metal GPU — "preferred device" line.
-        // Has one leading space in the real log; ^\s* (zero-or-more) is required
-        // because the Windows ^\s+ (one-or-more) anchor would also match, but
-        // these macOS lines are NOT indented by two spaces like the Windows block.
+        // Has one leading space in the real log. ^\s* (zero-or-more) is used across
+        // all macOS Metal patterns because sibling lines ("Using device",
+        // "Initializing Metal device caps", and the enumerated "N: …" line) start at
+        // column 0; a one-or-more ^\s+ anchor would miss those column-0 lines.
+        // ^\s* matches both the single-space-indented "preferred device:" line and
+        // the column-0 lines uniformly.
         (
             r"(?m)^\s*preferred device:\s+.+",
             " preferred device: <redacted>",
