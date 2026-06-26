@@ -65,9 +65,13 @@ pub struct ScrubOptions {
 /// - Linux user paths (`/home/<username>/`)
 /// - Session identifiers (JSON `"token"` and `"sessionId"` values)
 /// - Display names (JSON `"screenName"` and `"playerName"` values)
-/// - Hardware fingerprint lines (Renderer, Vendor, VRAM, Driver on Windows;
-///   preferred device, Using device, Initializing Metal device caps, enumerated
-///   Metal devices, and Metal device count on macOS)
+/// - Hardware fingerprint lines, across three log formats:
+///   - Windows `GfxDevice` block (Renderer, Vendor, VRAM, Driver)
+///   - macOS Metal `GfxDevice` block (preferred device, Using device, Initializing
+///     Metal device caps, enumerated Metal devices, Metal device count)
+///   - Unity `SystemInfo` block on both platforms (graphicsDeviceName,
+///     graphicsDeviceVendor, graphicsDeviceVersion, deviceModel, operatingSystem,
+///     processorType)
 /// - Email addresses
 /// - IPv4 dotted-quad addresses
 /// - IPv6 addresses (compressed, full, `::1`, `fe80::` link-local)
@@ -194,6 +198,38 @@ static SCRUB_PATTERNS: LazyLock<Vec<ScrubPattern>> = LazyLock::new(|| {
             "Initializing Metal device caps: <redacted>",
             false,
         ),
+        // Hardware fingerprint: Unity `SystemInfo` block (newer MTGA builds,
+        // >= 2026.58, on BOTH macOS and Windows). Emitted at the very start of the
+        // log as `key value` lines — no leading whitespace, no colon — so neither
+        // the Windows `^\s+Renderer:` patterns nor the macOS Metal patterns above
+        // match them. Each identifying key (GPU/vendor/API, device model, OS
+        // version, CPU) is redacted; innocuous capability keys (graphicsMemorySize,
+        // processorCount, maxTextureSize, graphicsShaderLevel, …) are left intact.
+        // `^graphicsDeviceName ` (trailing space) does not match
+        // `graphicsDeviceType`/`graphicsDeviceVendor`, and `^operatingSystem ` does
+        // not match `operatingSystemFamily` — the space falls at a different offset.
+        (
+            r"(?m)^graphicsDeviceName .+",
+            "graphicsDeviceName <redacted>",
+            false,
+        ),
+        (
+            r"(?m)^graphicsDeviceVendor .+",
+            "graphicsDeviceVendor <redacted>",
+            false,
+        ),
+        (
+            r"(?m)^graphicsDeviceVersion .+",
+            "graphicsDeviceVersion <redacted>",
+            false,
+        ),
+        (r"(?m)^deviceModel .+", "deviceModel <redacted>", false),
+        (
+            r"(?m)^operatingSystem .+",
+            "operatingSystem <redacted>",
+            false,
+        ),
+        (r"(?m)^processorType .+", "processorType <redacted>", false),
         // Email addresses (defense-in-depth; MTGA logs carry no known third-party
         // emails empirically, but this closes a latent gap for future client changes).
         (
@@ -788,6 +824,88 @@ mod tests {
         assert_eq!(scrub_raw_log(input), input);
     }
 
+    // --- Unity SystemInfo block (newer MTGA builds, both platforms) ---
+
+    #[test]
+    fn test_scrub_raw_log_systeminfo_macos_fingerprint_redacted() {
+        // Verbatim header format from a real macOS Player.log (MTGA >= 2026.58):
+        // `key value` lines at column 0, no colon. GPU / CPU / device / OS strings
+        // are the fingerprint; capability counts are innocuous and must survive.
+        let input = concat!(
+            "graphicsDeviceName Apple M5 Pro\n",
+            "graphicsDeviceType Metal\n",
+            "graphicsDeviceVendor Apple\n",
+            "graphicsDeviceVersion Metal\n",
+            "graphicsMemorySize 38338\n",
+            "deviceModel Mac17,8\n",
+            "deviceType Desktop\n",
+            "operatingSystem Mac OS X 26.5.1\n",
+            "operatingSystemFamily MacOSX\n",
+            "processorCount 18\n",
+            "processorType Apple M5 Pro\n",
+            "systemMemorySize 49152",
+        );
+        let result = scrub_raw_log(input);
+
+        // Identifying hardware values must not survive (GPU + CPU share a string).
+        assert!(
+            !result.contains("Apple M5 Pro"),
+            "GPU/CPU model leaked: {result:?}"
+        );
+        assert!(!result.contains("Mac17,8"), "device model leaked");
+        assert!(!result.contains("Mac OS X 26.5.1"), "OS version leaked");
+
+        // Each identifying key redacted in place.
+        assert!(result.contains("graphicsDeviceName <redacted>"));
+        assert!(result.contains("graphicsDeviceVendor <redacted>"));
+        assert!(result.contains("graphicsDeviceVersion <redacted>"));
+        assert!(result.contains("deviceModel <redacted>"));
+        assert!(result.contains("operatingSystem <redacted>"));
+        assert!(result.contains("processorType <redacted>"));
+
+        // Innocuous capability keys must be preserved verbatim (no over-redaction).
+        assert!(result.contains("graphicsDeviceType Metal"));
+        assert!(result.contains("graphicsMemorySize 38338"));
+        assert!(result.contains("deviceType Desktop"));
+        assert!(result.contains("operatingSystemFamily MacOSX"));
+        assert!(result.contains("processorCount 18"));
+        assert!(result.contains("systemMemorySize 49152"));
+    }
+
+    #[test]
+    fn test_scrub_raw_log_systeminfo_windows_fingerprint_redacted() {
+        // Same SystemInfo format on Windows — the values differ but the keys are
+        // identical, so the same patterns redact them (one fix covers both OSes).
+        let input = concat!(
+            "graphicsDeviceName NVIDIA GeForce RTX 4060 Laptop GPU\n",
+            "graphicsDeviceVendor NVIDIA\n",
+            "graphicsDeviceVersion Direct3D 11.0 [level 11.1]\n",
+            "deviceModel Zenbook UX8402VV_UX8402VV (ASUSTeK COMPUTER INC.)\n",
+            "operatingSystem Windows 11  (10.0.26200) 64bit\n",
+            "processorType 13th Gen Intel(R) Core(TM) i9-13900H\n",
+        );
+        let result = scrub_raw_log(input);
+
+        assert!(
+            !result.contains("NVIDIA GeForce RTX 4060 Laptop GPU"),
+            "GPU leaked"
+        );
+        assert!(!result.contains("Zenbook"), "device model leaked");
+        assert!(!result.contains("i9-13900H"), "CPU leaked");
+        assert!(!result.contains("10.0.26200"), "OS build leaked");
+        assert!(result.contains("graphicsDeviceName <redacted>"));
+        assert!(result.contains("deviceModel <redacted>"));
+        assert!(result.contains("processorType <redacted>"));
+    }
+
+    #[test]
+    fn test_scrub_raw_log_systeminfo_does_not_redact_innocuous_family_key() {
+        // `^operatingSystem ` (trailing space) must not match `operatingSystemFamily`
+        // — the space falls at a different offset, so the family key is preserved.
+        let input = "operatingSystemFamily MacOSX";
+        assert_eq!(scrub_raw_log(input), input);
+    }
+
     // --- Multiple patterns in one block ---
 
     #[test]
@@ -1161,6 +1279,31 @@ mod tests {
                 "macOS Initializing Metal device caps",
                 Regex::new(r"(?m)^\s*Initializing Metal device caps:\s+(.+)")
                     .unwrap_or_else(|_| unreachable!()),
+            ),
+            // Unity SystemInfo block (newer MTGA builds, both platforms).
+            (
+                "SystemInfo graphicsDeviceName",
+                Regex::new(r"(?m)^graphicsDeviceName (.+)").unwrap_or_else(|_| unreachable!()),
+            ),
+            (
+                "SystemInfo graphicsDeviceVendor",
+                Regex::new(r"(?m)^graphicsDeviceVendor (.+)").unwrap_or_else(|_| unreachable!()),
+            ),
+            (
+                "SystemInfo graphicsDeviceVersion",
+                Regex::new(r"(?m)^graphicsDeviceVersion (.+)").unwrap_or_else(|_| unreachable!()),
+            ),
+            (
+                "SystemInfo deviceModel",
+                Regex::new(r"(?m)^deviceModel (.+)").unwrap_or_else(|_| unreachable!()),
+            ),
+            (
+                "SystemInfo operatingSystem",
+                Regex::new(r"(?m)^operatingSystem (.+)").unwrap_or_else(|_| unreachable!()),
+            ),
+            (
+                "SystemInfo processorType",
+                Regex::new(r"(?m)^processorType (.+)").unwrap_or_else(|_| unreachable!()),
             ),
         ]
     }
