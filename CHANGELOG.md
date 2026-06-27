@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.6.3] - 2026-06-26
+
+### Fixed
+
+- **Scrubber: redact hardware fingerprints** previously left in sanitized
+  output. The Unity `SystemInfo` hardware block (`graphicsDeviceName`,
+  `graphicsDeviceVendor`, `graphicsDeviceVersion`, `deviceModel`,
+  `operatingSystem`, `processorType`) on both macOS and Windows, plus the macOS
+  Metal `GfxDevice` block, are now redacted. Found and verified against the
+  `manasight-corpus` real logs (20/55 files leaked GPU/hardware identifiers
+  before this change; 0 after) ([#259], [#260]).
+
 ## [0.6.2] - 2026-06-24
 
 ### Added
