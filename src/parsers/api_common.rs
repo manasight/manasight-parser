@@ -132,6 +132,72 @@ pub(crate) fn extract_deck_id(obj: &serde_json::Value) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// Finds the `"Format"` entry in a `Summary`/`CourseDeckSummary.Attributes`
+/// array and returns its value.
+///
+/// The `Attributes` array contains objects of the form `{"name": "...", "value": "..."}`.
+/// Returns `None` when the `Attributes` field is absent or no entry has `name == "Format"`.
+///
+/// Shared by both deck-carrying carriers: `EventSetDeck`'s `request.Summary`
+/// and `EventGetCoursesV2`'s `Course.CourseDeckSummary` use the identical
+/// `{name, value}` attribute shape.
+pub(crate) fn extract_format_attribute(summary: &serde_json::Value) -> Option<String> {
+    summary
+        .get("Attributes")?
+        .as_array()?
+        .iter()
+        .find(|attr| attr.get("name").and_then(serde_json::Value::as_str) == Some("Format"))
+        .and_then(|attr| attr.get("value"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned)
+}
+
+/// Computes the canonical `maindeck_hash` for a `MainDeck` card-list array.
+///
+/// This is a cross-event contract shared by `DeckSubmission` and
+/// `CourseDeck`: both carriers hash their `MainDeck` array via this single
+/// helper so downstream consumers can compare deck identity across the two
+/// event types.
+///
+/// Canonicalization: entries are sorted by `(cardId, quantity)` ascending,
+/// serialized as `cardId:quantity`, and joined with `;`. The digest is the
+/// SHA-256 hex of that canonical string (via [`crate::util::content_hash`]).
+///
+/// The `quantity` tiebreak makes the sort deterministic for a hypothetical
+/// duplicate `cardId` entry; real Arena deck lists never contain duplicate
+/// `cardId`s, so this only pins an otherwise-unreachable corner case.
+///
+/// Returns `None` (all-or-nothing) when:
+/// - `maindeck` is not an array, or the array is empty
+/// - any entry is missing a numeric `cardId` or `quantity`
+///
+/// A partial hash would silently mismatch across carriers, and hashing the
+/// empty string would collide "no deck" with "empty deck" — both are
+/// rejected in favor of `None`.
+pub(crate) fn maindeck_hash(maindeck: &serde_json::Value) -> Option<String> {
+    let entries = maindeck.as_array()?;
+    if entries.is_empty() {
+        return None;
+    }
+
+    let mut pairs: Vec<(u64, u64)> = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let card_id = entry.get("cardId")?.as_u64()?;
+        let quantity = entry.get("quantity")?.as_u64()?;
+        pairs.push((card_id, quantity));
+    }
+
+    pairs.sort_unstable();
+
+    let canonical = pairs
+        .iter()
+        .map(|(card_id, quantity)| format!("{card_id}:{quantity}"))
+        .collect::<Vec<_>>()
+        .join(";");
+
+    Some(crate::util::content_hash(canonical.as_bytes()))
+}
+
 /// Extracts and parses a nested JSON string field.
 ///
 /// MTG Arena often escapes JSON payloads inside string fields called
@@ -236,6 +302,137 @@ mod tests {
         fn test_extract_deck_id_null_returns_none() {
             let obj = serde_json::json!({"DeckId": null});
             assert!(extract_deck_id(&obj).is_none());
+        }
+    }
+
+    // -- extract_format_attribute -----------------------------------------------
+
+    mod format_attribute {
+        use super::*;
+
+        #[test]
+        fn test_extract_format_attribute_finds_format_among_multiple_attributes() {
+            let summary = serde_json::json!({
+                "Attributes": [
+                    {"name": "Version", "value": "5"},
+                    {"name": "TileID", "value": "12345"},
+                    {"name": "Format", "value": "Pioneer"},
+                    {"name": "IsFavorite", "value": "false"}
+                ]
+            });
+            assert_eq!(
+                extract_format_attribute(&summary),
+                Some("Pioneer".to_owned())
+            );
+        }
+
+        #[test]
+        fn test_extract_format_attribute_missing_attributes_returns_none() {
+            let summary = serde_json::json!({});
+            assert!(extract_format_attribute(&summary).is_none());
+        }
+
+        #[test]
+        fn test_extract_format_attribute_no_format_entry_returns_none() {
+            let summary = serde_json::json!({
+                "Attributes": [{"name": "Version", "value": "5"}]
+            });
+            assert!(extract_format_attribute(&summary).is_none());
+        }
+
+        #[test]
+        fn test_extract_format_attribute_empty_attributes_returns_none() {
+            let summary = serde_json::json!({"Attributes": []});
+            assert!(extract_format_attribute(&summary).is_none());
+        }
+    }
+
+    // -- maindeck_hash ------------------------------------------------------
+
+    mod maindeck_hash_tests {
+        use super::*;
+
+        #[test]
+        fn test_maindeck_hash_known_vector() {
+            let maindeck = serde_json::json!([
+                {"cardId": 90350, "quantity": 4},
+                {"cardId": 90351, "quantity": 2}
+            ]);
+            assert_eq!(
+                maindeck_hash(&maindeck),
+                Some("875a0df64451db3ca608b361b940959cb607b3f4655282cd0f9b0ebb67ad876e".to_owned())
+            );
+        }
+
+        #[test]
+        fn test_maindeck_hash_unsorted_input_matches_sorted() {
+            let sorted = serde_json::json!([
+                {"cardId": 90350, "quantity": 4},
+                {"cardId": 90351, "quantity": 2}
+            ]);
+            let unsorted = serde_json::json!([
+                {"cardId": 90351, "quantity": 2},
+                {"cardId": 90350, "quantity": 4}
+            ]);
+            assert_eq!(maindeck_hash(&sorted), maindeck_hash(&unsorted));
+        }
+
+        #[test]
+        fn test_maindeck_hash_empty_array_returns_none() {
+            let maindeck = serde_json::json!([]);
+            assert!(maindeck_hash(&maindeck).is_none());
+        }
+
+        #[test]
+        fn test_maindeck_hash_absent_field_returns_none() {
+            let maindeck = serde_json::Value::Null;
+            assert!(maindeck_hash(&maindeck).is_none());
+        }
+
+        #[test]
+        fn test_maindeck_hash_non_array_returns_none() {
+            let maindeck = serde_json::json!({"not": "an array"});
+            assert!(maindeck_hash(&maindeck).is_none());
+        }
+
+        #[test]
+        fn test_maindeck_hash_missing_card_id_returns_none() {
+            let maindeck = serde_json::json!([{"quantity": 4}]);
+            assert!(maindeck_hash(&maindeck).is_none());
+        }
+
+        #[test]
+        fn test_maindeck_hash_missing_quantity_returns_none() {
+            let maindeck = serde_json::json!([{"cardId": 90350}]);
+            assert!(maindeck_hash(&maindeck).is_none());
+        }
+
+        #[test]
+        fn test_maindeck_hash_non_numeric_card_id_returns_none() {
+            let maindeck = serde_json::json!([{"cardId": "90350", "quantity": 4}]);
+            assert!(maindeck_hash(&maindeck).is_none());
+        }
+
+        #[test]
+        fn test_maindeck_hash_one_malformed_entry_invalidates_whole_list() {
+            let maindeck = serde_json::json!([
+                {"cardId": 90350, "quantity": 4},
+                {"cardId": 90351}
+            ]);
+            assert!(maindeck_hash(&maindeck).is_none());
+        }
+
+        #[test]
+        fn test_maindeck_hash_deterministic() {
+            let maindeck = serde_json::json!([
+                {"cardId": 68740, "quantity": 4},
+                {"cardId": 95816, "quantity": 4},
+                {"cardId": 95817, "quantity": 3}
+            ]);
+            assert_eq!(
+                maindeck_hash(&maindeck),
+                Some("6abd62511e8248dcf93b56f6b4fff47a7a26d849d105b5a793b36715455451e6".to_owned())
+            );
         }
     }
 

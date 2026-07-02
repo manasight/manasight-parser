@@ -127,6 +127,7 @@ macro_rules! delegate_to_inner {
             Self::DeckCollection(e) => e.$method(),
             Self::Inventory(e) => e.$method(),
             Self::DeckSubmission(e) => e.$method(),
+            Self::CourseDeck(e) => e.$method(),
             Self::GameResult(e) => e.$method(),
             Self::LogFileRotated(e) => e.$method(),
             Self::DetailedLoggingStatus(e) => e.$method(),
@@ -205,6 +206,14 @@ pub enum GameEvent {
     /// is_singleton }`. Used as the C-2b format-model fallback signal for
     /// bot-match queues. Class 2 — durable per-event.
     DeckSubmission(DeckSubmissionEvent),
+
+    /// Course deck (`<== EventGetCoursesV2` response) — one event per active
+    /// Course carrying a registered deck. Payload: `{ type, deck_id, name,
+    /// format, maindeck_hash, internal_event_name, course_id }`. Covers
+    /// limited runs and app-started-mid-event recovery where no
+    /// `EventSetDeck` request exists in the current log session.
+    /// Class 2 — durable per-event.
+    CourseDeck(CourseDeckEvent),
 
     /// Game result (`GameStage_GameOver` from GRE `GameStateMessage`).
     /// Class 3 — triggers post-game batch assembly.
@@ -333,7 +342,8 @@ impl GameEvent {
             | Self::Rank(_)
             | Self::DeckCollection(_)
             | Self::Inventory(_)
-            | Self::DeckSubmission(_) => PerformanceClass::DurablePerEvent,
+            | Self::DeckSubmission(_)
+            | Self::CourseDeck(_) => PerformanceClass::DurablePerEvent,
             Self::GameResult(_) => PerformanceClass::PostGameBatch,
         }
     }
@@ -722,6 +732,20 @@ define_event! {
     DeckSubmissionEvent
 }
 
+define_event! {
+    /// Course-deck event.
+    ///
+    /// Parsed from a `<== EventGetCoursesV2` response — one event per active
+    /// Course whose `CourseDeck.MainDeck` is a non-empty array (a registered
+    /// deck exists). The payload carries `deck_id`, `name`, `format` (from
+    /// `CourseDeckSummary`), `maindeck_hash` (from `CourseDeck.MainDeck`),
+    /// and `internal_event_name` / `course_id` (from the enclosing `Course`)
+    /// for event-keyed deck-to-match association. All payload fields besides
+    /// `type` are individually nullable. No `lean` gating — the payload is 7
+    /// scalars and the wasm Parse Worker consumes it unchanged.
+    CourseDeckEvent
+}
+
 // ---------------------------------------------------------------------------
 // Class 3: Post-Game Batch
 // ---------------------------------------------------------------------------
@@ -1010,6 +1034,7 @@ mod tests {
             GameEvent::DeckCollection(DeckCollectionEvent::new(meta.clone(), payload.clone())),
             GameEvent::Inventory(InventoryEvent::new(meta.clone(), payload.clone())),
             GameEvent::DeckSubmission(DeckSubmissionEvent::new(meta.clone(), payload.clone())),
+            GameEvent::CourseDeck(CourseDeckEvent::new(meta.clone(), payload.clone())),
             GameEvent::GameResult(GameResultEvent::new(meta.clone(), payload.clone())),
             GameEvent::LogFileRotated(LogFileRotatedEvent::new(meta.clone(), payload.clone())),
             GameEvent::DetailedLoggingStatus(DetailedLoggingStatusEvent::new(
@@ -1268,6 +1293,7 @@ mod tests {
             PerformanceClass::DurablePerEvent,     // DeckCollection
             PerformanceClass::DurablePerEvent,     // Inventory
             PerformanceClass::DurablePerEvent,     // DeckSubmission
+            PerformanceClass::DurablePerEvent,     // CourseDeck
             PerformanceClass::PostGameBatch,       // GameResult
             PerformanceClass::InteractiveDispatch, // LogFileRotated
             PerformanceClass::InteractiveDispatch, // DetailedLoggingStatus
@@ -1390,6 +1416,7 @@ mod tests {
             2, // DeckCollection
             2, // Inventory
             2, // DeckSubmission
+            2, // CourseDeck
             3, // GameResult
             1, // LogFileRotated
             1, // DetailedLoggingStatus

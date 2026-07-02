@@ -5,6 +5,7 @@ pub mod client_actions;
 pub mod connection_close;
 pub mod connection_error;
 pub mod connection_state;
+pub mod course_deck;
 pub mod deck_collection;
 pub mod deck_submission;
 pub mod draft;

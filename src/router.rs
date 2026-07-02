@@ -234,23 +234,24 @@ fn extract_timestamp(body: &str) -> Option<DateTime<Utc>> {
 ///
 /// 0. Metadata — `DETAILED LOGS` status (header-type short-circuit)
 /// 1. GRE messages (game state + game result) — most frequent in-game
-/// 2. Client actions — frequent player decisions
-/// 3. Match state — match boundaries
-/// 4. Session — login/logout
-/// 5. Draft bot — bot draft picks
-/// 6. Draft human — human draft picks
-/// 7. Draft complete — draft completion
-/// 8. Event lifecycle — event joins/claims
-/// 9. Rank — rank snapshots
-/// 10. Deck collection — deck snapshots from `StartHook`
-/// 11. Inventory — inventory from `StartHook`
-/// 12. Deck submission — `EventSetDeck` family (V2/V3/future Vn) requests
-/// 13. Match connection state — `STATE CHANGED` transitions
-/// 14. Connection close — `Client.TcpConnection.Close` / `GREConnection.HandleWebSocketClosed`
+/// 2. Course deck — `<== EventGetCoursesV2` responses (registered decks)
+/// 3. Client actions — frequent player decisions
+/// 4. Match state — match boundaries
+/// 5. Session — login/logout
+/// 6. Draft bot — bot draft picks
+/// 7. Draft human — human draft picks
+/// 8. Draft complete — draft completion
+/// 9. Event lifecycle — event joins/claims
+/// 10. Rank — rank snapshots
+/// 11. Deck collection — deck snapshots from `StartHook`
+/// 12. Inventory — inventory from `StartHook`
+/// 13. Deck submission — `EventSetDeck` family (V2/V3/future Vn) requests
+/// 14. Match connection state — `STATE CHANGED` transitions
+/// 15. Connection close — `Client.TcpConnection.Close` / `GREConnection.HandleWebSocketClosed`
 ///
-/// The GRE parser may return multiple events from a single entry
-/// (batched `GameStateMessage` values). All other parsers return at
-/// most one event.
+/// The GRE and course-deck parsers may each return multiple events from a
+/// single entry (batched `GameStateMessage` values, or one event per
+/// qualifying `Course`). All other parsers return at most one event.
 ///
 /// `timestamp` is `None` when the log entry header did not contain a
 /// parseable timestamp; parsers pass it through to `EventMetadata`.
@@ -272,6 +273,13 @@ fn dispatch_to_parsers(entry: &LogEntry, timestamp: Option<DateTime<Utc>>) -> Ve
     let gre_events = parsers::gre::try_parse(entry, timestamp);
     if !gre_events.is_empty() {
         return gre_events;
+    }
+
+    // Course-deck parser returns Vec<GameEvent> (one per Course carrying a
+    // registered deck in an EventGetCoursesV2 response).
+    let course_events = parsers::course_deck::try_parse(entry, timestamp);
+    if !course_events.is_empty() {
+        return course_events;
     }
 
     // All other parsers return Option<GameEvent> (at most one event per entry).
@@ -613,6 +621,38 @@ mod tests {
             let results = router.route(&entry);
             assert_eq!(results.len(), 1);
             assert!(matches!(&results[0], GameEvent::Inventory(_)));
+        }
+
+        #[test]
+        fn test_route_course_deck_event() {
+            let router = Router::new();
+            let payload = serde_json::json!({
+                "Courses": [{
+                    "CourseId": "course-1",
+                    "InternalEventName": "Constructed_BestOf3",
+                    "CourseDeckSummary": {
+                        "DeckId": "deck-1",
+                        "Name": "Test Deck",
+                        "Attributes": [{"name": "Format", "value": "Standard"}]
+                    },
+                    "CourseDeck": {
+                        "MainDeck": [{"cardId": 1, "quantity": 4}],
+                        "Sideboard": [],
+                        "CommandZone": [],
+                        "Companions": [],
+                        "CardSkins": []
+                    }
+                }]
+            });
+            let body = format!(
+                "[UnityCrossThreadLogger]6/17/2026 5:08:00 PM\n\
+                 <== EventGetCoursesV2(abc-123)\n{payload}",
+            );
+            let entry = unity_entry(&body);
+
+            let results = router.route(&entry);
+            assert_eq!(results.len(), 1);
+            assert!(matches!(&results[0], GameEvent::CourseDeck(_)));
         }
     }
 

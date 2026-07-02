@@ -1,14 +1,15 @@
 {
   "_meta": {
-    "corpus_tag": "manasight-corpus-v35",
+    "corpus_tag": "manasight-corpus-v1",
     "description": "Smoke test baseline -- per-file, per-parser event counts from Level 1 (parser-only) smoke tests.",
-    "generated_from_commit": "47ae0a0"
+    "generated_from_commit": "3c43584"
   },
   "files": {
     "session_2026-02-22_0000_ecl-premier-bg-elves.log": {
       "double_claims": 0,
       "event_types": {
         "ClientAction": 2026,
+        "CourseDeck": 300,
         "DeckSubmission": 2,
         "DetailedLoggingStatus": 1,
         "EventLifecycle": 7,
@@ -22,6 +23,7 @@
       },
       "parsers": {
         "client_actions": 2026,
+        "course_deck": 15,
         "deck_collection": 0,
         "deck_submission": 2,
         "draft_bot": 0,
@@ -37,12 +39,13 @@
       },
       "timestamp_failures": 165,
       "total_entries": 4915,
-      "unclaimed": 232
+      "unclaimed": 217
     },
     "session_2026-02-22_0000_ecl-premier-uw-merfolk.log": {
       "double_claims": 0,
       "event_types": {
         "ClientAction": 1488,
+        "CourseDeck": 258,
         "DeckSubmission": 3,
         "DetailedLoggingStatus": 1,
         "DraftComplete": 2,
@@ -58,6 +61,7 @@
       },
       "parsers": {
         "client_actions": 1488,
+        "course_deck": 13,
         "deck_collection": 0,
         "deck_submission": 3,
         "draft_bot": 0,
@@ -73,12 +77,13 @@
       },
       "timestamp_failures": 214,
       "total_entries": 3996,
-      "unclaimed": 223
+      "unclaimed": 210
     },
     "session_2026-02-23_0000_standard-bo1.log": {
       "double_claims": 0,
       "event_types": {
         "ClientAction": 425,
+        "CourseDeck": 76,
         "DeckSubmission": 2,
         "DetailedLoggingStatus": 1,
         "EventLifecycle": 4,
@@ -92,6 +97,7 @@
       },
       "parsers": {
         "client_actions": 425,
+        "course_deck": 4,
         "deck_collection": 0,
         "deck_submission": 2,
         "draft_bot": 0,
@@ -107,12 +113,13 @@
       },
       "timestamp_failures": 91,
       "total_entries": 950,
-      "unclaimed": 130
+      "unclaimed": 126
     },
     "session_2026-03-05_0000.log": {
       "double_claims": 0,
       "event_types": {
         "ClientAction": 236,
+        "CourseDeck": 38,
         "DeckSubmission": 1,
         "DetailedLoggingStatus": 1,
         "EventLifecycle": 2,
@@ -126,6 +133,7 @@
       },
       "parsers": {
         "client_actions": 236,
+        "course_deck": 2,
         "deck_collection": 0,
         "deck_submission": 1,
         "draft_bot": 0,
@@ -141,12 +149,13 @@
       },
       "timestamp_failures": 49,
       "total_entries": 772,
-      "unclaimed": 70
+      "unclaimed": 68
     },
     "session_2026-03-06_0000_pick2-draft-game.log": {
       "double_claims": 0,
       "event_types": {
         "ClientAction": 1157,
+        "CourseDeck": 98,
         "DeckSubmission": 1,
         "DetailedLoggingStatus": 1,
         "EventLifecycle": 1,
@@ -160,6 +169,7 @@
       },
       "parsers": {
         "client_actions": 1157,
+        "course_deck": 5,
         "deck_collection": 0,
         "deck_submission": 1,
         "draft_bot": 0,
@@ -175,11 +185,12 @@
       },
       "timestamp_failures": 56,
       "total_entries": 2306,
-      "unclaimed": 79
+      "unclaimed": 74
     },
     "session_2026-03-06_0000_pick2-draft-only.log": {
       "double_claims": 0,
       "event_types": {
+        "CourseDeck": 38,
         "DetailedLoggingStatus": 1,
         "DraftComplete": 2,
         "DraftHuman": 41,
@@ -190,6 +201,7 @@
       },
       "parsers": {
         "client_actions": 0,
+        "course_deck": 2,
         "deck_collection": 0,
         "deck_submission": 0,
         "draft_bot": 0,
@@ -205,12 +217,13 @@
       },
       "timestamp_failures": 73,
       "total_entries": 113,
-      "unclaimed": 65
+      "unclaimed": 63
     },
     "session_2026-03-08_1103_standard-bo1-log-rotated.log": {
       "double_claims": 0,
       "event_types": {
         "ClientAction": 254,
+        "CourseDeck": 57,
         "DeckSubmission": 1,
         "DetailedLoggingStatus": 1,
         "EventLifecycle": 2,
@@ -224,6 +237,7 @@
       },
       "parsers": {
         "client_actions": 254,
+        "course_deck": 3,
         "deck_collection": 0,
         "deck_submission": 1,
         "draft_bot": 0,
@@ -239,12 +253,13 @@
       },
       "timestamp_failures": 66,
       "total_entries": 461,
-      "unclaimed": 96
+      "unclaimed": 93
     },
     "session_2026-03-11_1847_quick-draft-selesnya.log": {
       "double_claims": 0,
       "event_types": {
         "ClientAction": 740,
+        "CourseDeck": 165,
         "DeckSubmission": 1,
         "DetailedLoggingStatus": 1,
         "DraftBot": 78,
@@ -259,6 +274,7 @@
       },
       "parsers": {
         "client_actions": 740,
+        "course_deck": 8,
         "deck_collection": 0,
         "deck_submission": 1,
         "draft_bot": 78,
@@ -274,12 +290,13 @@
       },
       "timestamp_failures": 112,
       "total_entries": 1843,
-      "unclaimed": 109
+      "unclaimed": 101
     },
     "session_2026-03-11_2124_trad-standard-bo3.log": {
       "double_claims": 0,
       "event_types": {
         "ClientAction": 405,
+        "CourseDeck": 42,
         "DeckSubmission": 1,
         "DetailedLoggingStatus": 1,
         "EventLifecycle": 2,
@@ -293,6 +310,7 @@
       },
       "parsers": {
         "client_actions": 405,
+        "course_deck": 2,
         "deck_collection": 0,
         "deck_submission": 1,
         "draft_bot": 0,
@@ -308,7 +326,7 @@
       },
       "timestamp_failures": 49,
       "total_entries": 1159,
-      "unclaimed": 71
+      "unclaimed": 69
     },
     "session_2026-03-15_1157_detailed_logs_disabled.log": {
       "double_claims": 0,
@@ -317,6 +335,7 @@
       },
       "parsers": {
         "client_actions": 0,
+        "course_deck": 0,
         "deck_collection": 0,
         "deck_submission": 0,
         "draft_bot": 0,
@@ -338,6 +357,7 @@
       "double_claims": 0,
       "event_types": {
         "ClientAction": 393,
+        "CourseDeck": 80,
         "DetailedLoggingStatus": 1,
         "GameResult": 2,
         "GameState": 459,
@@ -349,6 +369,7 @@
       },
       "parsers": {
         "client_actions": 393,
+        "course_deck": 4,
         "deck_collection": 0,
         "deck_submission": 0,
         "draft_bot": 0,
@@ -364,12 +385,13 @@
       },
       "timestamp_failures": 77,
       "total_entries": 645,
-      "unclaimed": 113
+      "unclaimed": 109
     },
     "session_2026-03-21_0905_standard-bo3-skeleton.log": {
       "double_claims": 0,
       "event_types": {
         "ClientAction": 325,
+        "CourseDeck": 40,
         "DeckSubmission": 1,
         "DetailedLoggingStatus": 1,
         "EventLifecycle": 2,
@@ -383,6 +405,7 @@
       },
       "parsers": {
         "client_actions": 325,
+        "course_deck": 2,
         "deck_collection": 0,
         "deck_submission": 1,
         "draft_bot": 0,
@@ -398,12 +421,13 @@
       },
       "timestamp_failures": 50,
       "total_entries": 712,
-      "unclaimed": 72
+      "unclaimed": 70
     },
     "session_2026-03-22_0000_feedback-019d1311.log": {
       "double_claims": 0,
       "event_types": {
         "ClientAction": 1137,
+        "CourseDeck": 45,
         "DeckSubmission": 2,
         "DetailedLoggingStatus": 1,
         "EventLifecycle": 4,
@@ -417,6 +441,7 @@
       },
       "parsers": {
         "client_actions": 1137,
+        "course_deck": 3,
         "deck_collection": 0,
         "deck_submission": 2,
         "draft_bot": 0,
@@ -432,12 +457,13 @@
       },
       "timestamp_failures": 84,
       "total_entries": 2437,
-      "unclaimed": 111
+      "unclaimed": 108
     },
     "session_2026-03-22_1232_debug.log": {
       "double_claims": 0,
       "event_types": {
         "ClientAction": 2012,
+        "CourseDeck": 320,
         "DeckSubmission": 8,
         "DetailedLoggingStatus": 1,
         "EventLifecycle": 16,
@@ -451,6 +477,7 @@
       },
       "parsers": {
         "client_actions": 2012,
+        "course_deck": 16,
         "deck_collection": 0,
         "deck_submission": 8,
         "draft_bot": 0,
@@ -466,12 +493,13 @@
       },
       "timestamp_failures": 298,
       "total_entries": 4204,
-      "unclaimed": 417
+      "unclaimed": 401
     },
     "session_2026-04-05_0000_feedback-019d5e75.log": {
       "double_claims": 0,
       "event_types": {
         "ClientAction": 2029,
+        "CourseDeck": 120,
         "DeckSubmission": 7,
         "DetailedLoggingStatus": 1,
         "EventLifecycle": 14,
@@ -485,6 +513,7 @@
       },
       "parsers": {
         "client_actions": 2029,
+        "course_deck": 8,
         "deck_collection": 0,
         "deck_submission": 7,
         "draft_bot": 0,
@@ -500,12 +529,13 @@
       },
       "timestamp_failures": 227,
       "total_entries": 4324,
-      "unclaimed": 292
+      "unclaimed": 284
     },
     "session_2026-04-05_1509.log": {
       "double_claims": 0,
       "event_types": {
         "ClientAction": 337,
+        "CourseDeck": 57,
         "DetailedLoggingStatus": 1,
         "GameResult": 1,
         "GameState": 494,
@@ -517,6 +547,7 @@
       },
       "parsers": {
         "client_actions": 337,
+        "course_deck": 3,
         "deck_collection": 0,
         "deck_submission": 0,
         "draft_bot": 0,
@@ -532,12 +563,13 @@
       },
       "timestamp_failures": 60,
       "total_entries": 603,
-      "unclaimed": 90
+      "unclaimed": 87
     },
     "session_2026-04-11_1108.log": {
       "double_claims": 0,
       "event_types": {
         "ClientAction": 521,
+        "CourseDeck": 76,
         "DeckSubmission": 1,
         "DetailedLoggingStatus": 1,
         "EventLifecycle": 2,
@@ -551,6 +583,7 @@
       },
       "parsers": {
         "client_actions": 521,
+        "course_deck": 4,
         "deck_collection": 0,
         "deck_submission": 1,
         "draft_bot": 0,
@@ -566,12 +599,13 @@
       },
       "timestamp_failures": 67,
       "total_entries": 1872,
-      "unclaimed": 101
+      "unclaimed": 97
     },
     "session_2026-04-11_1542_adapter-disable.log": {
       "double_claims": 0,
       "event_types": {
         "ClientAction": 21,
+        "CourseDeck": 97,
         "DeckSubmission": 1,
         "DetailedLoggingStatus": 1,
         "EventLifecycle": 2,
@@ -585,6 +619,7 @@
       },
       "parsers": {
         "client_actions": 21,
+        "course_deck": 5,
         "deck_collection": 0,
         "deck_submission": 1,
         "draft_bot": 0,
@@ -600,12 +635,13 @@
       },
       "timestamp_failures": 243,
       "total_entries": 367,
-      "unclaimed": 271
+      "unclaimed": 266
     },
     "session_2026-04-11_1835_firewall.log": {
       "double_claims": 0,
       "event_types": {
         "ClientAction": 81,
+        "CourseDeck": 79,
         "DeckSubmission": 1,
         "DetailedLoggingStatus": 1,
         "EventLifecycle": 2,
@@ -618,6 +654,7 @@
       },
       "parsers": {
         "client_actions": 81,
+        "course_deck": 4,
         "deck_collection": 0,
         "deck_submission": 1,
         "draft_bot": 0,
@@ -633,12 +670,13 @@
       },
       "timestamp_failures": 162,
       "total_entries": 340,
-      "unclaimed": 189
+      "unclaimed": 185
     },
     "session_2026-04-11_1900_clumsy-directional.log": {
       "double_claims": 0,
       "event_types": {
         "ClientAction": 48,
+        "CourseDeck": 99,
         "DeckSubmission": 2,
         "DetailedLoggingStatus": 1,
         "EventLifecycle": 4,
@@ -652,6 +690,7 @@
       },
       "parsers": {
         "client_actions": 48,
+        "course_deck": 5,
         "deck_collection": 0,
         "deck_submission": 2,
         "draft_bot": 0,
@@ -667,12 +706,13 @@
       },
       "timestamp_failures": 233,
       "total_entries": 428,
-      "unclaimed": 261
+      "unclaimed": 256
     },
     "session_2026-04-11_1930_clumsy-outbound-ranked.log": {
       "double_claims": 0,
       "event_types": {
         "ClientAction": 45,
+        "CourseDeck": 38,
         "DeckSubmission": 1,
         "DetailedLoggingStatus": 1,
         "EventLifecycle": 2,
@@ -685,6 +725,7 @@
       },
       "parsers": {
         "client_actions": 45,
+        "course_deck": 2,
         "deck_collection": 0,
         "deck_submission": 1,
         "draft_bot": 0,
@@ -700,12 +741,13 @@
       },
       "timestamp_failures": 69,
       "total_entries": 189,
-      "unclaimed": 88
+      "unclaimed": 86
     },
     "session_2026-04-12_0844_edge-cases.log": {
       "double_claims": 0,
       "event_types": {
         "ClientAction": 476,
+        "CourseDeck": 58,
         "DeckSubmission": 1,
         "DetailedLoggingStatus": 1,
         "EventLifecycle": 2,
@@ -719,6 +761,7 @@
       },
       "parsers": {
         "client_actions": 476,
+        "course_deck": 3,
         "deck_collection": 0,
         "deck_submission": 1,
         "draft_bot": 0,
@@ -734,12 +777,13 @@
       },
       "timestamp_failures": 152,
       "total_entries": 1405,
-      "unclaimed": 173
+      "unclaimed": 170
     },
     "session_2026-04-12_1010_pfctl-bidirectional.log": {
       "double_claims": 0,
       "event_types": {
         "ClientAction": 117,
+        "CourseDeck": 98,
         "DeckSubmission": 1,
         "DetailedLoggingStatus": 1,
         "EventLifecycle": 2,
@@ -752,6 +796,7 @@
       },
       "parsers": {
         "client_actions": 117,
+        "course_deck": 5,
         "deck_collection": 0,
         "deck_submission": 1,
         "draft_bot": 0,
@@ -767,12 +812,13 @@
       },
       "timestamp_failures": 169,
       "total_entries": 439,
-      "unclaimed": 200
+      "unclaimed": 195
     },
     "session_2026-04-12_1045_pfctl-directional.log": {
       "double_claims": 0,
       "event_types": {
         "ClientAction": 429,
+        "CourseDeck": 135,
         "DeckSubmission": 2,
         "DetailedLoggingStatus": 1,
         "EventLifecycle": 4,
@@ -786,6 +832,7 @@
       },
       "parsers": {
         "client_actions": 429,
+        "course_deck": 7,
         "deck_collection": 0,
         "deck_submission": 2,
         "draft_bot": 0,
@@ -801,12 +848,13 @@
       },
       "timestamp_failures": 300,
       "total_entries": 1273,
-      "unclaimed": 341
+      "unclaimed": 334
     },
     "session_2026-04-12_1145_wifi-disable.log": {
       "double_claims": 0,
       "event_types": {
         "ClientAction": 413,
+        "CourseDeck": 77,
         "DeckSubmission": 1,
         "DetailedLoggingStatus": 1,
         "EventLifecycle": 2,
@@ -820,6 +868,7 @@
       },
       "parsers": {
         "client_actions": 413,
+        "course_deck": 4,
         "deck_collection": 0,
         "deck_submission": 1,
         "draft_bot": 0,
@@ -835,12 +884,13 @@
       },
       "timestamp_failures": 126,
       "total_entries": 953,
-      "unclaimed": 162
+      "unclaimed": 158
     },
     "session_2026-04-12_1240_edge-cases.log": {
       "double_claims": 0,
       "event_types": {
         "ClientAction": 199,
+        "CourseDeck": 59,
         "DeckSubmission": 1,
         "DetailedLoggingStatus": 1,
         "EventLifecycle": 2,
@@ -854,6 +904,7 @@
       },
       "parsers": {
         "client_actions": 199,
+        "course_deck": 3,
         "deck_collection": 0,
         "deck_submission": 1,
         "draft_bot": 0,
@@ -869,12 +920,13 @@
       },
       "timestamp_failures": 158,
       "total_entries": 581,
-      "unclaimed": 178
+      "unclaimed": 175
     },
     "session_2026-04-14_1720.log": {
       "double_claims": 0,
       "event_types": {
         "ClientAction": 24,
+        "CourseDeck": 76,
         "DeckCollection": 4,
         "DeckSubmission": 2,
         "DetailedLoggingStatus": 1,
@@ -889,6 +941,7 @@
       },
       "parsers": {
         "client_actions": 24,
+        "course_deck": 4,
         "deck_collection": 4,
         "deck_submission": 2,
         "draft_bot": 0,
@@ -904,12 +957,13 @@
       },
       "timestamp_failures": 91,
       "total_entries": 282,
-      "unclaimed": 131
+      "unclaimed": 127
     },
     "session_2026-04-25_0841_deck-management-store.log": {
       "double_claims": 0,
       "event_types": {
         "ClientAction": 19,
+        "CourseDeck": 95,
         "DeckCollection": 2,
         "DetailedLoggingStatus": 1,
         "GameResult": 1,
@@ -922,6 +976,7 @@
       },
       "parsers": {
         "client_actions": 19,
+        "course_deck": 5,
         "deck_collection": 2,
         "deck_submission": 0,
         "draft_bot": 0,
@@ -937,12 +992,13 @@
       },
       "timestamp_failures": 119,
       "total_entries": 213,
-      "unclaimed": 174
+      "unclaimed": 169
     },
     "session_2026-04-26_2209.log": {
       "double_claims": 0,
       "event_types": {
         "ClientAction": 1086,
+        "CourseDeck": 152,
         "DeckCollection": 7,
         "DeckSubmission": 4,
         "DetailedLoggingStatus": 1,
@@ -957,6 +1013,7 @@
       },
       "parsers": {
         "client_actions": 1086,
+        "course_deck": 8,
         "deck_collection": 7,
         "deck_submission": 4,
         "draft_bot": 0,
@@ -972,12 +1029,13 @@
       },
       "timestamp_failures": 192,
       "total_entries": 2156,
-      "unclaimed": 267
+      "unclaimed": 259
     },
     "session_2026-04-27_2230.log": {
       "double_claims": 0,
       "event_types": {
         "ClientAction": 1183,
+        "CourseDeck": 95,
         "DeckCollection": 4,
         "DeckSubmission": 1,
         "DetailedLoggingStatus": 1,
@@ -992,6 +1050,7 @@
       },
       "parsers": {
         "client_actions": 1183,
+        "course_deck": 5,
         "deck_collection": 4,
         "deck_submission": 1,
         "draft_bot": 0,
@@ -1007,12 +1066,13 @@
       },
       "timestamp_failures": 104,
       "total_entries": 2193,
-      "unclaimed": 151
+      "unclaimed": 146
     },
     "session_2026-04-29_2128.log": {
       "double_claims": 0,
       "event_types": {
         "ClientAction": 826,
+        "CourseDeck": 57,
         "DeckCollection": 3,
         "DetailedLoggingStatus": 1,
         "GameResult": 2,
@@ -1025,6 +1085,7 @@
       },
       "parsers": {
         "client_actions": 826,
+        "course_deck": 3,
         "deck_collection": 3,
         "deck_submission": 0,
         "draft_bot": 0,
@@ -1040,12 +1101,13 @@
       },
       "timestamp_failures": 67,
       "total_entries": 1197,
-      "unclaimed": 101
+      "unclaimed": 98
     },
     "session_2026-04-29_2201.log": {
       "double_claims": 0,
       "event_types": {
         "ClientAction": 695,
+        "CourseDeck": 57,
         "DeckCollection": 2,
         "DetailedLoggingStatus": 1,
         "GameResult": 1,
@@ -1058,6 +1120,7 @@
       },
       "parsers": {
         "client_actions": 695,
+        "course_deck": 3,
         "deck_collection": 2,
         "deck_submission": 0,
         "draft_bot": 0,
@@ -1073,12 +1136,13 @@
       },
       "timestamp_failures": 60,
       "total_entries": 983,
-      "unclaimed": 88
+      "unclaimed": 85
     },
     "session_2026-04-29_2311.log": {
       "double_claims": 0,
       "event_types": {
         "ClientAction": 919,
+        "CourseDeck": 171,
         "DeckCollection": 9,
         "DetailedLoggingStatus": 1,
         "GameResult": 8,
@@ -1091,6 +1155,7 @@
       },
       "parsers": {
         "client_actions": 919,
+        "course_deck": 9,
         "deck_collection": 9,
         "deck_submission": 0,
         "draft_bot": 0,
@@ -1106,12 +1171,13 @@
       },
       "timestamp_failures": 199,
       "total_entries": 1793,
-      "unclaimed": 284
+      "unclaimed": 275
     },
     "session_2026-04-30_0000.log": {
       "double_claims": 0,
       "event_types": {
         "ClientAction": 359,
+        "CourseDeck": 76,
         "DeckCollection": 2,
         "DetailedLoggingStatus": 1,
         "GameResult": 1,
@@ -1124,6 +1190,7 @@
       },
       "parsers": {
         "client_actions": 359,
+        "course_deck": 4,
         "deck_collection": 2,
         "deck_submission": 0,
         "draft_bot": 0,
@@ -1139,12 +1206,13 @@
       },
       "timestamp_failures": 61,
       "total_entries": 638,
-      "unclaimed": 92
+      "unclaimed": 88
     },
     "session_2026-04-30_2304.log": {
       "double_claims": 0,
       "event_types": {
         "ClientAction": 19,
+        "CourseDeck": 57,
         "DeckCollection": 3,
         "DeckSubmission": 2,
         "DetailedLoggingStatus": 1,
@@ -1159,6 +1227,7 @@
       },
       "parsers": {
         "client_actions": 19,
+        "course_deck": 3,
         "deck_collection": 3,
         "deck_submission": 2,
         "draft_bot": 0,
@@ -1174,11 +1243,12 @@
       },
       "timestamp_failures": 67,
       "total_entries": 145,
-      "unclaimed": 99
+      "unclaimed": 96
     },
     "session_2026-05-01_1657_sealed-purchase.log": {
       "double_claims": 0,
       "event_types": {
+        "CourseDeck": 38,
         "DeckCollection": 1,
         "DetailedLoggingStatus": 1,
         "EventLifecycle": 1,
@@ -1187,6 +1257,7 @@
       },
       "parsers": {
         "client_actions": 0,
+        "course_deck": 2,
         "deck_collection": 1,
         "deck_submission": 0,
         "draft_bot": 0,
@@ -1202,11 +1273,12 @@
       },
       "timestamp_failures": 28,
       "total_entries": 47,
-      "unclaimed": 43
+      "unclaimed": 41
     },
     "session_2026-05-01_1715_sealed-deckbuild.log": {
       "double_claims": 0,
       "event_types": {
+        "CourseDeck": 58,
         "DeckCollection": 1,
         "DeckSubmission": 1,
         "DetailedLoggingStatus": 1,
@@ -1215,6 +1287,7 @@
       },
       "parsers": {
         "client_actions": 0,
+        "course_deck": 3,
         "deck_collection": 1,
         "deck_submission": 1,
         "draft_bot": 0,
@@ -1230,12 +1303,13 @@
       },
       "timestamp_failures": 31,
       "total_entries": 52,
-      "unclaimed": 48
+      "unclaimed": 45
     },
     "session_2026-05-01_1751_sealed-matches.log": {
       "double_claims": 0,
       "event_types": {
         "ClientAction": 770,
+        "CourseDeck": 140,
         "DeckCollection": 3,
         "DeckSubmission": 1,
         "DetailedLoggingStatus": 1,
@@ -1250,6 +1324,7 @@
       },
       "parsers": {
         "client_actions": 770,
+        "course_deck": 7,
         "deck_collection": 3,
         "deck_submission": 1,
         "draft_bot": 0,
@@ -1265,12 +1340,13 @@
       },
       "timestamp_failures": 69,
       "total_entries": 1636,
-      "unclaimed": 101
+      "unclaimed": 94
     },
     "session_2026-05-06_0859_phantom-bootstrap-drift.log": {
       "double_claims": 0,
       "event_types": {
         "ClientAction": 427,
+        "CourseDeck": 100,
         "DeckCollection": 4,
         "DetailedLoggingStatus": 1,
         "GameResult": 3,
@@ -1283,6 +1359,7 @@
       },
       "parsers": {
         "client_actions": 427,
+        "course_deck": 5,
         "deck_collection": 4,
         "deck_submission": 0,
         "draft_bot": 0,
@@ -1298,12 +1375,13 @@
       },
       "timestamp_failures": 95,
       "total_entries": 740,
-      "unclaimed": 139
+      "unclaimed": 134
     },
     "session_2026-05-06_1412_rename-collision-cancelled-cast.log": {
       "double_claims": 0,
       "event_types": {
         "ClientAction": 536,
+        "CourseDeck": 60,
         "DeckCollection": 3,
         "DetailedLoggingStatus": 1,
         "GameResult": 2,
@@ -1316,6 +1394,7 @@
       },
       "parsers": {
         "client_actions": 536,
+        "course_deck": 3,
         "deck_collection": 3,
         "deck_submission": 0,
         "draft_bot": 0,
@@ -1331,12 +1410,13 @@
       },
       "timestamp_failures": 72,
       "total_entries": 819,
-      "unclaimed": 105
+      "unclaimed": 102
     },
     "session_2026-05-06_1746_pr554-fix-delayed-collision-disproof.log": {
       "double_claims": 0,
       "event_types": {
         "ClientAction": 355,
+        "CourseDeck": 60,
         "DeckCollection": 3,
         "DetailedLoggingStatus": 1,
         "GameResult": 2,
@@ -1349,6 +1429,7 @@
       },
       "parsers": {
         "client_actions": 355,
+        "course_deck": 3,
         "deck_collection": 3,
         "deck_submission": 0,
         "draft_bot": 0,
@@ -1364,12 +1445,13 @@
       },
       "timestamp_failures": 65,
       "total_entries": 620,
-      "unclaimed": 97
+      "unclaimed": 94
     },
     "session_2026-05-06_2224_parser-type-field-drop-trigger.log": {
       "double_claims": 0,
       "event_types": {
         "ClientAction": 163,
+        "CourseDeck": 40,
         "DeckCollection": 2,
         "DetailedLoggingStatus": 1,
         "GameResult": 1,
@@ -1382,6 +1464,7 @@
       },
       "parsers": {
         "client_actions": 163,
+        "course_deck": 2,
         "deck_collection": 2,
         "deck_submission": 0,
         "draft_bot": 0,
@@ -1397,12 +1480,13 @@
       },
       "timestamp_failures": 47,
       "total_entries": 308,
-      "unclaimed": 70
+      "unclaimed": 68
     },
     "session_2026-05-06_2344_stale-limbo-rollback-overclear.log": {
       "double_claims": 0,
       "event_types": {
         "ClientAction": 140,
+        "CourseDeck": 40,
         "DeckCollection": 2,
         "DetailedLoggingStatus": 1,
         "GameResult": 1,
@@ -1415,6 +1499,7 @@
       },
       "parsers": {
         "client_actions": 140,
+        "course_deck": 2,
         "deck_collection": 2,
         "deck_submission": 0,
         "draft_bot": 0,
@@ -1430,12 +1515,13 @@
       },
       "timestamp_failures": 47,
       "total_entries": 283,
-      "unclaimed": 70
+      "unclaimed": 68
     },
     "session_2026-05-13_0952_recycle-defect-trigger.log": {
       "double_claims": 0,
       "event_types": {
         "ClientAction": 596,
+        "CourseDeck": 40,
         "DeckCollection": 2,
         "DetailedLoggingStatus": 1,
         "GameResult": 1,
@@ -1448,6 +1534,7 @@
       },
       "parsers": {
         "client_actions": 596,
+        "course_deck": 2,
         "deck_collection": 2,
         "deck_submission": 0,
         "draft_bot": 0,
@@ -1463,12 +1550,13 @@
       },
       "timestamp_failures": 47,
       "total_entries": 831,
-      "unclaimed": 71
+      "unclaimed": 69
     },
     "session_2026-06-14_1409_name-a-card.log": {
       "double_claims": 0,
       "event_types": {
         "ClientAction": 118,
+        "CourseDeck": 38,
         "DeckCollection": 2,
         "DeckSubmission": 1,
         "DetailedLoggingStatus": 1,
@@ -1483,6 +1571,7 @@
       },
       "parsers": {
         "client_actions": 118,
+        "course_deck": 2,
         "deck_collection": 2,
         "deck_submission": 1,
         "draft_bot": 0,
@@ -1498,12 +1587,13 @@
       },
       "timestamp_failures": 65,
       "total_entries": 508,
-      "unclaimed": 88
+      "unclaimed": 86
     },
     "session_2026-06-17_1543_alchemy.log": {
       "double_claims": 0,
       "event_types": {
         "ClientAction": 144,
+        "CourseDeck": 38,
         "DeckCollection": 2,
         "DeckSubmission": 1,
         "DetailedLoggingStatus": 1,
@@ -1518,6 +1608,7 @@
       },
       "parsers": {
         "client_actions": 144,
+        "course_deck": 2,
         "deck_collection": 2,
         "deck_submission": 1,
         "draft_bot": 0,
@@ -1533,12 +1624,13 @@
       },
       "timestamp_failures": 47,
       "total_entries": 339,
-      "unclaimed": 71
+      "unclaimed": 69
     },
     "session_2026-06-17_1601_pioneer.log": {
       "double_claims": 0,
       "event_types": {
         "ClientAction": 275,
+        "CourseDeck": 57,
         "DeckCollection": 2,
         "DeckSubmission": 1,
         "DetailedLoggingStatus": 1,
@@ -1553,6 +1645,7 @@
       },
       "parsers": {
         "client_actions": 275,
+        "course_deck": 3,
         "deck_collection": 2,
         "deck_submission": 1,
         "draft_bot": 0,
@@ -1568,12 +1661,13 @@
       },
       "timestamp_failures": 53,
       "total_entries": 833,
-      "unclaimed": 77
+      "unclaimed": 74
     },
     "session_2026-06-17_1615_pioneer-historic.log": {
       "double_claims": 0,
       "event_types": {
         "ClientAction": 283,
+        "CourseDeck": 57,
         "DeckCollection": 2,
         "DeckSubmission": 1,
         "DetailedLoggingStatus": 1,
@@ -1588,6 +1682,7 @@
       },
       "parsers": {
         "client_actions": 283,
+        "course_deck": 3,
         "deck_collection": 2,
         "deck_submission": 1,
         "draft_bot": 0,
@@ -1603,12 +1698,13 @@
       },
       "timestamp_failures": 63,
       "total_entries": 713,
-      "unclaimed": 95
+      "unclaimed": 92
     },
     "session_2026-06-17_1655_timeless.log": {
       "double_claims": 0,
       "event_types": {
         "ClientAction": 269,
+        "CourseDeck": 76,
         "DeckCollection": 2,
         "DeckSubmission": 1,
         "DetailedLoggingStatus": 1,
@@ -1623,6 +1719,7 @@
       },
       "parsers": {
         "client_actions": 269,
+        "course_deck": 4,
         "deck_collection": 2,
         "deck_submission": 1,
         "draft_bot": 0,
@@ -1638,12 +1735,13 @@
       },
       "timestamp_failures": 147,
       "total_entries": 806,
-      "unclaimed": 180
+      "unclaimed": 176
     },
     "session_2026-06-17_1708_brawl.log": {
       "double_claims": 0,
       "event_types": {
         "ClientAction": 217,
+        "CourseDeck": 58,
         "DeckCollection": 2,
         "DeckSubmission": 1,
         "DetailedLoggingStatus": 1,
@@ -1658,6 +1756,7 @@
       },
       "parsers": {
         "client_actions": 217,
+        "course_deck": 3,
         "deck_collection": 2,
         "deck_submission": 1,
         "draft_bot": 0,
@@ -1673,12 +1772,13 @@
       },
       "timestamp_failures": 59,
       "total_entries": 645,
-      "unclaimed": 87
+      "unclaimed": 84
     },
     "session_2026-06-17_1720_standard-event.log": {
       "double_claims": 0,
       "event_types": {
         "ClientAction": 138,
+        "CourseDeck": 143,
         "DeckCollection": 2,
         "DeckSubmission": 1,
         "DetailedLoggingStatus": 1,
@@ -1693,6 +1793,7 @@
       },
       "parsers": {
         "client_actions": 138,
+        "course_deck": 7,
         "deck_collection": 2,
         "deck_submission": 1,
         "draft_bot": 0,
@@ -1708,12 +1809,13 @@
       },
       "timestamp_failures": 69,
       "total_entries": 399,
-      "unclaimed": 95
+      "unclaimed": 88
     },
     "session_2026-06-17_1833_standard-brawl.log": {
       "double_claims": 0,
       "event_types": {
         "ClientAction": 347,
+        "CourseDeck": 105,
         "DeckCollection": 2,
         "DeckSubmission": 1,
         "DetailedLoggingStatus": 1,
@@ -1728,6 +1830,7 @@
       },
       "parsers": {
         "client_actions": 347,
+        "course_deck": 5,
         "deck_collection": 2,
         "deck_submission": 1,
         "draft_bot": 0,
@@ -1743,12 +1846,13 @@
       },
       "timestamp_failures": 83,
       "total_entries": 966,
-      "unclaimed": 124
+      "unclaimed": 119
     },
     "session_2026-06-17_1847_pioneer-ranked.log": {
       "double_claims": 0,
       "event_types": {
         "ClientAction": 232,
+        "CourseDeck": 42,
         "DeckCollection": 2,
         "DeckSubmission": 1,
         "DetailedLoggingStatus": 1,
@@ -1763,6 +1867,7 @@
       },
       "parsers": {
         "client_actions": 232,
+        "course_deck": 2,
         "deck_collection": 2,
         "deck_submission": 1,
         "draft_bot": 0,
@@ -1778,12 +1883,13 @@
       },
       "timestamp_failures": 51,
       "total_entries": 478,
-      "unclaimed": 76
+      "unclaimed": 74
     },
     "session_2026-06-17_1858_pioneer-ranked-bo3.log": {
       "double_claims": 0,
       "event_types": {
         "ClientAction": 185,
+        "CourseDeck": 43,
         "DeckCollection": 2,
         "DeckSubmission": 1,
         "DetailedLoggingStatus": 1,
@@ -1798,6 +1904,7 @@
       },
       "parsers": {
         "client_actions": 185,
+        "course_deck": 2,
         "deck_collection": 2,
         "deck_submission": 1,
         "draft_bot": 0,
@@ -1813,12 +1920,13 @@
       },
       "timestamp_failures": 44,
       "total_entries": 465,
-      "unclaimed": 65
+      "unclaimed": 63
     },
     "session_2026-06-17_2005_pioneer-play-bo3.log": {
       "double_claims": 0,
       "event_types": {
         "ClientAction": 666,
+        "CourseDeck": 45,
         "DeckCollection": 2,
         "DeckSubmission": 1,
         "DetailedLoggingStatus": 1,
@@ -1833,6 +1941,7 @@
       },
       "parsers": {
         "client_actions": 666,
+        "course_deck": 2,
         "deck_collection": 2,
         "deck_submission": 1,
         "draft_bot": 0,
@@ -1848,7 +1957,7 @@
       },
       "timestamp_failures": 52,
       "total_entries": 1536,
-      "unclaimed": 77
+      "unclaimed": 75
     }
   }
 }

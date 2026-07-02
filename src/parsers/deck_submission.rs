@@ -25,9 +25,15 @@
 //! | Payload field | Source path |
 //! |---|---|
 //! | `deck_id` | `request.Summary.DeckId` via [`api_common::extract_deck_id`] |
-//! | `deck_format` | `value` of `request.Summary.Attributes[name == "Format"]` |
+//! | `deck_format` | `value` of `request.Summary.Attributes[name == "Format"]` via [`api_common::extract_format_attribute`] |
 //! | `event_name` | [`api_common::extract_event_name`] |
 //! | `is_singleton` | `request.Deck.CommandZone` is a non-empty array |
+//! | `name` | `request.Summary.Name` |
+//! | `maindeck_hash` | `request.Deck.MainDeck` via [`api_common::maindeck_hash`] |
+//!
+//! Arena's `Summary.Attributes` also carries a `LastPlayed` entry, which is
+//! deliberately **not** extracted: deck recency is derivable from match
+//! timestamps by downstream consumers, so the attribute adds nothing.
 
 use crate::events::{DeckSubmissionEvent, EventMetadata, GameEvent};
 use crate::log::entry::LogEntry;
@@ -83,10 +89,17 @@ fn try_parse_request(body: &str) -> Option<serde_json::Value> {
     let deck = request.get("Deck");
 
     let deck_id = summary.and_then(api_common::extract_deck_id);
-    let deck_format = summary.and_then(extract_format_attribute);
+    let deck_format = summary.and_then(api_common::extract_format_attribute);
     let is_singleton = deck
         .and_then(|d| d.get("CommandZone"))
         .and_then(|cz| cz.as_array().map(|arr| !arr.is_empty()));
+    let name = summary
+        .and_then(|s| s.get("Name"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned);
+    let maindeck_hash = deck
+        .and_then(|d| d.get("MainDeck"))
+        .and_then(api_common::maindeck_hash);
 
     Some(serde_json::json!({
         "type": "deck_submission",
@@ -94,22 +107,9 @@ fn try_parse_request(body: &str) -> Option<serde_json::Value> {
         "deck_format": deck_format,
         "event_name": event_name,
         "is_singleton": is_singleton.unwrap_or(false),
+        "name": name,
+        "maindeck_hash": maindeck_hash,
     }))
-}
-
-/// Finds the `"Format"` entry in a `Summary.Attributes` array and returns its value.
-///
-/// The `Attributes` array contains objects of the form `{"name": "...", "value": "..."}`.
-/// Returns `None` when the `Attributes` field is absent or no entry has `name == "Format"`.
-fn extract_format_attribute(summary: &serde_json::Value) -> Option<String> {
-    summary
-        .get("Attributes")?
-        .as_array()?
-        .iter()
-        .find(|attr| attr.get("name").and_then(serde_json::Value::as_str) == Some("Format"))
-        .and_then(|attr| attr.get("value"))
-        .and_then(serde_json::Value::as_str)
-        .map(str::to_owned)
 }
 
 // ---------------------------------------------------------------------------
@@ -175,6 +175,38 @@ mod tests {
             "[UnityCrossThreadLogger]4/12/2026 8:44:00 AM ==> EventSetDeckV3 {}",
             make_request_body(event_name, deck_id, format, command_zone)
         )
+    }
+
+    /// Builds a V2 request body with a `Summary.Name` and `Deck.MainDeck`,
+    /// for testing the `name` and `maindeck_hash` payload fields.
+    fn make_v2_body_with_deck(
+        deck_id: &str,
+        name: Option<&str>,
+        maindeck: &[(u64, u64)],
+    ) -> String {
+        let mut summary = serde_json::json!({
+            "DeckId": deck_id,
+            "Attributes": [{"name": "Format", "value": "Standard"}]
+        });
+        if let Some(n) = name {
+            summary["Name"] = serde_json::json!(n);
+        }
+        let maindeck_json: Vec<serde_json::Value> = maindeck
+            .iter()
+            .map(|(card_id, quantity)| serde_json::json!({"cardId": card_id, "quantity": quantity}))
+            .collect();
+        let inner = serde_json::json!({
+            "EventName": "Ladder",
+            "Summary": summary,
+            "Deck": {
+                "MainDeck": maindeck_json,
+                "Sideboard": [],
+                "CommandZone": [],
+                "Companions": []
+            }
+        });
+        let outer = serde_json::json!({"id": "test-uuid", "request": inner.to_string()});
+        format!("[UnityCrossThreadLogger]4/12/2026 8:44:00 AM ==> EventSetDeckV2 {outer}")
     }
 
     // -- V2 request parsing ---------------------------------------------------
@@ -367,37 +399,15 @@ mod tests {
     }
 
     // -- Format attribute extraction ------------------------------------------
+    //
+    // Direct unit tests for `api_common::extract_format_attribute` live in
+    // `api_common.rs` alongside the moved function. This test keeps the
+    // deck-submission-specific null-propagation check: a missing `Format`
+    // attribute must surface as JSON `null`, not panic or default to a
+    // sentinel string.
 
     mod format_attribute {
         use super::*;
-
-        #[test]
-        fn test_extract_format_attribute_finds_format_among_multiple_attributes() {
-            let body = format!("[UnityCrossThreadLogger]==> EventSetDeckV2 {}", {
-                // Build a request with multiple attributes including Format
-                let inner = serde_json::json!({
-                    "EventName": "Ladder",
-                    "Summary": {
-                        "DeckId": "d1",
-                        "Attributes": [
-                            {"name": "Version", "value": "5"},
-                            {"name": "TileID", "value": "12345"},
-                            {"name": "Format", "value": "Pioneer"},
-                            {"name": "IsFavorite", "value": "false"}
-                        ]
-                    },
-                    "Deck": {"MainDeck": [], "CommandZone": [], "Sideboard": [], "Companions": []}
-                });
-                let outer = serde_json::json!({"id": "u", "request": inner.to_string()});
-                outer.to_string()
-            });
-            let entry = unity_entry(&body);
-            let result = try_parse(&entry, Some(test_timestamp()));
-
-            let event = result.as_ref().unwrap_or_else(|| unreachable!());
-            let payload = deck_submission_payload(event);
-            assert_eq!(payload["deck_format"], "Pioneer");
-        }
 
         #[test]
         fn test_try_parse_missing_format_attribute_returns_null_deck_format() {
@@ -409,6 +419,69 @@ mod tests {
             let payload = deck_submission_payload(event);
             // deck_format should be JSON null when absent
             assert!(payload["deck_format"].is_null());
+        }
+    }
+
+    // -- name extraction --------------------------------------------------------
+
+    mod name {
+        use super::*;
+
+        #[test]
+        fn test_try_parse_extracts_name() {
+            let body = make_v2_body_with_deck("deck-1", Some("Test Deck"), &[]);
+            let entry = unity_entry(&body);
+            let result = try_parse(&entry, Some(test_timestamp()));
+
+            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            let payload = deck_submission_payload(event);
+            assert_eq!(payload["name"], "Test Deck");
+        }
+
+        #[test]
+        fn test_try_parse_absent_name_returns_null() {
+            let body = make_v2_body_with_deck("deck-1", None, &[]);
+            let entry = unity_entry(&body);
+            let result = try_parse(&entry, Some(test_timestamp()));
+
+            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            let payload = deck_submission_payload(event);
+            assert!(payload["name"].is_null());
+        }
+    }
+
+    // -- maindeck_hash extraction -------------------------------------------
+
+    mod maindeck_hash {
+        use super::*;
+
+        #[test]
+        fn test_try_parse_extracts_maindeck_hash_known_vector() {
+            let body = make_v2_body_with_deck(
+                "deck-1",
+                Some("Test Deck"),
+                &[(95816, 4), (95817, 3), (68740, 4)],
+            );
+            let entry = unity_entry(&body);
+            let result = try_parse(&entry, Some(test_timestamp()));
+
+            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            let payload = deck_submission_payload(event);
+            assert_eq!(
+                payload["maindeck_hash"],
+                "6abd62511e8248dcf93b56f6b4fff47a7a26d849d105b5a793b36715455451e6"
+            );
+        }
+
+        #[test]
+        fn test_try_parse_empty_maindeck_returns_null_hash() {
+            let body = make_v2_body_with_deck("deck-1", Some("Test Deck"), &[]);
+            let entry = unity_entry(&body);
+            let result = try_parse(&entry, Some(test_timestamp()));
+
+            let event = result.as_ref().unwrap_or_else(|| unreachable!());
+            let payload = deck_submission_payload(event);
+            assert!(payload["maindeck_hash"].is_null());
         }
     }
 
