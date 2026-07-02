@@ -742,7 +742,7 @@ define_event! {
     /// and `internal_event_name` / `course_id` (from the enclosing `Course`)
     /// for event-keyed deck-to-match association. All payload fields besides
     /// `type` are individually nullable. No `lean` gating — the payload is 7
-    /// scalars and the wasm Parse Worker consumes it unchanged.
+    /// scalars and downstream wasm consumers use it unchanged.
     CourseDeckEvent
 }
 
