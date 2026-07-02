@@ -44,6 +44,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   without `..Default::default()`) no longer compiles and must add the new
   field, or switch to `..Default::default()`.
 
+### Fixed
+
+- **Scrubber: CRLF-terminated lines bypassing `$`-anchored scrub patterns.**
+  The pet-diagnostic deck-name line and the macOS Metal enumerated-device
+  hardware-fingerprint line anchored on a bare `\)$`; on `\r\n`-terminated
+  log lines (standard for Windows-written `Player.log` files) the `\r`
+  before the newline broke the match, leaving the field unscrubbed under
+  default options. Both patterns now capture-and-re-emit an optional
+  trailing `\r` so CRLF lines are scrubbed without normalizing the line
+  ending to LF-only. A repo-wide sweep confirmed these were the only two
+  `$`-anchored scrub patterns exposed to this issue. Verified against
+  the `manasight-corpus` real logs (41/55 files are CRLF-terminated;
+  198 pet-diagnostic deck-name lines leaked before this change; 0 after).
+
 ## [0.6.3] - 2026-06-26
 
 ### Fixed

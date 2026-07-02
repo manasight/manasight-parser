@@ -204,9 +204,15 @@ static SCRUB_PATTERNS: LazyLock<Vec<ScrubPattern>> = LazyLock::new(|| {
         // Deck names: Unity console pet-diagnostic line (plain text, not
         // JSON). Optional `[N] ` frame prefix appears in unstripped archive
         // logs. is_deck_name = true — skipped when keep_deck_names is set.
+        // The trailing `(\r?)$` captures an optional CR before the line
+        // terminator and re-emits it in the replacement, so CRLF-terminated
+        // lines (standard for Windows-written Player.log files) are scrubbed
+        // without their line ending being normalized to LF-only. The `regex`
+        // crate has no lookahead, so a bare `\r?` before `$` would consume
+        // the `\r` rather than preserve it.
         (
-            r"(?m)^(\[\d+\] )?Can't find pet for deck .+ \(([0-9a-fA-F]{8})([0-9a-fA-F-]{28})\)$",
-            "${1}Can't find pet for deck Deck-${2} (${2}${3})",
+            r"(?m)^(\[\d+\] )?Can't find pet for deck .+ \(([0-9a-fA-F]{8})([0-9a-fA-F-]{28})\)(\r?)$",
+            "${1}Can't find pet for deck Deck-${2} (${2}${3})${4}",
             false,
             true,
         ),
@@ -260,10 +266,13 @@ static SCRUB_PATTERNS: LazyLock<Vec<ScrubPattern>> = LazyLock::new(|| {
         // Hardware fingerprint: macOS Metal GPU — enumerated device line.
         // Format: "N: <gpu-model> (high power)" / "N: <gpu-model> (low power)".
         // Anchored on the Metal power suffix to avoid over-matching other
-        // "N: …" log lines (e.g. numbered list items in game output).
+        // "N: …" log lines (e.g. numbered list items in game output). The
+        // trailing `(\r?)$` preserves an optional CR before the line
+        // terminator (see the pet-diagnostic pattern above for why capture-
+        // and-re-emit is used instead of a bare `\r?`).
         (
-            r"(?m)^\s*\d+:\s+.+\((?:high|low) power\)$",
-            "<N>: <redacted>",
+            r"(?m)^\s*\d+:\s+.+\((?:high|low) power\)(\r?)$",
+            "<N>: <redacted>${1}",
             false,
             false,
         ),
@@ -921,6 +930,31 @@ mod tests {
     }
 
     #[test]
+    fn test_scrub_raw_log_macos_metal_enumerated_device_crlf_terminator_preserved() {
+        // Metal GfxDevice lines can also appear with \r\n endings (e.g. a
+        // macOS log relayed through a Windows-hosted collector). The `$`
+        // anchor must match past the `\r`, and the `\r` must survive in the
+        // output byte-for-byte.
+        let input = "0: Apple M1 Pro (high power)\r\n1: Apple M2 Ultra (low power)\r\n";
+        let result = scrub_raw_log(input);
+        assert_eq!(result, "<N>: <redacted>\r\n<N>: <redacted>\r\n");
+    }
+
+    #[test]
+    fn test_scrub_raw_log_mixed_lf_and_crlf_line_terminators_preserved_independently() {
+        // A log with mixed line endings (e.g. concatenated from different
+        // sources) must have each line's own terminator preserved
+        // independently -- scrubbing must not normalize CRLF to LF or vice
+        // versa on either matched line.
+        let input = "0: Apple M1 Pro (high power)\nCan't find pet for deck My Cool Deck (1a2b3c4d-5e6f-7890-abcd-ef1234567890)\r\n";
+        let result = scrub_raw_log(input);
+        assert_eq!(
+            result,
+            "<N>: <redacted>\nCan't find pet for deck Deck-1a2b3c4d (1a2b3c4d-5e6f-7890-abcd-ef1234567890)\r\n"
+        );
+    }
+
+    #[test]
     fn test_scrub_raw_log_macos_metal_numbered_line_not_matched_without_power_suffix() {
         // The enumerated-device pattern is anchored on "(high|low power)" to
         // avoid false-positives on other numbered-list log lines that happen to
@@ -1419,6 +1453,32 @@ mod tests {
     }
 
     #[test]
+    fn test_scrub_raw_log_deck_name_pet_diagnostic_line_crlf_redacted_terminator_preserved() {
+        // Windows-written Player.log files use \r\n line endings. The pet-
+        // diagnostic pattern's `$` anchor must match past the `\r`, and the
+        // `\r` must survive in the output byte-for-byte (not be normalized
+        // to LF-only).
+        let input = "Line 1\r\nCan't find pet for deck My Cool Deck (1a2b3c4d-5e6f-7890-abcd-ef1234567890)\r\nLine 3\r\n";
+        let result = scrub_raw_log(input);
+        assert_eq!(
+            result,
+            "Line 1\r\nCan't find pet for deck Deck-1a2b3c4d (1a2b3c4d-5e6f-7890-abcd-ef1234567890)\r\nLine 3\r\n"
+        );
+    }
+
+    #[test]
+    fn test_scrub_raw_log_with_keep_deck_names_true_crlf_passthrough() {
+        let opts = ScrubOptions {
+            keep_player_names: false,
+            keep_deck_names: true,
+        };
+        let input =
+            "Can't find pet for deck My Cool Deck (1a2b3c4d-5e6f-7890-abcd-ef1234567890)\r\n";
+        let result = scrub_raw_log_with(input, &opts);
+        assert_eq!(result, input);
+    }
+
+    #[test]
     fn test_scrub_raw_log_with_keep_deck_names_true_preserves_names() {
         let opts = ScrubOptions {
             keep_player_names: false,
@@ -1688,10 +1748,12 @@ mod tests {
             ),
             // Deck names: Unity console "Can't find pet for deck" diagnostic
             // (plain text, not JSON). Captures the name-or-label token.
+            // Detection-only, so `\r?` before `$` is sufficient here (no
+            // capture-and-re-emit needed — this pattern never rewrites text).
             (
                 "deck Name (pet-diagnostic line)",
                 Regex::new(
-                    r"(?m)^(?:\[\d+\] )?Can't find pet for deck (.+) \([0-9a-fA-F]{8}[0-9a-fA-F-]{28}\)$",
+                    r"(?m)^(?:\[\d+\] )?Can't find pet for deck (.+) \([0-9a-fA-F]{8}[0-9a-fA-F-]{28}\)\r?$",
                 )
                 .unwrap_or_else(|_| unreachable!()),
                 is_deck_label,
