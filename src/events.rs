@@ -203,8 +203,8 @@ pub enum GameEvent {
 
     /// Deck submission (`==> EventSetDeckV2`, `==> EventSetDeckV3`, and
     /// future `Vn`). Payload: `{ deck_id, deck_format, event_name,
-    /// is_singleton }`. Used as the C-2b format-model fallback signal for
-    /// bot-match queues. Class 2 — durable per-event.
+    /// is_singleton, name, maindeck_hash }`. Used as the C-2b format-model
+    /// fallback signal for bot-match queues. Class 2 — durable per-event.
     DeckSubmission(DeckSubmissionEvent),
 
     /// Course deck (`<== EventGetCoursesV2` response) — one event per active
@@ -725,10 +725,10 @@ define_event! {
     ///
     /// Parsed from `==> EventSetDeckV2`, `==> EventSetDeckV3`, and future
     /// `Vn` request lines. The payload carries the submitted deck's registered
-    /// `Format`, `DeckId`, `EventName` (queue string), and `is_singleton`
-    /// flag (non-empty `CommandZone`). Used by the C-2b format model as the
-    /// fallback format signal for bot-match queues where `event_id` alone does
-    /// not resolve the format.
+    /// `Format`, `DeckId`, `EventName` (queue string), `is_singleton` flag
+    /// (non-empty `CommandZone`), `Name`, and maindeck hash. Used by the
+    /// C-2b format model as the fallback format signal for bot-match queues
+    /// where `event_id` alone does not resolve the format.
     DeckSubmissionEvent
 }
 

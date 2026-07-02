@@ -8,9 +8,10 @@
 //!
 //! Each [`LogEntry`] is offered to category parsers in a fixed priority
 //! order (most frequent first). The first parser that returns one or
-//! more events claims the entry. GRE entries may produce multiple
-//! events from batched `GameStateMessage` values. If no parser matches,
-//! the entry is counted as unrecognized and discarded.
+//! more events claims the entry. GRE entries may produce multiple events
+//! from batched `GameStateMessage` values, and course-deck entries may
+//! produce multiple events from a single qualifying `Course` list. If no
+//! parser matches, the entry is counted as unrecognized and discarded.
 //!
 //! # Timestamp extraction
 //!
@@ -136,6 +137,8 @@ impl Router {
     ///
     /// GRE entries may contain multiple batched `GameStateMessage` values
     /// in a single log entry, producing multiple events from one entry.
+    /// Course-deck entries may likewise produce multiple events from one
+    /// entry — one per qualifying `Course`.
     ///
     /// When the timestamp cannot be parsed, `None` is passed to parsers
     /// so downstream consumers can distinguish real timestamps from

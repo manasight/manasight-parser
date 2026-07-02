@@ -170,6 +170,7 @@ cargo run --bin scrub < Player.log > Player-sanitized.log
 | `DeckCollection` | Deck collection snapshots with correlated decklists | Durable |
 | `Inventory` | Currency, wildcards, boosters, vault progress | Durable |
 | `DeckSubmission` | Submitted deck Format + DeckId from `EventSetDeck` requests | Durable |
+| `CourseDeck` | Registered deck identity (name, format, maindeck hash) per active event Course | Durable |
 | `GameResult` | Game result / batch trigger | Post-game |
 
 ### Performance Classes

@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "corpus_tag": "manasight-corpus-v1",
+    "corpus_tag": "manasight-corpus-v35",
     "description": "Smoke test baseline -- per-file, per-parser event counts from Level 1 (parser-only) smoke tests.",
     "generated_from_commit": "3c43584"
   },

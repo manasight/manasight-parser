@@ -39,8 +39,9 @@ const ENV_VAR: &str = "MANASIGHT_TEST_LOGS";
 /// Wrapper for parser function pointers with different return types.
 ///
 /// Most parsers return `Option<GameEvent>` (single event per entry).
-/// The GRE parser returns `Vec<GameEvent>` (batched messages produce
-/// multiple events from one entry).
+/// The GRE and course-deck parsers return `Vec<GameEvent>` (batched
+/// messages, or one event per qualifying `Course`, produce multiple
+/// events from one entry).
 pub enum ParserFunc {
     /// A parser that returns at most one event per entry.
     Single(fn(&LogEntry, Option<DateTime<Utc>>) -> Option<GameEvent>),
