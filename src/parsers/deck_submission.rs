@@ -17,7 +17,9 @@
 //! The `request` object carries:
 //! - `EventName` — the queue/event string (e.g. `Ladder`, `Constructed_BestOf3`)
 //! - `Summary.DeckId` — the deck's UUID
+//! - `Summary.Name` — the user-entered deck name
 //! - `Summary.Attributes[]` — an array of `{name, value}` pairs; `Format` is one entry
+//! - `Deck.MainDeck` — the `{cardId, quantity}` card list used for `maindeck_hash`
 //! - `Deck.CommandZone` — non-empty for Brawl/Commander (singleton) decks
 //!
 //! # Extraction contract
