@@ -1,9 +1,9 @@
 //! Privacy scrubber for raw MTGA log text.
 //!
 //! Strips sensitive data (auth tokens, bearer tokens, OS-specific user paths,
-//! session identifiers, display names, email addresses, IP addresses, and
-//! hardware fingerprint lines) from unstructured `Player.log` text. This is a
-//! best-effort filter; novel token formats may slip through.
+//! session identifiers, display names, deck names, email addresses, IP
+//! addresses, and hardware fingerprint lines) from unstructured `Player.log`
+//! text. This is a best-effort filter; novel token formats may slip through.
 //!
 //! Regex patterns are compiled once via [`std::sync::LazyLock`] and reused
 //! across all calls.
@@ -21,6 +21,11 @@ struct ScrubPattern {
     /// conditionally skip name redaction when [`ScrubOptions::keep_player_names`]
     /// is set.
     is_player_name: bool,
+    /// When `true`, this pattern pseudonymizes a free-text deck `Name` field
+    /// to a deterministic `Deck-<8hex>` label derived from the adjacent
+    /// `DeckId`. Used by [`scrub_raw_log_with`] to conditionally skip deck-name
+    /// pseudonymization when [`ScrubOptions::keep_deck_names`] is set.
+    is_deck_name: bool,
 }
 
 /// Options controlling which classes of data are redacted by [`scrub_raw_log_with`].
@@ -34,7 +39,7 @@ struct ScrubPattern {
 /// use manasight_parser::{ScrubOptions, scrub_raw_log_with};
 ///
 /// // Preserve player names while still redacting everything else.
-/// let opts = ScrubOptions { keep_player_names: true };
+/// let opts = ScrubOptions { keep_player_names: true, keep_deck_names: false };
 /// let raw = r#"Token: secret123 and "screenName": "Player#999""#;
 /// let clean = scrub_raw_log_with(raw, &opts);
 /// assert!(clean.contains("Token: <redacted>"));
@@ -50,6 +55,16 @@ pub struct ScrubOptions {
     /// Use this when the upload destination should retain both players' handles
     /// for replay or analytics attribution (AC-OPP-1).
     pub keep_player_names: bool,
+    /// When `true`, free-text deck `Name` fields are **not** pseudonymized —
+    /// they pass through untouched. All other patterns (tokens, paths, player
+    /// names, session identifiers, hardware fingerprints) still apply.
+    ///
+    /// By default (`false`), deck names are pseudonymized to a deterministic
+    /// `Deck-<first 8 hex of DeckId>` label: `DeckId`/`Format`/`Attributes`/
+    /// card-list structure is preserved, and the same `DeckId` always maps to
+    /// the same label, so rename chains and cross-carrier occurrences of one
+    /// deck stay correlatable after scrubbing.
+    pub keep_deck_names: bool,
 }
 
 /// Compiled privacy-scrubbing patterns, initialized once on first use.
@@ -65,6 +80,9 @@ pub struct ScrubOptions {
 /// - Linux user paths (`/home/<username>/`)
 /// - Session identifiers (JSON `"token"` and `"sessionId"` values)
 /// - Display names (JSON `"screenName"` and `"playerName"` values)
+/// - Deck names (free-text JSON `"Name"` values adjacent to a `"DeckId"`,
+///   pseudonymized to `Deck-<first 8 hex of DeckId>`; also the Unity
+///   "Can't find pet for deck ..." console diagnostic)
 /// - Hardware fingerprint lines, across three log formats:
 ///   - Windows `GfxDevice` block (Renderer, Vendor, VRAM, Driver)
 ///   - macOS Metal `GfxDevice` block (preferred device, Using device, Initializing
@@ -81,26 +99,32 @@ static SCRUB_PATTERNS: LazyLock<Vec<ScrubPattern>> = LazyLock::new(|| {
     // Order matters: more specific patterns should come before general ones
     // if there is overlap. Currently there is no overlap between categories.
     //
-    // Tuple fields: (pattern, replacement, is_player_name)
-    let definitions: &[(&str, &str, bool)] = &[
+    // Tuple fields: (pattern, replacement, is_player_name, is_deck_name)
+    let definitions: &[(&str, &str, bool, bool)] = &[
         // Auth tokens: "Token: <base64-or-hex-value>"
         // Matches "Token:" followed by optional whitespace and a non-whitespace token value.
-        (r"Token:\s*\S+", "Token: <redacted>", false),
+        (r"Token:\s*\S+", "Token: <redacted>", false, false),
         // Bearer tokens in HTTP Authorization headers.
         // Uses word boundary to avoid matching game cosmetics like
         // "Title_StandardBearer" where "Bearer" appears as a substring
         // of a larger word. The \b anchor matches at the start of the
         // string or after a non-word character, so "Bearer" following
         // a letter (as in "StandardBearer") does not match.
-        (r"\bBearer\s+\S+", "Bearer <redacted>", false),
+        (r"\bBearer\s+\S+", "Bearer <redacted>", false, false),
         // WotC account IDs in log line prefixes.
         // Arena logs game messages prefixed with the player's account ID:
         //   "Match to CR4QJUQPDBCVVMGCGNZLWGDFJE: AuthenticateResponse"
-        (r"Match to [A-Z0-9_]+:", "Match to <redacted>:", false),
+        (
+            r"Match to [A-Z0-9_]+:",
+            "Match to <redacted>:",
+            false,
+            false,
+        ),
         // JSON "clientId" values from authenticateResponse blocks.
         (
             r#""[Cc]lient[Ii]d"\s*:\s*"[^"]+""#,
             r#""clientId": "<redacted>""#,
+            false,
             false,
         ),
         // JSON "userId" values from matchGameRoomStateChangedEvent blocks.
@@ -108,24 +132,27 @@ static SCRUB_PATTERNS: LazyLock<Vec<ScrubPattern>> = LazyLock::new(|| {
             r#""[Uu]ser[Ii]d"\s*:\s*"[^"]+""#,
             r#""userId": "<redacted>""#,
             false,
+            false,
         ),
         // Windows paths: C:\Users\<username>\ (any drive letter)
-        (r"[A-Z]:\\Users\\[^\\]+\\", r"<user-path>\", false),
+        (r"[A-Z]:\\Users\\[^\\]+\\", r"<user-path>\", false, false),
         // macOS paths: /Users/<username>/
-        (r"/Users/[^/]+/", "<user-path>/", false),
+        (r"/Users/[^/]+/", "<user-path>/", false, false),
         // Linux paths: /home/<username>/
-        (r"/home/[^/]+/", "<user-path>/", false),
+        (r"/home/[^/]+/", "<user-path>/", false, false),
         // Session identifiers: JSON "token" values from authenticateResponse
         // and similar auth payloads.
         (
             r#""[Tt]oken"\s*:\s*"[^"]+""#,
             r#""token": "<redacted>""#,
             false,
+            false,
         ),
         // Session identifiers: JSON "sessionId" values from auth responses.
         (
             r#""[Ss]ession[Ii]d"\s*:\s*"[^"]+""#,
             r#""sessionId": "<redacted>""#,
+            false,
             false,
         ),
         // Display names: JSON "screenName" values from authenticateResponse.
@@ -135,6 +162,7 @@ static SCRUB_PATTERNS: LazyLock<Vec<ScrubPattern>> = LazyLock::new(|| {
             r#""[Ss]creen[Nn]ame"\s*:\s*"[^"]+""#,
             r#""screenName": "<redacted>""#,
             true,
+            false,
         ),
         // Display names: JSON "playerName" values from match state.
         // Contains BOTH players' display names, meaning opponent PII
@@ -144,17 +172,69 @@ static SCRUB_PATTERNS: LazyLock<Vec<ScrubPattern>> = LazyLock::new(|| {
             r#""[Pp]layer[Nn]ame"\s*:\s*"[^"]+""#,
             r#""playerName": "<redacted>""#,
             true,
+            false,
+        ),
+        // Deck names: escaped-context pair (`==>` request payloads, e.g.
+        // DeckUpsertDeckV3/V2 and EventSetDeckV2/V3 submissions). The client
+        // serializer escapes the JSON-in-string payload, so keys/values are
+        // preceded by a literal backslash (`\"DeckId\":\"...\"`). Tolerates a
+        // run of intervening simple scalar fields (e.g. `\"Mana\":\"\"`)
+        // between `DeckId` and `Name`, since request carriers insert one
+        // there — the matcher only handles simple scalars (string/number/
+        // bool/null); the env-gated corpus guard test backstops any future
+        // non-scalar drift. is_deck_name = true — skipped when
+        // keep_deck_names is set.
+        (
+            r#"(\\"DeckId\\":\s*\\")([0-9a-fA-F]{8})([0-9a-fA-F-]*)(\\",\s*(?:\\"[A-Za-z0-9_]+\\":(?:\\"[^"\\]*\\"|-?[0-9]+|true|false|null),\s*)*\\"Name\\":\s*\\")((?:[^"\\]|\\\\.|\\"[^,}\]"])*)"#,
+            r"${1}${2}${3}${4}Deck-${2}",
+            false,
+            true,
+        ),
+        // Deck names: plain-context pair (`<==` responses, `StartHook`
+        // account bootstrap, precon catalog, course summaries — the largest
+        // carriers by occurrence count). Same intervening-scalar tolerance as
+        // the escaped-context pattern above, without the backslash prefix.
+        // is_deck_name = true — skipped when keep_deck_names is set.
+        (
+            r#"("DeckId":\s*")([0-9a-fA-F]{8})([0-9a-fA-F-]*)(",\s*(?:"[A-Za-z0-9_]+":(?:"[^"\\]*"|-?[0-9]+|true|false|null),\s*)*"Name":\s*")((?:[^"\\]|\\.)*)"#,
+            r"${1}${2}${3}${4}Deck-${2}",
+            false,
+            true,
+        ),
+        // Deck names: Unity console pet-diagnostic line (plain text, not
+        // JSON). Optional `[N] ` frame prefix appears in unstripped archive
+        // logs. is_deck_name = true — skipped when keep_deck_names is set.
+        (
+            r"(?m)^(\[\d+\] )?Can't find pet for deck .+ \(([0-9a-fA-F]{8})([0-9a-fA-F-]{28})\)$",
+            "${1}Can't find pet for deck Deck-${2} (${2}${3})",
+            false,
+            true,
         ),
         // Hardware fingerprint: GPU renderer line in log header.
         // (?m) enables per-line ^ matching since we scrub the full text buffer.
         // Leading whitespace (^\s+) is required to avoid false positives.
-        (r"(?m)^\s+Renderer:\s+.+", "  Renderer: <redacted>", false),
+        (
+            r"(?m)^\s+Renderer:\s+.+",
+            "  Renderer: <redacted>",
+            false,
+            false,
+        ),
         // Hardware fingerprint: GPU vendor.
-        (r"(?m)^\s+Vendor:\s+.+", "  Vendor: <redacted>", false),
+        (
+            r"(?m)^\s+Vendor:\s+.+",
+            "  Vendor: <redacted>",
+            false,
+            false,
+        ),
         // Hardware fingerprint: VRAM size in MB.
-        (r"(?m)^\s+VRAM:\s+.+", "  VRAM: <redacted>", false),
+        (r"(?m)^\s+VRAM:\s+.+", "  VRAM: <redacted>", false, false),
         // Hardware fingerprint: GPU driver version.
-        (r"(?m)^\s+Driver:\s+.+", "  Driver: <redacted>", false),
+        (
+            r"(?m)^\s+Driver:\s+.+",
+            "  Driver: <redacted>",
+            false,
+            false,
+        ),
         // Hardware fingerprint: macOS Metal GPU — "preferred device" line.
         // Has one leading space in the real log. ^\s* (zero-or-more) is used across
         // all macOS Metal patterns because sibling lines ("Using device",
@@ -166,6 +246,7 @@ static SCRUB_PATTERNS: LazyLock<Vec<ScrubPattern>> = LazyLock::new(|| {
             r"(?m)^\s*preferred device:\s+.+",
             " preferred device: <redacted>",
             false,
+            false,
         ),
         // Hardware fingerprint: macOS Metal GPU — device count line.
         // "Metal devices available: <N>" carries only a count (not a model), but
@@ -173,6 +254,7 @@ static SCRUB_PATTERNS: LazyLock<Vec<ScrubPattern>> = LazyLock::new(|| {
         (
             r"(?m)^\s*Metal devices available:\s+.+",
             "Metal devices available: <redacted>",
+            false,
             false,
         ),
         // Hardware fingerprint: macOS Metal GPU — enumerated device line.
@@ -183,6 +265,7 @@ static SCRUB_PATTERNS: LazyLock<Vec<ScrubPattern>> = LazyLock::new(|| {
             r"(?m)^\s*\d+:\s+.+\((?:high|low) power\)$",
             "<N>: <redacted>",
             false,
+            false,
         ),
         // Hardware fingerprint: macOS Metal GPU — "Using device" line.
         // Starts at column 0; the Windows ^\s+ anchor does not match it.
@@ -190,12 +273,14 @@ static SCRUB_PATTERNS: LazyLock<Vec<ScrubPattern>> = LazyLock::new(|| {
             r"(?m)^\s*Using device\s+.+",
             "Using device <redacted>",
             false,
+            false,
         ),
         // Hardware fingerprint: macOS Metal GPU — "Initializing Metal device caps" line.
         // Starts at column 0; the Windows ^\s+ anchor does not match it.
         (
             r"(?m)^\s*Initializing Metal device caps:\s+.+",
             "Initializing Metal device caps: <redacted>",
+            false,
             false,
         ),
         // Hardware fingerprint: Unity `SystemInfo` block (newer MTGA builds,
@@ -212,29 +297,44 @@ static SCRUB_PATTERNS: LazyLock<Vec<ScrubPattern>> = LazyLock::new(|| {
             r"(?m)^graphicsDeviceName .+",
             "graphicsDeviceName <redacted>",
             false,
+            false,
         ),
         (
             r"(?m)^graphicsDeviceVendor .+",
             "graphicsDeviceVendor <redacted>",
+            false,
             false,
         ),
         (
             r"(?m)^graphicsDeviceVersion .+",
             "graphicsDeviceVersion <redacted>",
             false,
+            false,
         ),
-        (r"(?m)^deviceModel .+", "deviceModel <redacted>", false),
+        (
+            r"(?m)^deviceModel .+",
+            "deviceModel <redacted>",
+            false,
+            false,
+        ),
         (
             r"(?m)^operatingSystem .+",
             "operatingSystem <redacted>",
             false,
+            false,
         ),
-        (r"(?m)^processorType .+", "processorType <redacted>", false),
+        (
+            r"(?m)^processorType .+",
+            "processorType <redacted>",
+            false,
+            false,
+        ),
         // Email addresses (defense-in-depth; MTGA logs carry no known third-party
         // emails empirically, but this closes a latent gap for future client changes).
         (
             r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}",
             "<email-redacted>",
+            false,
             false,
         ),
         // IPv6 addresses — matched BEFORE IPv4 to avoid the embedded IPv4 portion
@@ -261,6 +361,7 @@ static SCRUB_PATTERNS: LazyLock<Vec<ScrubPattern>> = LazyLock::new(|| {
             ),
             "<ip-redacted>",
             false,
+            false,
         ),
         // IPv4 dotted-quad addresses (defense-in-depth).
         //
@@ -277,12 +378,13 @@ static SCRUB_PATTERNS: LazyLock<Vec<ScrubPattern>> = LazyLock::new(|| {
             r"\b(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\b",
             "<ip-redacted>",
             false,
+            false,
         ),
     ];
 
     definitions
         .iter()
-        .filter_map(|(pattern, replacement, is_player_name)| {
+        .filter_map(|(pattern, replacement, is_player_name, is_deck_name)| {
             // These patterns are static string literals validated by tests.
             // A compilation failure here indicates a programmer error in the
             // pattern definitions above, not a runtime data issue.
@@ -291,6 +393,7 @@ static SCRUB_PATTERNS: LazyLock<Vec<ScrubPattern>> = LazyLock::new(|| {
                     regex,
                     replacement,
                     is_player_name: *is_player_name,
+                    is_deck_name: *is_deck_name,
                 }),
                 Err(e) => {
                     ::log::error!("BUG: failed to compile privacy pattern {pattern:?}: {e}");
@@ -334,7 +437,7 @@ pub fn scrub_raw_log(input: &str) -> String {
 /// use manasight_parser::{ScrubOptions, scrub_raw_log_with};
 ///
 /// // Keep player handles for server-side replay attribution.
-/// let opts = ScrubOptions { keep_player_names: true };
+/// let opts = ScrubOptions { keep_player_names: true, keep_deck_names: false };
 /// let raw = r#""screenName": "TimCahill#1234", "token": "secret""#;
 /// let clean = scrub_raw_log_with(raw, &opts);
 /// assert!(clean.contains("TimCahill#1234"));
@@ -348,6 +451,9 @@ pub fn scrub_raw_log_with(input: &str, opts: &ScrubOptions) -> String {
     let mut result = input.to_owned();
     for pattern in SCRUB_PATTERNS.iter() {
         if opts.keep_player_names && pattern.is_player_name {
+            continue;
+        }
+        if opts.keep_deck_names && pattern.is_deck_name {
             continue;
         }
         result = pattern
@@ -1020,6 +1126,7 @@ mod tests {
     fn test_scrub_raw_log_with_keep_player_names_false_redacts_names() {
         let opts = ScrubOptions {
             keep_player_names: false,
+            keep_deck_names: false,
         };
         let input = r#""screenName": "Alice#123", "playerName": "Bob#456""#;
         let result = scrub_raw_log_with(input, &opts);
@@ -1033,6 +1140,7 @@ mod tests {
     fn test_scrub_raw_log_with_keep_player_names_true_preserves_names() {
         let opts = ScrubOptions {
             keep_player_names: true,
+            keep_deck_names: false,
         };
         let input = r#""screenName": "Alice#123", "playerName": "Bob#456""#;
         let result = scrub_raw_log_with(input, &opts);
@@ -1044,6 +1152,7 @@ mod tests {
     fn test_scrub_raw_log_with_keep_player_names_true_still_redacts_tokens() {
         let opts = ScrubOptions {
             keep_player_names: true,
+            keep_deck_names: false,
         };
         let input = r#"Token: secret123 and "screenName": "Alice#123""#;
         let result = scrub_raw_log_with(input, &opts);
@@ -1056,6 +1165,7 @@ mod tests {
     fn test_scrub_raw_log_with_keep_player_names_true_still_redacts_session_ids() {
         let opts = ScrubOptions {
             keep_player_names: true,
+            keep_deck_names: false,
         };
         let input = r#"{"sessionId": "sess_xyz789", "screenName": "Alice#123"}"#;
         let result = scrub_raw_log_with(input, &opts);
@@ -1068,6 +1178,7 @@ mod tests {
     fn test_scrub_raw_log_with_keep_player_names_true_still_redacts_paths() {
         let opts = ScrubOptions {
             keep_player_names: true,
+            keep_deck_names: false,
         };
         let input = r#""playerName": "Alice#123" at /home/alice/.config/app"#;
         let result = scrub_raw_log_with(input, &opts);
@@ -1080,6 +1191,7 @@ mod tests {
     fn test_scrub_raw_log_with_keep_player_names_true_still_redacts_client_id() {
         let opts = ScrubOptions {
             keep_player_names: true,
+            keep_deck_names: false,
         };
         let input = r#"{"clientId": "CR4QJUQP", "screenName": "Alice#123"}"#;
         let result = scrub_raw_log_with(input, &opts);
@@ -1092,6 +1204,7 @@ mod tests {
     fn test_scrub_raw_log_with_keep_player_names_true_still_redacts_hardware_fingerprints() {
         let opts = ScrubOptions {
             keep_player_names: true,
+            keep_deck_names: false,
         };
         let input = "\"playerName\": \"Alice#123\"\n  Renderer: NVIDIA GeForce RTX 3080";
         let result = scrub_raw_log_with(input, &opts);
@@ -1109,6 +1222,7 @@ mod tests {
             "Token: abc Bearer tok123",
             r#"{"sessionId": "s1", "playerName": "Bob#99"}"#,
             "[UnityCrossThreadLogger] Game started",
+            r#"{"DeckId":"1a2b3c4d-5e6f-7890-abcd-ef1234567890","Name":"My Cool Deck"}"#,
             "",
         ];
         for input in &inputs {
@@ -1220,90 +1334,367 @@ mod tests {
         assert!(result.contains("<ip-redacted>"));
     }
 
+    // --- ScrubOptions / keep_deck_names ---
+    //
+    // Synthetic deck GUID used throughout: "1a2b3c4d-5e6f-7890-abcd-ef1234567890"
+    // (first 8 hex = "1a2b3c4d" → expected label "Deck-1a2b3c4d"). All deck
+    // names below are synthetic placeholders, not real MTGA deck names.
+
+    #[test]
+    fn test_scrub_raw_log_deck_name_escaped_context_with_intervening_field_redacted() {
+        // Simulates a ==> DeckUpsertDeckV3 request payload: the client
+        // escapes the JSON-in-string, and inserts a "Mana" scalar field
+        // between DeckId and Name.
+        let input = r#"==> DeckUpsertDeckV3 {"id":5,"request":"{\"DeckId\":\"1a2b3c4d-5e6f-7890-abcd-ef1234567890\",\"Mana\":\"\",\"Name\":\"My Cool Deck\"}"}"#;
+        let result = scrub_raw_log(input);
+        assert!(!result.contains("My Cool Deck"));
+        assert!(result.contains(r#"\"DeckId\":\"1a2b3c4d-5e6f-7890-abcd-ef1234567890\""#));
+        assert!(result.contains(r#"\"Name\":\"Deck-1a2b3c4d"#));
+    }
+
+    #[test]
+    fn test_scrub_raw_log_deck_name_plain_context_response_redacted() {
+        // Simulates a <== DeckUpsertDeckV3 response echo (plain JSON,
+        // DeckId/Name directly adjacent).
+        let input = r#"<== DeckUpsertDeckV3 {"DeckId":"1a2b3c4d-5e6f-7890-abcd-ef1234567890","Name":"My Cool Deck","Format":"Standard"}"#;
+        let result = scrub_raw_log(input);
+        assert!(!result.contains("My Cool Deck"));
+        assert!(result.contains(r#""DeckId":"1a2b3c4d-5e6f-7890-abcd-ef1234567890""#));
+        assert!(result.contains(r#""Name":"Deck-1a2b3c4d""#));
+        assert!(result.contains(r#""Format":"Standard""#));
+    }
+
+    #[test]
+    fn test_scrub_raw_log_deck_name_starthook_roster_shape_redacted() {
+        // Simulates a <== StartHook account-bootstrap deck roster entry,
+        // with an intervening numeric scalar field between DeckId and Name.
+        let input = r#"{"Decks":[{"DeckId":"1a2b3c4d-5e6f-7890-abcd-ef1234567890","Version":1,"Name":"Test Deck","Format":"Standard"}]}"#;
+        let result = scrub_raw_log(input);
+        assert!(!result.contains("Test Deck"));
+        assert!(result.contains(r#""Name":"Deck-1a2b3c4d""#));
+        assert!(result.contains(r#""Version":1"#));
+    }
+
+    #[test]
+    fn test_scrub_raw_log_deck_name_course_summary_shape_redacted() {
+        // Simulates a <== EventGetCoursesV2 Courses[].CourseDeckSummary entry.
+        let input = r#"{"Courses":[{"CourseId":"c1","CourseDeckSummary":{"DeckId":"1a2b3c4d-5e6f-7890-abcd-ef1234567890","Name":"My Cool Deck","Format":"Standard"}}]}"#;
+        let result = scrub_raw_log(input);
+        assert!(!result.contains("My Cool Deck"));
+        assert!(result.contains(r#""Name":"Deck-1a2b3c4d""#));
+        assert!(result.contains(r#""CourseId":"c1""#));
+    }
+
+    #[test]
+    fn test_scrub_raw_log_deck_name_precon_catalog_shape_redacted() {
+        // Simulates a <== DeckGetAllPreconDecksV3 catalog entry. Precon
+        // names are WotC localization keys, but are scrubbed anyway by the
+        // uniform structural rule.
+        let input = r#"{"PreconDecks":[{"DeckId":"1a2b3c4d-5e6f-7890-abcd-ef1234567890","Name":"?=?Loc/Decks/Precon/GreenWhite","Format":"Standard"}]}"#;
+        let result = scrub_raw_log(input);
+        assert!(!result.contains("Loc/Decks/Precon"));
+        assert!(result.contains(r#""Name":"Deck-1a2b3c4d""#));
+    }
+
+    #[test]
+    fn test_scrub_raw_log_deck_name_pet_diagnostic_line_redacted() {
+        let input = "Can't find pet for deck My Cool Deck (1a2b3c4d-5e6f-7890-abcd-ef1234567890)";
+        let result = scrub_raw_log(input);
+        assert_eq!(
+            result,
+            "Can't find pet for deck Deck-1a2b3c4d (1a2b3c4d-5e6f-7890-abcd-ef1234567890)"
+        );
+    }
+
+    #[test]
+    fn test_scrub_raw_log_deck_name_pet_diagnostic_line_with_frame_prefix_redacted() {
+        // Unstripped archive logs prefix each line with a "[N] " frame index.
+        let input =
+            "[42] Can't find pet for deck My Cool Deck (1a2b3c4d-5e6f-7890-abcd-ef1234567890)";
+        let result = scrub_raw_log(input);
+        assert_eq!(
+            result,
+            "[42] Can't find pet for deck Deck-1a2b3c4d (1a2b3c4d-5e6f-7890-abcd-ef1234567890)"
+        );
+    }
+
+    #[test]
+    fn test_scrub_raw_log_with_keep_deck_names_true_preserves_names() {
+        let opts = ScrubOptions {
+            keep_player_names: false,
+            keep_deck_names: true,
+        };
+        let input = r#"{"DeckId":"1a2b3c4d-5e6f-7890-abcd-ef1234567890","Name":"My Cool Deck","Format":"Standard"}"#;
+        let result = scrub_raw_log_with(input, &opts);
+        assert!(result.contains("My Cool Deck"));
+    }
+
+    #[test]
+    fn test_scrub_raw_log_with_keep_deck_names_true_still_redacts_other_patterns() {
+        let opts = ScrubOptions {
+            keep_player_names: false,
+            keep_deck_names: true,
+        };
+        let input = r#"Token: secret123 and {"DeckId":"1a2b3c4d-5e6f-7890-abcd-ef1234567890","Name":"My Cool Deck"}"#;
+        let result = scrub_raw_log_with(input, &opts);
+        assert!(result.contains("My Cool Deck"));
+        assert!(result.contains("Token: <redacted>"));
+        assert!(!result.contains("secret123"));
+    }
+
+    #[test]
+    fn test_scrub_raw_log_deck_name_structure_preserved() {
+        // DeckId, Format, Attributes, and card-list structure must survive
+        // scrubbing unchanged; only the Name value is replaced, with the
+        // label derived from the first 8 hex of the adjacent DeckId.
+        let input = r#"{"DeckId":"1a2b3c4d-5e6f-7890-abcd-ef1234567890","Name":"My Cool Deck","Format":"Standard","Attributes":[{"name":"Version","value":"1"}],"MainDeck":[{"cardId":1,"quantity":4}]}"#;
+        let result = scrub_raw_log(input);
+        assert!(result.contains(r#""DeckId":"1a2b3c4d-5e6f-7890-abcd-ef1234567890""#));
+        assert!(result.contains(r#""Format":"Standard""#));
+        assert!(result.contains(r#""Attributes":[{"name":"Version","value":"1"}]"#));
+        assert!(result.contains(r#""MainDeck":[{"cardId":1,"quantity":4}]"#));
+        assert!(result.contains(r#""Name":"Deck-1a2b3c4d""#));
+        assert!(!result.contains("My Cool Deck"));
+    }
+
+    #[test]
+    fn test_scrub_raw_log_deck_name_determinism_same_guid_across_carriers() {
+        // The same DeckId in the plain and escaped carrier shapes must
+        // pseudonymize to the same label.
+        let plain = r#"{"DeckId":"1a2b3c4d-5e6f-7890-abcd-ef1234567890","Name":"My Cool Deck"}"#;
+        let escaped = r#"{"request":"{\"DeckId\":\"1a2b3c4d-5e6f-7890-abcd-ef1234567890\",\"Name\":\"My Cool Deck\"}"}"#;
+        let plain_result = scrub_raw_log(plain);
+        let escaped_result = scrub_raw_log(escaped);
+        assert!(plain_result.contains(r#""Name":"Deck-1a2b3c4d""#));
+        assert!(escaped_result.contains(r#"\"Name\":\"Deck-1a2b3c4d"#));
+    }
+
+    #[test]
+    fn test_scrub_raw_log_deck_name_determinism_rename_chain_collapses_to_one_label() {
+        // Same DeckId, two different Name values (simulating a rename within
+        // one log session) — both must pseudonymize to the same label.
+        let input = concat!(
+            r#"{"DeckId":"1a2b3c4d-5e6f-7890-abcd-ef1234567890","Name":"Old Name"}"#,
+            "\n",
+            r#"{"DeckId":"1a2b3c4d-5e6f-7890-abcd-ef1234567890","Name":"New Name"}"#,
+        );
+        let result = scrub_raw_log(input);
+        assert_eq!(result.matches(r#""Name":"Deck-1a2b3c4d""#).count(), 2);
+        assert!(!result.contains("Old Name"));
+        assert!(!result.contains("New Name"));
+    }
+
+    #[test]
+    fn test_scrub_raw_log_deck_name_embedded_escaped_quote_no_fragment_survives() {
+        // Plain-context name value with embedded escaped quotes.
+        let input = r#""DeckId":"1a2b3c4d-5e6f-7890-abcd-ef1234567890","Name":"My \"Cool\" Deck""#;
+        let result = scrub_raw_log(input);
+        assert!(!result.contains("My"));
+        assert!(!result.contains("Cool"));
+        assert!(result.contains(r#""Name":"Deck-1a2b3c4d""#));
+    }
+
+    #[test]
+    fn test_scrub_raw_log_deck_name_malformed_mixed_escaping_no_fragment_survives() {
+        // A malformed mid-rename ==> save request: a raw `\"` appears inside
+        // the escaped name value instead of the value being cleanly closed.
+        // No fragment of the name must survive.
+        let input =
+            r#"{\"DeckId\":\"1a2b3c4d-5e6f-7890-abcd-ef1234567890\",\"Name\":\"Old\" New Deck\"}"#;
+        let result = scrub_raw_log(input);
+        assert!(!result.contains("Old"));
+        assert!(!result.contains("New Deck"));
+        assert!(result.contains(r#"\"Name\":\"Deck-1a2b3c4d"#));
+    }
+
+    #[test]
+    fn test_scrub_raw_log_deck_name_cosmetics_pets_emotes_byte_identical() {
+        // Cosmetic "Id"+"Name" pairs (Pets/Emotes) use the key "Id", not
+        // "DeckId", so the deck-name patterns must not fire on them.
+        let input =
+            r#"{"Pets":[{"Id":12345,"Name":"Fluffy"}],"Emotes":[{"Id":67890,"Name":"Wave"}]}"#;
+        assert_eq!(scrub_raw_log(input), input);
+    }
+
+    #[test]
+    fn test_scrub_raw_log_deck_name_idempotent() {
+        let input = r#"{"DeckId":"1a2b3c4d-5e6f-7890-abcd-ef1234567890","Name":"My Cool Deck"}"#;
+        let first_pass = scrub_raw_log(input);
+        let second_pass = scrub_raw_log(&first_pass);
+        assert_eq!(
+            first_pass, second_pass,
+            "Deck-name scrubbing should be idempotent"
+        );
+    }
+
     // --- Corpus validation (env-gated, not run in CI) ---
+
+    /// Returns `true` if `val` is `"<redacted>"` — the flat-redaction
+    /// placeholder used by every non-deck-name scrub pattern.
+    fn is_redacted(val: &str) -> bool {
+        val == "<redacted>"
+    }
+
+    /// Returns `true` if `val` matches `^Deck-[0-9a-fA-F]{8}$` — the
+    /// deterministic pseudonymization label used by the deck-name patterns.
+    fn is_deck_label(val: &str) -> bool {
+        val.len() == 13
+            && val.starts_with("Deck-")
+            && val[5..].bytes().all(|b| b.is_ascii_hexdigit())
+    }
+
+    /// A PII-detection entry: a human-readable label, a regex that captures
+    /// the sensitive value in group 1, and a validator that returns `true`
+    /// when the captured (post-scrub) value indicates successful redaction.
+    type PiiPattern = (&'static str, Regex, fn(&str) -> bool);
 
     /// Build the PII-detection patterns used by [`test_corpus_scrub_no_pii_survives`].
     ///
-    /// Each entry is a human-readable label paired with a regex that captures
-    /// the sensitive value in group 1. The corpus guard compares the captured
-    /// value against `"<redacted>"` to decide whether the pattern leaked.
-    fn corpus_pii_patterns() -> Vec<(&'static str, Regex)> {
+    /// Combines [`hardware_and_name_pii_patterns`] (flat `"<redacted>"`
+    /// placeholders, via [`is_redacted`]) with [`deck_name_pii_patterns`]
+    /// (`Deck-<8hex>` labels, via [`is_deck_label`]).
+    fn corpus_pii_patterns() -> Vec<PiiPattern> {
+        let mut patterns = hardware_and_name_pii_patterns();
+        patterns.extend(deck_name_pii_patterns());
+        patterns
+    }
+
+    /// PII-detection patterns for display names and hardware fingerprints —
+    /// all redact to the flat `"<redacted>"` placeholder.
+    fn hardware_and_name_pii_patterns() -> Vec<PiiPattern> {
         vec![
             (
                 "screenName",
                 Regex::new(r#""[Ss]creen[Nn]ame"\s*:\s*"([^"]+)""#)
                     .unwrap_or_else(|_| unreachable!()),
+                is_redacted,
             ),
             (
                 "playerName",
                 Regex::new(r#""[Pp]layer[Nn]ame"\s*:\s*"([^"]+)""#)
                     .unwrap_or_else(|_| unreachable!()),
+                is_redacted,
             ),
             // Windows GPU fingerprint patterns.
             (
                 "Renderer",
                 Regex::new(r"(?m)^\s+Renderer:\s+(.+)").unwrap_or_else(|_| unreachable!()),
+                is_redacted,
             ),
             (
                 "Vendor",
                 Regex::new(r"(?m)^\s+Vendor:\s+(.+)").unwrap_or_else(|_| unreachable!()),
+                is_redacted,
             ),
             (
                 "VRAM",
                 Regex::new(r"(?m)^\s+VRAM:\s+(.+)").unwrap_or_else(|_| unreachable!()),
+                is_redacted,
             ),
             (
                 "Driver",
                 Regex::new(r"(?m)^\s+Driver:\s+(.+)").unwrap_or_else(|_| unreachable!()),
+                is_redacted,
             ),
             // macOS Metal GPU fingerprint patterns.
             (
                 "macOS preferred device",
                 Regex::new(r"(?m)^\s*preferred device:\s+(.+)").unwrap_or_else(|_| unreachable!()),
+                is_redacted,
             ),
             (
                 "macOS Metal devices available",
                 Regex::new(r"(?m)^\s*Metal devices available:\s+(.+)")
                     .unwrap_or_else(|_| unreachable!()),
+                is_redacted,
             ),
             (
                 "macOS enumerated Metal device",
                 Regex::new(r"(?m)^\s*\d+:\s+(.+?)\s*\((?:high|low) power\)")
                     .unwrap_or_else(|_| unreachable!()),
+                is_redacted,
             ),
             (
                 "macOS Using device",
                 Regex::new(r"(?m)^\s*Using device\s+(.+)").unwrap_or_else(|_| unreachable!()),
+                is_redacted,
             ),
             (
                 "macOS Initializing Metal device caps",
                 Regex::new(r"(?m)^\s*Initializing Metal device caps:\s+(.+)")
                     .unwrap_or_else(|_| unreachable!()),
+                is_redacted,
             ),
             // Unity SystemInfo block (newer MTGA builds, both platforms).
             (
                 "SystemInfo graphicsDeviceName",
                 Regex::new(r"(?m)^graphicsDeviceName (.+)").unwrap_or_else(|_| unreachable!()),
+                is_redacted,
             ),
             (
                 "SystemInfo graphicsDeviceVendor",
                 Regex::new(r"(?m)^graphicsDeviceVendor (.+)").unwrap_or_else(|_| unreachable!()),
+                is_redacted,
             ),
             (
                 "SystemInfo graphicsDeviceVersion",
                 Regex::new(r"(?m)^graphicsDeviceVersion (.+)").unwrap_or_else(|_| unreachable!()),
+                is_redacted,
             ),
             (
                 "SystemInfo deviceModel",
                 Regex::new(r"(?m)^deviceModel (.+)").unwrap_or_else(|_| unreachable!()),
+                is_redacted,
             ),
             (
                 "SystemInfo operatingSystem",
                 Regex::new(r"(?m)^operatingSystem (.+)").unwrap_or_else(|_| unreachable!()),
+                is_redacted,
             ),
             (
                 "SystemInfo processorType",
                 Regex::new(r"(?m)^processorType (.+)").unwrap_or_else(|_| unreachable!()),
+                is_redacted,
+            ),
+        ]
+    }
+
+    /// PII-detection patterns for deck names — all pseudonymize to a
+    /// deterministic `Deck-<8hex>` label rather than the flat
+    /// `"<redacted>"` placeholder.
+    fn deck_name_pii_patterns() -> Vec<PiiPattern> {
+        vec![
+            // Deck names: plain-context `"DeckId"`/`"Name"` pairing (covers
+            // `<==` responses, `StartHook`, precon catalog, course
+            // summaries). Captures only the `Name` value.
+            (
+                "deck Name (plain)",
+                Regex::new(
+                    r#""DeckId":\s*"[0-9a-fA-F]{8}[0-9a-fA-F-]*",\s*(?:"[A-Za-z0-9_]+":(?:"[^"\\]*"|-?[0-9]+|true|false|null),\s*)*"Name":\s*"((?:[^"\\]|\\.)*)""#,
+                )
+                .unwrap_or_else(|_| unreachable!()),
+                is_deck_label,
+            ),
+            // Deck names: escaped-context `\"DeckId\"`/`\"Name\"` pairing
+            // (covers `==>` request payloads). Captures only the `Name`
+            // value.
+            (
+                "deck Name (escaped)",
+                Regex::new(
+                    r#"\\"DeckId\\":\s*\\"[0-9a-fA-F]{8}[0-9a-fA-F-]*\\",\s*(?:\\"[A-Za-z0-9_]+\\":(?:\\"[^"\\]*\\"|-?[0-9]+|true|false|null),\s*)*\\"Name\\":\s*\\"((?:[^"\\]|\\\\.|\\"[^,}\]"])*)"#,
+                )
+                .unwrap_or_else(|_| unreachable!()),
+                is_deck_label,
+            ),
+            // Deck names: Unity console "Can't find pet for deck" diagnostic
+            // (plain text, not JSON). Captures the name-or-label token.
+            (
+                "deck Name (pet-diagnostic line)",
+                Regex::new(
+                    r"(?m)^(?:\[\d+\] )?Can't find pet for deck (.+) \([0-9a-fA-F]{8}[0-9a-fA-F-]{28}\)$",
+                )
+                .unwrap_or_else(|_| unreachable!()),
+                is_deck_label,
             ),
         ]
     }
@@ -1344,7 +1735,7 @@ mod tests {
 
             let scrubbed = scrub_raw_log(&raw);
 
-            for (name, re) in &pii_patterns {
+            for (name, re, is_valid) in &pii_patterns {
                 let before = u32::try_from(re.find_iter(&raw).count()).unwrap_or(u32::MAX);
                 total_before += before;
 
@@ -1352,7 +1743,7 @@ mod tests {
                     .captures_iter(&scrubbed)
                     .filter_map(|cap| {
                         let val = cap.get(1).map_or("", |m| m.as_str());
-                        if val == "<redacted>" {
+                        if is_valid(val) {
                             None
                         } else {
                             Some(val.to_owned())

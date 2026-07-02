@@ -127,7 +127,7 @@ try {
 
 ## Log Sanitization
 
-The `sanitize` module strips PII and credentials from raw `Player.log` text before it leaves the user's machine. It redacts auth tokens, bearer tokens, account IDs, display names, session identifiers, OS user paths, and hardware fingerprints.
+The `sanitize` module strips PII and credentials from raw `Player.log` text before it leaves the user's machine. It redacts auth tokens, bearer tokens, account IDs, display names, session identifiers, OS user paths, and hardware fingerprints. Free-text deck names are pseudonymized by default to a deterministic `Deck-<8hex>` label derived from the deck's ID (opt out per-call via `ScrubOptions::keep_deck_names`), preserving deck structure while keeping the same deck correlatable across a session.
 
 ```rust
 use manasight_parser::sanitize::scrub_raw_log;

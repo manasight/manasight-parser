@@ -114,6 +114,7 @@ fn test_parse_whole_log_corpus_parity_with_router() {
 fn test_seat_signal_keep_player_names_true_retains_opponent_name_and_local_seat() {
     let opts = ScrubOptions {
         keep_player_names: true,
+        keep_deck_names: false,
     };
     let scrubbed = scrub_raw_log_with(FIXTURE_WITH_CONNECT_RESP, &opts);
     let events = parse_whole_log(&scrubbed);

@@ -25,6 +25,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   event types.
 
   This adds a variant to the lean output → consumers re-parse.
+- **`ScrubOptions::keep_deck_names`** — new toggle (default `false`) that
+  controls whether free-text deck names in scrubbed log output are
+  pseudonymized. By default, deck `Name` fields are replaced with a
+  deterministic `Deck-<first 8 hex of DeckId>` label, preserving
+  `DeckId`/`Format`/`Attributes`/card-list structure so parsing and corpus
+  greps still work; the same `DeckId` always maps to the same label, so
+  rename chains and cross-carrier occurrences of one deck stay correlatable
+  after scrubbing. Set `keep_deck_names: true` to pass deck names through
+  untouched (all other patterns still apply). Mirrors the existing
+  `keep_player_names` toggle precedent.
+
+### Changed
+
+- **BREAKING:** `ScrubOptions` gains a new public field
+  (`keep_deck_names: bool`). Since `ScrubOptions` is not `#[non_exhaustive]`,
+  any exhaustive struct literal (`ScrubOptions { keep_player_names: ... }`
+  without `..Default::default()`) no longer compiles and must add the new
+  field, or switch to `..Default::default()`.
 
 ## [0.6.3] - 2026-06-26
 
