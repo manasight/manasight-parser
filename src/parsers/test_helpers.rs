@@ -116,3 +116,4 @@ define_payload_extractor!(tcp_connection_close_payload, TcpConnectionClose);
 define_payload_extractor!(websocket_closed_payload, WebSocketClosed);
 define_payload_extractor!(connection_error_payload, ConnectionError);
 define_payload_extractor!(deck_submission_payload, DeckSubmission);
+define_payload_extractor!(course_deck_payload, CourseDeck);

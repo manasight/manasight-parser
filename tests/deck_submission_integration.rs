@@ -94,6 +94,17 @@ fn test_corpus_v2_constructed_format_is_traditional_standard() {
         "standard constructed deck has an empty CommandZone",
     );
     assert_eq!(payload["type"], "deck_submission",);
+    assert_eq!(
+        payload["name"], "Test Deck",
+        "name must be the deck's registered Summary.Name",
+    );
+    // The fixture's MainDeck is unsorted ([95816:4, 95817:3, 68740:4]); the
+    // hash must match the sorted-canonical form, proving sort-before-hash.
+    assert_eq!(
+        payload["maindeck_hash"],
+        "6abd62511e8248dcf93b56f6b4fff47a7a26d849d105b5a793b36715455451e6",
+        "maindeck_hash must be computed from the sorted MainDeck, not raw order",
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -202,6 +213,27 @@ fn test_router_claims_v2_and_v3() {
         assert_eq!(payload["deck_id"], expected_deck_id);
         assert_eq!(router.stats().unknown_count(), 0);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Test 6: Empty MainDeck yields a null maindeck_hash (never a partial hash)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_empty_maindeck_yields_null_hash() {
+    let body = format!(
+        "[UnityCrossThreadLogger]4/12/2026 8:44:00 AM ==> EventSetDeckV2 {}",
+        make_request_json("Ladder", "deck-empty", "Standard")
+    );
+
+    let events = parse_via_router(&body);
+    let submissions = deck_submissions(&events);
+
+    assert_eq!(submissions.len(), 1);
+    assert!(
+        submissions[0].payload()["maindeck_hash"].is_null(),
+        "an empty MainDeck must yield a null maindeck_hash, never a partial hash",
+    );
 }
 
 // ---------------------------------------------------------------------------

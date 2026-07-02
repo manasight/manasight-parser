@@ -4,6 +4,28 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+- **Richer deck identity in the event stream.** `GameEvent::DeckSubmission`
+  now surfaces `name` (the deck's registered name) and `maindeck_hash` (a
+  canonical SHA-256 digest of the submitted `MainDeck`) alongside the
+  existing `deck_id`/`deck_format`/`event_name`/`is_singleton` fields.
+- **`GameEvent::CourseDeck`** — a new event parsed from `<== EventGetCoursesV2`
+  responses, emitting one event per active Course carrying a registered
+  deck: `{ type, deck_id, name, format, maindeck_hash, internal_event_name,
+  course_id }`. Covers limited runs and app-started-mid-event recovery where
+  no deck-submission request exists in the current log session. Courses with
+  no registered deck yet (mid-draft/pre-deckbuild) are skipped.
+- `maindeck_hash` is a cross-event contract: both `DeckSubmission` and
+  `CourseDeck` compute it via the same canonicalization (entries sorted by
+  `cardId` ascending, serialized `cardId:quantity` joined with `;`, SHA-256
+  hex) so downstream consumers can compare deck identity across the two
+  event types.
+
+  This adds a variant to the lean output → consumers re-parse.
+
 ## [0.6.3] - 2026-06-26
 
 ### Fixed
