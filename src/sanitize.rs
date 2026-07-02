@@ -1467,8 +1467,7 @@ mod tests {
     }
 
     #[test]
-    fn test_scrub_raw_log_deck_name_pet_diagnostic_line_crlf_with_keep_deck_names_true_passthrough()
-    {
+    fn test_scrub_raw_log_with_keep_deck_names_true_crlf_passthrough() {
         let opts = ScrubOptions {
             keep_player_names: false,
             keep_deck_names: true,

@@ -54,7 +54,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   default options. Both patterns now capture-and-re-emit an optional
   trailing `\r` so CRLF lines are scrubbed without normalizing the line
   ending to LF-only. A repo-wide sweep confirmed these were the only two
-  `$`-anchored scrub patterns exposed to this issue.
+  `$`-anchored scrub patterns exposed to this issue. Verified against
+  the `manasight-corpus` real logs (41/55 files are CRLF-terminated;
+  198 pet-diagnostic deck-name lines leaked before this change; 0 after).
 
 ## [0.6.3] - 2026-06-26
 
