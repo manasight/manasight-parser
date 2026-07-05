@@ -21,6 +21,8 @@
 //! Detailed Logging") and poll periodically until the file appears.
 
 use std::path::{Path, PathBuf};
+#[cfg(target_os = "linux")]
+use std::time::SystemTime;
 
 // ---------------------------------------------------------------------------
 // LogPaths
@@ -122,41 +124,45 @@ fn resolve_base_dir() -> Result<PathBuf, DiscoveryError> {
 
 /// Resolves the platform base directory for MTGA logs on Linux.
 ///
-/// Tries candidates in order (Steam/Proton first, then Lutris) and returns
-/// the `.../LocalLow` base dir for the first candidate whose `Player.log`
-/// exists.  The Linux arm is existence-aware because the base directory
-/// must be discovered dynamically (Steam library can be on any disk).
+/// Probes every known Steam installation root plus the Lutris fallback, and
+/// returns the `.../LocalLow` base dir for the candidate whose `Player.log`
+/// has the most recent modification time. The Linux arm is existence- and
+/// freshness-aware because the base directory must be discovered
+/// dynamically (a Steam library can be on any disk, and a stale leftover
+/// log in one candidate must not shadow a live log in another).
 ///
 /// Returns [`DiscoveryError::LogFileMissing`] (not [`DiscoveryError::UnsupportedPlatform`])
 /// when no candidate contains a `Player.log`, matching the absent-file
 /// contract of the Windows/macOS arms.
 #[cfg(target_os = "linux")]
 fn resolve_base_dir() -> Result<PathBuf, DiscoveryError> {
-    use crate::log::steam::{steam_library_for_appid, MTGA_APP_ID};
+    use crate::log::steam::{steam_libraries_for_appid, MTGA_APP_ID};
 
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .ok_or(DiscoveryError::BaseDirNotFound)?;
 
-    let steam_lib = steam_library_for_appid(MTGA_APP_ID);
-    let candidates = linux_candidate_base_dirs(&home, steam_lib.as_deref());
+    let steam_libraries = steam_libraries_for_appid(MTGA_APP_ID);
+    let candidates = linux_candidate_base_dirs(&home, &steam_libraries);
 
     let mtga_tail = Path::new("Wizards Of The Coast")
         .join("MTGA")
         .join("Player.log");
 
-    for candidate in &candidates {
-        if candidate.join(&mtga_tail).exists() {
-            ::log::info!("Linux: discovered MTGA base dir: {}", candidate.display());
-            return Ok(candidate.clone());
-        }
+    if let Some((base_dir, modified)) = select_freshest_candidate(&candidates, &mtga_tail) {
+        ::log::info!(
+            "Linux: discovered MTGA base dir: {} (Player.log modified {modified:?})",
+            base_dir.display(),
+        );
+        return Ok(base_dir);
     }
 
-    // Nothing found: report the Lutris path (last candidate) as the missing
-    // path so callers can surface a useful "file not found" message.
-    // The Lutris candidate is always present in the list (linux_candidate_base_dirs
-    // always appends it), so last() is always Some; fall back to building the
-    // Lutris path directly if the vector were somehow empty.
+    // Nothing found: report the first Steam-derived candidate as the
+    // missing path if any Steam library was found (so the error points at
+    // a real, if empty, Steam install), otherwise the Lutris fallback
+    // (last candidate, always present — linux_candidate_base_dirs always
+    // appends it), preserving today's error surface when no Steam install
+    // exists at all.
     let lutris_locallow = home
         .join("Games")
         .join("magic-the-gathering-arena")
@@ -165,7 +171,12 @@ fn resolve_base_dir() -> Result<PathBuf, DiscoveryError> {
         .join("steamuser")
         .join("AppData")
         .join("LocalLow");
-    let missing_path = candidates.into_iter().last().map_or_else(
+    let missing_base = if steam_libraries.is_empty() {
+        candidates.last()
+    } else {
+        candidates.first()
+    };
+    let missing_path = missing_base.map_or_else(
         || lutris_locallow.join(&mtga_tail),
         |base| base.join(&mtga_tail),
     );
@@ -177,29 +188,32 @@ fn resolve_base_dir() -> Result<PathBuf, DiscoveryError> {
     Err(DiscoveryError::LogFileMissing { path: missing_path })
 }
 
-/// Returns the ordered `.../LocalLow` candidate base directories for Linux
-/// MTGA discovery (Steam/Proton first, Lutris second).
+/// Returns the `.../LocalLow` candidate base directories for Linux MTGA
+/// discovery: one candidate per discovered Steam library, plus the Lutris
+/// fallback prefix.
 ///
-/// This pure helper takes `home` and an optional `steam_lib` so it can be
-/// unit-tested with temp directories without mutating `$HOME`.
+/// This pure helper takes `home` and the already-discovered Steam
+/// libraries so it can be unit-tested with temp directories without
+/// mutating `$HOME`.
 #[cfg(target_os = "linux")]
-pub(crate) fn linux_candidate_base_dirs(home: &Path, steam_lib: Option<&Path>) -> Vec<PathBuf> {
-    let mut candidates = Vec::new();
+pub(crate) fn linux_candidate_base_dirs(home: &Path, steam_libraries: &[PathBuf]) -> Vec<PathBuf> {
+    use crate::log::steam::MTGA_APP_ID;
 
-    // Steam/Proton (primary)
-    if let Some(library) = steam_lib {
-        let locallow = library
-            .join("steamapps")
-            .join("compatdata")
-            .join("2141910")
-            .join("pfx")
-            .join("drive_c")
-            .join("users")
-            .join("steamuser")
-            .join("AppData")
-            .join("LocalLow");
-        candidates.push(locallow);
-    }
+    let mut candidates: Vec<PathBuf> = steam_libraries
+        .iter()
+        .map(|library| {
+            library
+                .join("steamapps")
+                .join("compatdata")
+                .join(MTGA_APP_ID.to_string())
+                .join("pfx")
+                .join("drive_c")
+                .join("users")
+                .join("steamuser")
+                .join("AppData")
+                .join("LocalLow")
+        })
+        .collect();
 
     // Lutris (fallback, UNVERIFIED)
     let lutris_locallow = home
@@ -213,6 +227,29 @@ pub(crate) fn linux_candidate_base_dirs(home: &Path, steam_lib: Option<&Path>) -
     candidates.push(lutris_locallow);
 
     candidates
+}
+
+/// Selects the candidate whose `Player.log` (at `candidate.join(mtga_tail)`)
+/// has the most recent modification time.
+///
+/// Returns the winning base dir and its `Player.log` modification time, or
+/// `None` if no candidate has an existing, readable `Player.log`. Pure with
+/// respect to global/env state (depends only on its arguments and
+/// filesystem metadata), so it is unit-testable with tempdir fixtures.
+#[cfg(target_os = "linux")]
+fn select_freshest_candidate(
+    candidates: &[PathBuf],
+    mtga_tail: &Path,
+) -> Option<(PathBuf, SystemTime)> {
+    candidates
+        .iter()
+        .filter_map(|candidate| {
+            let modified = std::fs::metadata(candidate.join(mtga_tail))
+                .and_then(|m| m.modified())
+                .ok()?;
+            Some((candidate.clone(), modified))
+        })
+        .max_by_key(|(_, modified)| *modified)
 }
 
 /// Returns [`DiscoveryError::UnsupportedPlatform`] on non-Windows/macOS/Linux targets.
@@ -519,7 +556,9 @@ mod tests {
     mod linux_discovery {
         use super::*;
         use crate::log::discovery::linux_candidate_base_dirs;
+        use crate::log::steam::MTGA_APP_ID;
         use std::fs;
+        use std::time::Duration;
 
         type TestResult = Result<(), Box<dyn std::error::Error>>;
 
@@ -532,19 +571,29 @@ mod tests {
         }
 
         #[test]
-        fn test_linux_candidate_base_dirs_steam_first_lutris_second() {
+        fn test_linux_candidate_base_dirs_one_candidate_per_library_then_lutris_last() {
             let home = PathBuf::from("/home/testuser");
-            let steam_lib = PathBuf::from("/mnt/games/SteamLibrary");
-            let candidates = linux_candidate_base_dirs(&home, Some(&steam_lib));
+            let libraries = vec![
+                PathBuf::from("/mnt/games/SteamLibrary"),
+                PathBuf::from("/home/testuser/.local/share/Steam"),
+            ];
+            let candidates = linux_candidate_base_dirs(&home, &libraries);
 
-            assert_eq!(candidates.len(), 2);
-            // Steam candidate is first
+            assert_eq!(candidates.len(), 3);
+            // One candidate per library, in order, each under its own library.
+            assert!(candidates[0].starts_with(&libraries[0]));
             assert!(candidates[0]
                 .to_string_lossy()
                 .contains("steamapps/compatdata"));
-            assert!(candidates[0].to_string_lossy().contains("2141910"));
-            // Lutris candidate is second
+            assert!(candidates[0]
+                .to_string_lossy()
+                .contains(&MTGA_APP_ID.to_string()));
+            assert!(candidates[1].starts_with(&libraries[1]));
             assert!(candidates[1]
+                .to_string_lossy()
+                .contains(&MTGA_APP_ID.to_string()));
+            // Lutris fallback is always last.
+            assert!(candidates[2]
                 .to_string_lossy()
                 .contains("Games/magic-the-gathering-arena"));
         }
@@ -552,7 +601,7 @@ mod tests {
         #[test]
         fn test_linux_candidate_base_dirs_no_steam_only_lutris() {
             let home = PathBuf::from("/home/testuser");
-            let candidates = linux_candidate_base_dirs(&home, None);
+            let candidates = linux_candidate_base_dirs(&home, &[]);
 
             assert_eq!(candidates.len(), 1);
             assert!(candidates[0]
@@ -561,93 +610,66 @@ mod tests {
         }
 
         #[test]
-        fn test_linux_resolve_base_dir_steam_found() -> TestResult {
+        fn test_select_freshest_candidate_no_existing_logs_returns_none() -> TestResult {
             let tmp = tempfile::tempdir()?;
-            let steam_lib = tmp.path().join("SteamLibrary");
-            let locallow = steam_lib
-                .join("steamapps")
-                .join("compatdata")
-                .join("2141910")
-                .join("pfx")
-                .join("drive_c")
-                .join("users")
-                .join("steamuser")
-                .join("AppData")
-                .join("LocalLow");
-            let mtga_dir = locallow.join("Wizards Of The Coast").join("MTGA");
-            fs::create_dir_all(&mtga_dir)?;
-            fs::write(mtga_dir.join("Player.log"), "test")?;
-
-            let candidates = linux_candidate_base_dirs(tmp.path(), Some(&steam_lib));
+            let candidates = vec![tmp.path().join("a"), tmp.path().join("b")];
             let mtga_tail = Path::new("Wizards Of The Coast")
                 .join("MTGA")
                 .join("Player.log");
 
-            let found = candidates.iter().find(|c| c.join(&mtga_tail).exists());
-            assert!(found.is_some(), "Steam candidate should be found");
-            assert_eq!(found, Some(&locallow));
+            assert!(select_freshest_candidate(&candidates, &mtga_tail).is_none());
             Ok(())
         }
 
         #[test]
-        fn test_linux_resolve_base_dir_lutris_fallback() -> TestResult {
+        fn test_select_freshest_candidate_single_existing_log_is_selected() -> TestResult {
             let tmp = tempfile::tempdir()?;
-            // No steam lib; only Lutris
-            let lutris_locallow = tmp
-                .path()
-                .join("Games")
-                .join("magic-the-gathering-arena")
-                .join("drive_c")
-                .join("users")
-                .join("steamuser")
-                .join("AppData")
-                .join("LocalLow");
-            let mtga_dir = lutris_locallow.join("Wizards Of The Coast").join("MTGA");
-            fs::create_dir_all(&mtga_dir)?;
-            fs::write(mtga_dir.join("Player.log"), "test")?;
-
-            let candidates = linux_candidate_base_dirs(tmp.path(), None);
+            let only = tmp.path().join("only");
+            fs::create_dir_all(player_log_path(&only).parent().unwrap_or(&only))?;
+            fs::write(player_log_path(&only), "test")?;
+            let candidates = vec![only.clone()];
             let mtga_tail = Path::new("Wizards Of The Coast")
                 .join("MTGA")
                 .join("Player.log");
 
-            let found = candidates.iter().find(|c| c.join(&mtga_tail).exists());
-            assert!(found.is_some(), "Lutris candidate should be found");
-            assert_eq!(found, Some(&lutris_locallow));
+            match select_freshest_candidate(&candidates, &mtga_tail) {
+                Some((base_dir, _)) => assert_eq!(base_dir, only),
+                None => {
+                    return Err(
+                        "expected the only candidate with a Player.log to be selected".into(),
+                    )
+                }
+            }
             Ok(())
         }
 
         #[test]
-        fn test_linux_candidate_base_dirs_nothing_found_no_candidates_match() -> TestResult {
+        fn test_select_freshest_candidate_prefers_freshest_even_when_listed_first() -> TestResult {
+            // Regression coverage for the stale-fallback-shadowing bug: a
+            // candidate that is *listed first* but has a *stale* Player.log
+            // must lose to a later-listed candidate with a *fresher* one —
+            // selection is by mtime, not list order / first-exists.
             let tmp = tempfile::tempdir()?;
-            // No Player.log anywhere
-            let steam_lib = tmp.path().join("SteamLibrary");
-            let candidates = linux_candidate_base_dirs(tmp.path(), Some(&steam_lib));
+            let stale = tmp.path().join("stale-first");
+            let fresh = tmp.path().join("fresh-second");
             let mtga_tail = Path::new("Wizards Of The Coast")
                 .join("MTGA")
                 .join("Player.log");
 
-            let found = candidates.iter().find(|c| c.join(&mtga_tail).exists());
-            assert!(
-                found.is_none(),
-                "No candidate should match when files don't exist"
-            );
+            for base in [&stale, &fresh] {
+                let log_path = base.join(&mtga_tail);
+                fs::create_dir_all(log_path.parent().unwrap_or(base))?;
+            }
+            fs::write(stale.join(&mtga_tail), "old leftover log")?;
+            std::thread::sleep(Duration::from_millis(50));
+            fs::write(fresh.join(&mtga_tail), "live log")?;
+
+            let candidates = vec![stale.clone(), fresh.clone()];
+            match select_freshest_candidate(&candidates, &mtga_tail) {
+                Some((base_dir, _)) => assert_eq!(base_dir, fresh),
+                None => return Err("expected a candidate to be selected".into()),
+            }
             Ok(())
-        }
-
-        #[test]
-        fn test_linux_candidate_steam_path_contains_correct_appid() {
-            let home = PathBuf::from("/home/user");
-            let steam_lib = PathBuf::from("/home/user/.local/share/Steam");
-            let candidates = linux_candidate_base_dirs(&home, Some(&steam_lib));
-
-            assert!(!candidates.is_empty());
-            let steam_candidate = &candidates[0];
-            assert!(
-                steam_candidate.to_string_lossy().contains("2141910"),
-                "Steam candidate must use MTGA app id 2141910: {}",
-                steam_candidate.display()
-            );
         }
 
         #[test]
