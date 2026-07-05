@@ -16,7 +16,7 @@ Or in `Cargo.toml`:
 
 ```toml
 [dependencies]
-manasight-parser = "0.6"
+manasight-parser = "0.7"
 ```
 
 Requires Rust 1.93.0 or later.
