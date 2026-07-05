@@ -4,6 +4,41 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.7.2] - 2026-07-05
+
+### Fixed
+
+- **Linux `Player.log` discovery: probe all common Steam install roots and
+  prefer the freshest log.** Discovery previously derived at most one Steam
+  candidate from a single hardcoded root (`~/.local/share/Steam`) and selected
+  the first candidate whose `Player.log` existed. It now probes an ordered,
+  canonicalized, de-duplicated set of Steam roots — the native
+  `~/.local/share/Steam`, the `~/.steam/root` and `~/.steam/steam` symlinks
+  (Debian `.deb` installs), and the Flatpak
+  (`~/.var/app/com.valvesoftware.Steam/…`) and Snap
+  (`~/snap/steam/common/…`) roots — so Flatpak / `.deb` / Snap installs are
+  discovered. Candidate selection now picks the freshest existing `Player.log`
+  by modification time instead of first-exists, so a stale leftover log (e.g.
+  in an abandoned Lutris prefix) can no longer silently shadow the live Steam
+  log; the selected path and its mtime are logged at INFO ([#272], [#273]).
+- **Scrubber: CRLF-terminated lines bypassing `$`-anchored scrub patterns.**
+  The pet-diagnostic deck-name line and the macOS Metal enumerated-device
+  hardware-fingerprint line anchored on a bare `\)$`; on `\r\n`-terminated
+  log lines (standard for Windows-written `Player.log` files) the `\r`
+  before the newline broke the match, leaving the field unscrubbed under
+  default options. Both patterns now capture-and-re-emit an optional
+  trailing `\r` so CRLF lines are scrubbed without normalizing the line
+  ending to LF-only. A repo-wide sweep confirmed these were the only two
+  `$`-anchored scrub patterns exposed to this issue. Verified against
+  the `manasight-corpus` real logs (41/55 files are CRLF-terminated;
+  198 pet-diagnostic deck-name lines leaked before this change; 0 after)
+  ([#270], [#271]).
+
+[#270]: https://github.com/manasight/manasight-parser/issues/270
+[#271]: https://github.com/manasight/manasight-parser/pull/271
+[#272]: https://github.com/manasight/manasight-parser/issues/272
+[#273]: https://github.com/manasight/manasight-parser/pull/273
+
 ## [0.7.0] - 2026-07-02
 
 ### Added
@@ -43,20 +78,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   any exhaustive struct literal (`ScrubOptions { keep_player_names: ... }`
   without `..Default::default()`) no longer compiles and must add the new
   field, or switch to `..Default::default()`.
-
-### Fixed
-
-- **Scrubber: CRLF-terminated lines bypassing `$`-anchored scrub patterns.**
-  The pet-diagnostic deck-name line and the macOS Metal enumerated-device
-  hardware-fingerprint line anchored on a bare `\)$`; on `\r\n`-terminated
-  log lines (standard for Windows-written `Player.log` files) the `\r`
-  before the newline broke the match, leaving the field unscrubbed under
-  default options. Both patterns now capture-and-re-emit an optional
-  trailing `\r` so CRLF lines are scrubbed without normalizing the line
-  ending to LF-only. A repo-wide sweep confirmed these were the only two
-  `$`-anchored scrub patterns exposed to this issue. Verified against
-  the `manasight-corpus` real logs (41/55 files are CRLF-terminated;
-  198 pet-diagnostic deck-name lines leaked before this change; 0 after).
 
 ## [0.6.3] - 2026-06-26
 
