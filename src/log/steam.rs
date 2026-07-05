@@ -1,10 +1,12 @@
 //! Steam library discovery helpers for Linux.
 //!
-//! Parses `~/.local/share/Steam/steamapps/libraryfolders.vdf` to find the
-//! Steam library that contains a given app ID, then returns the library root
-//! path.  This is required because Steam allows users to install games on
-//! any configured library disk — the default `~/.local/share/Steam` path is
-//! not guaranteed to contain a given title.
+//! Probes every known Steam installation root (native, the `~/.steam/root`
+//! and `~/.steam/steam` symlinks, Flatpak, and Snap), parsing each root's
+//! `steamapps/libraryfolders.vdf` to find the Steam library that contains a
+//! given app ID. This is required because Steam allows users to install
+//! games on any configured library disk — the default
+//! `~/.local/share/Steam` path is not guaranteed to contain a given title,
+//! and not every install uses that default root at all.
 //!
 //! The VDF format used by `libraryfolders.vdf` is a subset of Valve's
 //! `KeyValues` text format (VDF v1).  We use a hand-rolled line scanner rather
@@ -36,29 +38,85 @@
 //! }
 //! ```
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 /// MTGA's Steam App ID.
 pub(crate) const MTGA_APP_ID: u32 = 2_141_910;
 
-/// Locate the Steam library root that contains `appid`.
+/// Locate every Steam library that contains `appid`, probing all known
+/// Steam installation roots.
 ///
-/// Parses `~/.local/share/Steam/steamapps/libraryfolders.vdf` and returns the
-/// `path` value of the first library entry whose `apps` block contains the
-/// given `appid`.
-///
-/// Falls back to `~/.local/share/Steam` if:
-/// - the VDF file is missing / unreadable, **and**
-/// - `<default_steam>/steamapps/compatdata/<appid>` exists.
-///
-/// Returns `None` if neither the VDF nor the fallback resolve to a library
-/// that contains the app's `compatdata` directory.
-pub(crate) fn steam_library_for_appid(appid: u32) -> Option<PathBuf> {
-    let home = std::env::var_os("HOME").map(PathBuf::from)?;
-    let default_steam = home.join(".local").join("share").join("Steam");
-    let vdf_path = default_steam.join("steamapps").join("libraryfolders.vdf");
+/// Reads `$HOME` and delegates to [`steam_libraries_for_appid_in`]. Returns
+/// an empty `Vec` if `$HOME` is unset.
+pub(crate) fn steam_libraries_for_appid(appid: u32) -> Vec<PathBuf> {
+    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+        return Vec::new();
+    };
+    steam_libraries_for_appid_in(&home, appid)
+}
 
-    // Try to parse the VDF and find the library that contains appid.
+/// Locate every Steam library that contains `appid`, given a home
+/// directory.
+///
+/// Probes, in order: `~/.steam/root`, `~/.steam/steam` (the two common
+/// Steam symlinks), `~/.local/share/Steam` (native default), the Flatpak
+/// install path, and the Snap install path. Roots that don't exist and
+/// roots that canonicalize to a real directory already probed via another
+/// alias are skipped. For each remaining root, parses
+/// `steamapps/libraryfolders.vdf` for a library containing `appid`, falling
+/// back to the root itself if `steamapps/compatdata/<appid>` exists there
+/// directly.
+///
+/// Takes `home` as a parameter (rather than reading `$HOME` directly) so it
+/// can be exercised with tempdir fixtures — VDF parsing and compatdata
+/// fallback included — without mutating the process environment.
+pub(crate) fn steam_libraries_for_appid_in(home: &Path, appid: u32) -> Vec<PathBuf> {
+    let mut seen_roots: HashSet<PathBuf> = HashSet::new();
+    let mut libraries = Vec::new();
+
+    for root in candidate_steam_roots(home) {
+        let Ok(canonical_root) = std::fs::canonicalize(&root) else {
+            continue; // doesn't exist, or a broken symlink
+        };
+        if !seen_roots.insert(canonical_root.clone()) {
+            continue; // already probed this real directory via another root alias
+        }
+        if let Some(library) = library_for_root(&canonical_root, appid) {
+            libraries.push(library);
+        }
+    }
+
+    libraries
+}
+
+/// Ordered set of Steam installation roots to probe, before existence
+/// checking and canonical-path deduplication.
+fn candidate_steam_roots(home: &Path) -> Vec<PathBuf> {
+    vec![
+        home.join(".steam").join("root"),
+        home.join(".steam").join("steam"),
+        home.join(".local").join("share").join("Steam"),
+        home.join(".var")
+            .join("app")
+            .join("com.valvesoftware.Steam")
+            .join(".local")
+            .join("share")
+            .join("Steam"),
+        home.join("snap")
+            .join("steam")
+            .join("common")
+            .join(".local")
+            .join("share")
+            .join("Steam"),
+    ]
+}
+
+/// Checks a single, already-canonicalized Steam root for a library
+/// containing `appid`: first via `libraryfolders.vdf`, then via the
+/// `compatdata` fallback (the root itself, if present).
+fn library_for_root(root: &Path, appid: u32) -> Option<PathBuf> {
+    let vdf_path = root.join("steamapps").join("libraryfolders.vdf");
     if vdf_path.exists() {
         if let Ok(contents) = std::fs::read_to_string(&vdf_path) {
             if let Some(library) = parse_library_for_appid(&contents, appid) {
@@ -67,10 +125,9 @@ pub(crate) fn steam_library_for_appid(appid: u32) -> Option<PathBuf> {
         }
     }
 
-    // Fallback: check the default Steam library directly.
-    let compat = default_compat_path(&default_steam, appid);
-    if compat.exists() {
-        return Some(default_steam);
+    // Fallback: check this root directly.
+    if default_compat_path(root, appid).exists() {
+        return Some(root.to_path_buf());
     }
 
     None
@@ -320,5 +377,166 @@ mod tests {
         // A line with only one quoted token (e.g., `"apps"`) has no value.
         let result = extract_key_value(r#"        "apps""#);
         assert_eq!(result, None);
+    }
+
+    // -- Root probing: steam_libraries_for_appid_in (tempdir fixtures) --
+
+    mod root_probing {
+        use super::*;
+        use std::fs;
+        use std::os::unix::fs::symlink;
+
+        type TestResult = Result<(), Box<dyn std::error::Error>>;
+
+        /// Write a minimal single-library `libraryfolders.vdf` under
+        /// `root/steamapps/` mapping `appid` to `library_path`.
+        fn write_vdf(root: &Path, appid: u32, library_path: &Path) -> std::io::Result<()> {
+            let steamapps = root.join("steamapps");
+            fs::create_dir_all(&steamapps)?;
+            let path = library_path.display();
+            let vdf = format!(
+                r#"
+"libraryfolders"
+{{
+    "0"
+    {{
+        "path"    "{path}"
+        "apps"
+        {{
+            "{appid}"    "12345678"
+        }}
+    }}
+}}
+"#
+            );
+            fs::write(steamapps.join("libraryfolders.vdf"), vdf)
+        }
+
+        /// Create `root/steamapps/compatdata/<appid>/` so the compatdata
+        /// fallback matches `root` directly (no VDF involved).
+        fn write_compatdata(root: &Path, appid: u32) -> std::io::Result<()> {
+            fs::create_dir_all(
+                root.join("steamapps")
+                    .join("compatdata")
+                    .join(appid.to_string()),
+            )
+        }
+
+        #[test]
+        fn test_steam_libraries_for_appid_in_default_root_vdf_match_returns_library() -> TestResult
+        {
+            let home = tempfile::tempdir()?;
+            let default_root = home.path().join(".local").join("share").join("Steam");
+            fs::create_dir_all(&default_root)?;
+            let library = home.path().join("ExternalLibrary");
+            write_vdf(&default_root, MTGA_APP_ID, &library)?;
+
+            let result = steam_libraries_for_appid_in(home.path(), MTGA_APP_ID);
+            assert_eq!(result, vec![library]);
+            Ok(())
+        }
+
+        #[test]
+        fn test_steam_libraries_for_appid_in_flatpak_root_vdf_match_returns_library() -> TestResult
+        {
+            let home = tempfile::tempdir()?;
+            let flatpak_root = home
+                .path()
+                .join(".var")
+                .join("app")
+                .join("com.valvesoftware.Steam")
+                .join(".local")
+                .join("share")
+                .join("Steam");
+            fs::create_dir_all(&flatpak_root)?;
+            let library = home.path().join("FlatpakLibrary");
+            write_vdf(&flatpak_root, MTGA_APP_ID, &library)?;
+
+            let result = steam_libraries_for_appid_in(home.path(), MTGA_APP_ID);
+            assert_eq!(result, vec![library]);
+            Ok(())
+        }
+
+        #[test]
+        fn test_steam_libraries_for_appid_in_deb_symlink_root_compatdata_fallback_returns_root(
+        ) -> TestResult {
+            let home = tempfile::tempdir()?;
+            // .deb installs live at ~/.steam/debian-installation, referenced
+            // via the ~/.steam/steam symlink.
+            let real_root = home.path().join(".steam").join("debian-installation");
+            fs::create_dir_all(&real_root)?;
+            write_compatdata(&real_root, MTGA_APP_ID)?;
+            symlink(&real_root, home.path().join(".steam").join("steam"))?;
+
+            let result = steam_libraries_for_appid_in(home.path(), MTGA_APP_ID);
+            let expected_root = fs::canonicalize(&real_root)?;
+            assert_eq!(result, vec![expected_root]);
+            Ok(())
+        }
+
+        #[test]
+        fn test_steam_libraries_for_appid_in_snap_root_compatdata_fallback_returns_root(
+        ) -> TestResult {
+            let home = tempfile::tempdir()?;
+            let snap_root = home
+                .path()
+                .join("snap")
+                .join("steam")
+                .join("common")
+                .join(".local")
+                .join("share")
+                .join("Steam");
+            fs::create_dir_all(&snap_root)?;
+            write_compatdata(&snap_root, MTGA_APP_ID)?;
+
+            let result = steam_libraries_for_appid_in(home.path(), MTGA_APP_ID);
+            let expected_root = fs::canonicalize(&snap_root)?;
+            assert_eq!(result, vec![expected_root]);
+            Ok(())
+        }
+
+        #[test]
+        fn test_steam_libraries_for_appid_in_symlinked_roots_dedup_returns_single_library(
+        ) -> TestResult {
+            let home = tempfile::tempdir()?;
+            let real_root = home.path().join("RealSteamInstall");
+            fs::create_dir_all(&real_root)?;
+            write_compatdata(&real_root, MTGA_APP_ID)?;
+
+            let dot_steam = home.path().join(".steam");
+            fs::create_dir_all(&dot_steam)?;
+            symlink(&real_root, dot_steam.join("root"))?;
+            symlink(&real_root, dot_steam.join("steam"))?;
+
+            let result = steam_libraries_for_appid_in(home.path(), MTGA_APP_ID);
+            // `.steam/root` and `.steam/steam` both resolve to the same real
+            // directory: probing must collapse them into a single library,
+            // not report it twice.
+            assert_eq!(result.len(), 1);
+            Ok(())
+        }
+
+        #[test]
+        fn test_steam_libraries_for_appid_in_no_roots_exist_returns_empty() -> TestResult {
+            let home = tempfile::tempdir()?;
+            let result = steam_libraries_for_appid_in(home.path(), MTGA_APP_ID);
+            assert!(result.is_empty());
+            Ok(())
+        }
+
+        #[test]
+        fn test_steam_libraries_for_appid_in_root_without_match_excluded_from_results() -> TestResult
+        {
+            let home = tempfile::tempdir()?;
+            let default_root = home.path().join(".local").join("share").join("Steam");
+            fs::create_dir_all(&default_root)?;
+            // VDF exists but has no entry for our appid, and no compatdata
+            // fallback directory either.
+            write_vdf(&default_root, 730, &home.path().join("OtherLibrary"))?;
+
+            let result = steam_libraries_for_appid_in(home.path(), MTGA_APP_ID);
+            assert!(result.is_empty());
+            Ok(())
+        }
     }
 }
