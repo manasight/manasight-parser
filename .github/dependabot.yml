@@ -22,8 +22,14 @@ updates:
     schedule:
       interval: "weekly"
     groups:
+      # Same split as the cargo group above: patch and minor bumps land in
+      # one PR; a major bump falls outside `update-types` here, so it never
+      # matches this group and always gets its own PR.
       actions:
         patterns:
           - "*"
+        update-types:
+          - "minor"
+          - "patch"
     cooldown:
       default-days: 7
