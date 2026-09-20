@@ -44,10 +44,14 @@ jobs:
       github.event_name != 'workflow_run' ||
       github.event.workflow_run.conclusion == 'success'
 
-    # Needed for committing baseline updates back to main.
+    # Read-only: the baseline-update step below commits and opens its pull
+    # request using its own repository secret (git remote set-url + GH_TOKEN
+    # override), never the default GITHUB_TOKEN, so this job needs no write
+    # scope on it -- including on the pull_request trigger, which now runs
+    # third-party build.rs/proc-macro code from whatever a dependency bump
+    # pulls in and must not carry a token that can write repo contents.
     permissions:
-      contents: write
-      pull-requests: write
+      contents: read
 
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
