@@ -4,8 +4,26 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    groups:
+      # Patch and minor bumps land in one PR; a major bump falls outside
+      # `update-types` here, so it never matches this group and always gets
+      # its own PR.
+      patch-and-minor:
+        update-types:
+          - "minor"
+          - "patch"
+    cooldown:
+      # Applies to non-security updates only -- Dependabot never delays a
+      # security update regardless of this setting.
+      default-days: 7
 
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
+    groups:
+      actions:
+        patterns:
+          - "*"
+    cooldown:
+      default-days: 7
