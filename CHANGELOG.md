@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.7.3] - 2026-09-26
+
+Maintenance release: no parser or public-API changes. Published to pin a
+known-good baseline of the current dependency set before upcoming feature work.
+
+### Changed
+
+- **Dependencies.** `base64` 0.22 → 0.23 (#291). Lockfile refresh of
+  `flate2`, `log`, `regex`, `serde`, `serde_json`, `thiserror`, `tokio`, and
+  `wasm-bindgen-test` to their latest patch/minor releases (#287).
+- **CI / repo hygiene.** Dependabot updates are now grouped by type with a
+  cooldown, major GitHub Actions bumps are split into their own PR, and the
+  real-log smoke test also runs on `Cargo.lock` changes (#285, #289, #290).
+
 ## [0.7.2] - 2026-07-05
 
 ### Fixed
