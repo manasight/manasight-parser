@@ -55,6 +55,13 @@ jobs:
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Do not persist the read-only GITHUB_TOKEN: checkout stores it as an
+          # http.extraheader Authorization header, which git sends in place of
+          # the credential in the remote URL, so the baseline push below would
+          # authenticate as github-actions[bot] and get a 403. Nothing else in
+          # this job runs an authenticated git command.
+          persist-credentials: false
 
       - name: Install Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
@@ -241,12 +248,13 @@ jobs:
             exit 0
           fi
 
-          # Configure git identity for the commit (checkout@v4 does not set these).
+          # Configure git identity for the commit (actions/checkout does not set these).
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          # Override the remote URL so git push uses the PAT (not the
-          # GITHUB_TOKEN that actions/checkout@v4 configured).
+          # Put the PAT in the remote URL so git push authenticates with it.
+          # This only works because checkout runs with persist-credentials:
+          # false; a persisted extraheader would take precedence.
           git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
 
           BRANCH="auto/update-smoke-baseline-$(date +%Y%m%d-%H%M%S)"
