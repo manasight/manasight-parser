@@ -1,8 +1,8 @@
 //! MTG Arena log file parser.
 //!
 //! This library crate reads Arena's `Player.log`, parses raw log entries
-//! into typed game events, and distributes them via an async broadcast
-//! channel. It is designed to run on the caller's Tokio runtime — it does
+//! into typed game events, and delivers them in order to an async
+//! subscriber. It is designed to run on the caller's Tokio runtime — it does
 //! not initialize its own runtime or logger.
 //!
 //! # Quick start (async, desktop)
@@ -39,14 +39,15 @@
 //! # Architecture
 //!
 //! ```text
-//! Player.log → File Tailer → Entry Buffer → Router → Parsers → Event Bus
+//! Player.log → File Tailer → Entry Buffer → Router → Parsers → Subscriber
 //! ```
 //!
 //! - **`log`** module: file discovery, polling tailer, entry accumulation, timestamps
 //! - **`router`**: dispatches raw entries to the correct category parser
 //! - **`parsers`**: one sub-module per event category
 //! - **`events`**: public event type enums/structs (the parser's output contract)
-//! - **`event_bus`**: `tokio::broadcast` channel for fan-out to subscribers (requires `tailer` feature)
+//! - **`event_bus`**: `tokio::broadcast` channel for fan-out to subscribers, and the [`Subscriber`] type;
+//!   the stream's own `Subscriber` reads a bounded, lossless queue instead (requires `tailer` feature)
 //! - **`stream`**: public entry point ([`MtgaEventStream`]) (requires `tailer` feature)
 
 #[cfg(feature = "tailer")]

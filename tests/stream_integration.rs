@@ -7,6 +7,7 @@
 //! Gated on the `tailer` feature (requires tokio + file tailing stack).
 #![cfg(feature = "tailer")]
 
+use std::fmt::Write as _;
 use std::io::Write;
 
 use tempfile::NamedTempFile;
@@ -268,6 +269,195 @@ async fn test_stream_re_exports_accessible() -> TestResult {
         manasight_parser::MtgaEventStream,
         manasight_parser::Subscriber,
     ) = manasight_parser::MtgaEventStream::start(f.path()).await?;
+    stream.shutdown();
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Lossless delivery: a large catch-up read reaches the subscriber intact
+// ---------------------------------------------------------------------------
+
+/// Number of `GameStateMessage`s batched into each synthetic log entry.
+const GSMS_PER_ENTRY: u64 = 4;
+
+/// Per-event receive timeout for the lossless-delivery tests.
+const RECV_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Builds a synthetic log of `entries` entries, each batching four
+/// `GameStateMessage`s with consecutive `gameStateId`s starting at
+/// `first_id`. A trailing terminator entry completes the last GSM entry and
+/// yields no event of its own.
+fn gsm_log(entries: u64, first_id: u64) -> String {
+    let mut out = String::new();
+    for entry in 0..entries {
+        let messages: Vec<serde_json::Value> = (0..GSMS_PER_ENTRY)
+            .map(|i| {
+                let id = first_id + entry * GSMS_PER_ENTRY + i;
+                serde_json::json!({
+                    "type": "GREMessageType_GameStateMessage",
+                    "gameStateId": id,
+                    "gameStateMessage": {
+                        "gameStateId": id,
+                        "gameInfo": { "stage": "GameStage_Play" },
+                        "gameObjects": [],
+                        "zones": []
+                    }
+                })
+            })
+            .collect();
+        let payload = serde_json::json!({
+            "greToClientEvent": { "greToClientMessages": messages }
+        });
+        let _ = writeln!(
+            out,
+            "[UnityCrossThreadLogger]2/25/2026 12:00:00 PM\n{payload}"
+        );
+    }
+    out.push_str("[UnityCrossThreadLogger]2/25/2026 12:00:01 PM\nfiller\n");
+    out
+}
+
+/// Returns the `game_state_id` of a `GameState` event, if any.
+fn game_state_id(event: &GameEvent) -> Option<u64> {
+    match event {
+        GameEvent::GameState(e) => e.payload()["game_state_id"].as_u64(),
+        _ => None,
+    }
+}
+
+/// Builds the 400-entry × 4-GSM fixture and its `parse_whole_log` oracle,
+/// asserting the oracle holds exactly 1600 events.
+fn lossless_fixture() -> Result<(NamedTempFile, Vec<GameEvent>), std::io::Error> {
+    let content = gsm_log(400, 1);
+    let expected = manasight_parser::parse_whole_log(&content);
+    assert_eq!(expected.len(), 1600, "fixture must yield 1600 events");
+    Ok((temp_log(&content)?, expected))
+}
+
+/// Receives up to `count` events, stopping at the first timeout or `None`.
+async fn recv_up_to(sub: &mut manasight_parser::Subscriber, count: usize) -> Vec<GameEvent> {
+    let mut received = Vec::with_capacity(count);
+    while received.len() < count {
+        match tokio::time::timeout(RECV_TIMEOUT, sub.recv()).await {
+            Ok(Some(event)) => received.push(event),
+            Ok(None) | Err(_) => break,
+        }
+    }
+    received
+}
+
+/// Receives events until `None`, failing if the stream does not end in time.
+async fn recv_to_end(
+    sub: &mut manasight_parser::Subscriber,
+) -> Result<Vec<GameEvent>, tokio::time::error::Elapsed> {
+    tokio::time::timeout(RECV_TIMEOUT, async {
+        let mut received = Vec::new();
+        while let Some(event) = sub.recv().await {
+            received.push(event);
+        }
+        received
+    })
+    .await
+}
+
+/// Asserts the subscriber received exactly the oracle's events, in order.
+fn assert_all_delivered(received: &[GameEvent], expected: &[GameEvent]) {
+    let missed = expected.len().saturating_sub(received.len());
+    assert_eq!(
+        received.len(),
+        expected.len(),
+        "missed {missed} event(s): received {} of {}",
+        received.len(),
+        expected.len(),
+    );
+    assert!(
+        received == expected,
+        "received all {} events, but not in order or not identical",
+        expected.len()
+    );
+}
+
+/// Shared body of the `start` lossless-delivery tests.
+async fn assert_start_delivers_every_event() -> TestResult {
+    let (f, expected) = lossless_fixture()?;
+    let (stream, mut sub) = MtgaEventStream::start(f.path()).await?;
+
+    let received = recv_up_to(&mut sub, expected.len()).await;
+    assert_all_delivered(&received, &expected);
+
+    stream.shutdown();
+    let next = tokio::time::timeout(RECV_TIMEOUT, sub.recv()).await?;
+    assert!(next.is_none(), "expected None after shutdown, got {next:?}");
+    Ok(())
+}
+
+/// Shared body of the `start_once` lossless-delivery tests.
+async fn assert_start_once_delivers_every_event() -> TestResult {
+    let (f, expected) = lossless_fixture()?;
+    let (stream, mut sub) = MtgaEventStream::start_once(f.path()).await?;
+    // Dropping the handle without `shutdown()` must not lose anything.
+    drop(stream);
+    // Let the pipeline fill the subscriber queue, so the router waits on it
+    // with the handle already gone.
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+    let received = recv_to_end(&mut sub).await?;
+    assert_all_delivered(&received, &expected);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_stream_start_delivers_every_event_current_thread() -> TestResult {
+    assert_start_delivers_every_event().await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_stream_start_delivers_every_event_multi_thread() -> TestResult {
+    assert_start_delivers_every_event().await
+}
+
+#[tokio::test]
+async fn test_stream_start_once_delivers_every_event_current_thread() -> TestResult {
+    assert_start_once_delivers_every_event().await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_stream_start_once_delivers_every_event_multi_thread() -> TestResult {
+    assert_start_once_delivers_every_event().await
+}
+
+#[tokio::test]
+async fn test_stream_rotation_event_follows_queued_old_file_events() -> TestResult {
+    // 200 entries (800 events) fit in the tailer-to-router channel, so the
+    // whole old file is read and queued while nobody reads the subscriber.
+    let f = temp_log(&gsm_log(200, 1))?;
+    let path = f.path().to_path_buf();
+    let (stream, mut sub) = MtgaEventStream::start(&path).await?;
+
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    // Rotate: replace the file with a smaller one while old events are queued.
+    std::fs::write(&path, gsm_log(2, 9001))?;
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+    let received = recv_up_to(&mut sub, 809).await;
+    assert_eq!(received.len(), 809, "expected 800 old + 1 rotation + 8 new");
+
+    let rotation_index = received
+        .iter()
+        .position(|e| matches!(e, GameEvent::LogFileRotated(_)));
+    assert_eq!(
+        rotation_index,
+        Some(800),
+        "LogFileRotated must follow every old-file event"
+    );
+    let ids: Vec<Option<u64>> = received.iter().map(game_state_id).collect();
+    let expected_ids: Vec<Option<u64>> = (1..=800)
+        .map(Some)
+        .chain(std::iter::once(None))
+        .chain((9001..=9008).map(Some))
+        .collect();
+    assert_eq!(ids, expected_ids);
+
     stream.shutdown();
     Ok(())
 }

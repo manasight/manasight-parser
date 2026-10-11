@@ -13,6 +13,11 @@
 //! number of skipped messages and continues from the next available event.
 //! This ensures a slow consumer never blocks the sender or other subscribers.
 //!
+//! The [`Subscriber`] returned by
+//! [`MtgaEventStream`](crate::stream::MtgaEventStream) is different: it reads
+//! a bounded single-consumer queue that the stream's pipeline waits on, so it
+//! never lags and never skips events.
+//!
 //! # Example
 //!
 //! ```rust
@@ -98,7 +103,9 @@ impl EventBus {
     /// events that were sent before it subscribed.
     pub fn subscribe(&self) -> Subscriber {
         let receiver = self.sender.subscribe();
-        Subscriber { receiver }
+        Subscriber {
+            inner: SubscriberInner::Broadcast(receiver),
+        }
     }
 
     /// Returns the current number of active subscribers (receivers).
@@ -119,38 +126,61 @@ impl std::fmt::Debug for EventBus {
 // Subscriber
 // ---------------------------------------------------------------------------
 
-/// A subscriber that receives [`GameEvent`] values from an [`EventBus`].
+/// A subscriber that receives [`GameEvent`] values from an [`EventBus`] or
+/// from an [`MtgaEventStream`](crate::stream::MtgaEventStream).
 ///
-/// Wraps a `tokio::sync::broadcast::Receiver`. When the subscriber falls
-/// behind (the sender has overwritten messages it hasn't read), the next
-/// call to [`recv`](Self::recv) logs a warning and skips ahead to the
-/// oldest available message.
+/// From [`EventBus::subscribe`] it wraps a `tokio::sync::broadcast::Receiver`.
+/// When that subscriber falls behind (the sender has overwritten messages it
+/// hasn't read), the next call to [`recv`](Self::recv) logs a warning and
+/// skips ahead to the oldest available message.
+///
+/// From [`MtgaEventStream`](crate::stream::MtgaEventStream) it wraps a
+/// bounded single-consumer queue that the stream's pipeline waits on, so
+/// every event is delivered in order and none is skipped.
 pub struct Subscriber {
-    /// The broadcast receiver.
-    receiver: tokio::sync::broadcast::Receiver<GameEvent>,
+    /// The channel this subscriber reads from.
+    inner: SubscriberInner,
+}
+
+/// The channel behind a [`Subscriber`].
+enum SubscriberInner {
+    /// A receiver on an [`EventBus`] broadcast channel (skips on lag).
+    Broadcast(tokio::sync::broadcast::Receiver<GameEvent>),
+    /// The stream's bounded single-consumer queue (never skips).
+    Queue(tokio::sync::mpsc::Receiver<GameEvent>),
 }
 
 impl Subscriber {
+    /// Creates a subscriber that reads from a bounded single-consumer queue.
+    pub(crate) fn from_queue(receiver: tokio::sync::mpsc::Receiver<GameEvent>) -> Self {
+        Self {
+            inner: SubscriberInner::Queue(receiver),
+        }
+    }
+
     /// Receives the next [`GameEvent`], waiting asynchronously.
     ///
-    /// If the subscriber has fallen behind, the lagged messages are
-    /// skipped, a warning is logged, and the next available event is
-    /// returned.
+    /// For an [`EventBus`] subscriber that has fallen behind, the lagged
+    /// messages are skipped, a warning is logged, and the next available
+    /// event is returned. A stream subscriber never lags.
     ///
-    /// Returns `None` if the sender (event bus) has been dropped and
-    /// there are no more buffered messages.
+    /// Returns `None` once the sender (the event bus, or the stream's
+    /// pipeline) has been dropped and there are no more buffered messages.
     pub async fn recv(&mut self) -> Option<GameEvent> {
-        loop {
-            match self.receiver.recv().await {
-                Ok(event) => return Some(event),
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                    ::log::warn!("event bus subscriber lagged: {n} message(s) skipped");
-                    // Loop continues to receive the next available event.
+        match &mut self.inner {
+            SubscriberInner::Queue(receiver) => receiver.recv().await,
+            SubscriberInner::Broadcast(receiver) => loop {
+                match receiver.recv().await {
+                    Ok(event) => return Some(event),
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        ::log::warn!("event bus subscriber lagged: {n} message(s) skipped");
+                        // Loop continues to receive the next available event.
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        return None;
+                    }
                 }
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                    return None;
-                }
-            }
+            },
         }
     }
 }
@@ -501,6 +531,42 @@ mod tests {
         let received = tokio::time::timeout(std::time::Duration::from_secs(2), sub.recv()).await?;
         assert!(received.is_some());
         Ok(())
+    }
+
+    // -- queue subscriber ------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_from_queue_recv_delivers_every_event_in_order() -> TestResult {
+        let (tx, rx) = tokio::sync::mpsc::channel(2);
+        let mut sub = Subscriber::from_queue(rx);
+
+        let events: Vec<GameEvent> = (0..10)
+            .map(|i| make_game_state_event(&format!("event-{i}")))
+            .collect();
+        let to_send = events.clone();
+        // The sender waits for capacity instead of overwriting.
+        let producer = tokio::spawn(async move {
+            for event in to_send {
+                if tx.send(event).await.is_err() {
+                    break;
+                }
+            }
+        });
+
+        for expected in &events {
+            assert_eq!(sub.recv().await.as_ref(), Some(expected));
+        }
+        producer.await?;
+        // The sender has been dropped and the queue is empty.
+        assert_eq!(sub.recv().await, None);
+        Ok(())
+    }
+
+    #[test]
+    fn test_from_queue_debug_format() {
+        let (_tx, rx) = tokio::sync::mpsc::channel(1);
+        let sub = Subscriber::from_queue(rx);
+        assert!(format!("{sub:?}").contains("Subscriber"));
     }
 
     #[test]

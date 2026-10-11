@@ -1,9 +1,9 @@
 //! Public entry point for streaming typed events from an MTG Arena log file.
 //!
-//! [`MtgaEventStream`] wires together the file tailer, router, and event bus
-//! into a single `async fn` that returns a [`Subscriber`] of typed
-//! [`GameEvent`] values. It runs entirely on the caller's Tokio runtime --
-//! no internal runtime is created.
+//! [`MtgaEventStream`] wires together the file tailer and router into a
+//! single `async fn` that returns a [`Subscriber`] of typed [`GameEvent`]
+//! values. It runs entirely on the caller's Tokio runtime -- no internal
+//! runtime is created.
 //!
 //! # Example
 //!
@@ -22,18 +22,49 @@
 //! # }
 //! ```
 //!
+//! # Delivery and backpressure
+//!
+//! The [`Subscriber`] reads from a bounded queue that the router waits on.
+//! When the subscriber falls behind, the router pauses (and with it the
+//! tailer) instead of dropping events, so every event is delivered in log
+//! order, including during the catch-up read of an existing log file. A
+//! subscriber that stops reading pauses tailing; memory stays bounded.
+//! [`GameEvent::LogFileRotated`] travels through the same ordered path, after
+//! every event from the old file.
+//!
 //! # Shutdown
 //!
-//! Call [`MtgaEventStream::shutdown`] to stop the background tailing task.
-//! The [`Subscriber`] will receive `None` once all buffered events have been
-//! delivered.
+//! Call [`MtgaEventStream::shutdown`] to stop the pipeline. Shutdown stops
+//! rather than drains: it never waits on the subscriber. A subscriber that
+//! keeps reading receives a gap-free, in-order prefix of the remaining
+//! events and then `None`; the prefix ends where the router found the queue
+//! full. A subscriber that is never read does not keep the pipeline alive.
+//!
+//! Dropping the [`MtgaEventStream`] without calling `shutdown` stops tailing
+//! but loses nothing already read: the subscriber receives every remaining
+//! event, then `None`.
 
 use std::path::Path;
 
-use crate::event_bus::{EventBus, Subscriber};
+use crate::event_bus::Subscriber;
 use crate::events::{GameEvent, LogFileRotatedEvent};
+use crate::log::entry::LogEntry;
 use crate::log::tailer::{FileTailer, TailerError};
 use crate::router::Router;
+
+/// Capacity of the channel from the tailer to the router, in items.
+const PIPELINE_CAPACITY: usize = 256;
+
+/// Capacity of the queue from the router to the [`Subscriber`], in events.
+const EVENT_QUEUE_CAPACITY: usize = 256;
+
+/// An item on the tailer-to-router channel, which keeps file order.
+enum PipelineItem {
+    /// A complete log entry for the router to parse.
+    Entry(LogEntry),
+    /// An event produced by the tailer itself (log rotation), passed through.
+    Event(GameEvent),
+}
 
 // ---------------------------------------------------------------------------
 // Error type
@@ -54,14 +85,17 @@ pub enum StreamError {
 /// Handle for a running MTG Arena event stream.
 ///
 /// Created by [`MtgaEventStream::start`], which opens the log file, wires
-/// together the tailer, router, and event bus, and spawns a background task
-/// on the caller's Tokio runtime. The returned [`Subscriber`] receives
-/// typed [`GameEvent`] values as they are parsed.
+/// together the tailer and router, and spawns a background task on the
+/// caller's Tokio runtime. The returned [`Subscriber`] receives typed
+/// [`GameEvent`] values as they are parsed, without loss (see the
+/// [module documentation](self)).
 ///
 /// Call [`shutdown`](Self::shutdown) to stop the background task and clean
-/// up resources. Dropping the `MtgaEventStream` without calling `shutdown`
-/// is safe -- the background task will stop when the `EventBus` is dropped
-/// and the entry channel closes.
+/// up resources; it never waits on the subscriber. Dropping the
+/// `MtgaEventStream` without calling `shutdown` is safe -- tailing stops,
+/// the subscriber still receives every event already read, and the
+/// background task ends once those are delivered or the subscriber is
+/// dropped.
 ///
 /// # Runtime requirement
 ///
@@ -83,10 +117,10 @@ impl MtgaEventStream {
     ///
     /// 1. Polls the file tailer for new log entries
     /// 2. Routes each entry through the parser dispatch chain
-    /// 3. Sends recognized events to the event bus
+    /// 3. Sends recognized events to the subscriber's queue, waiting for
+    ///    space when the subscriber falls behind
     ///
-    /// Returns a tuple of `(MtgaEventStream, Subscriber)`. The
-    /// `Subscriber` receives cloned [`GameEvent`] values. Call
+    /// Returns a tuple of `(MtgaEventStream, Subscriber)`. Call
     /// [`shutdown`](Self::shutdown) on the `MtgaEventStream` to stop
     /// the background task.
     ///
@@ -95,19 +129,17 @@ impl MtgaEventStream {
     /// Returns [`StreamError::Tailer`] if the log file cannot be opened.
     pub async fn start(log_path: &Path) -> Result<(Self, Subscriber), StreamError> {
         let tailer = FileTailer::open_from_start(log_path).await?;
-        let bus = EventBus::with_default_capacity();
-        let subscriber = bus.subscribe();
         let router = Router::new();
         let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
-        let (entry_tx, entry_rx) = tokio::sync::mpsc::channel(256);
+        let (item_tx, item_rx) = tokio::sync::mpsc::channel(PIPELINE_CAPACITY);
+        let (event_tx, event_rx) = tokio::sync::mpsc::channel(EVENT_QUEUE_CAPACITY);
 
-        // Spawn the tailer task (with rotation → event bus).
-        let rotation_bus = bus.clone();
-        let tailer_handle = tokio::spawn(run_tailer(tailer, entry_tx, rotation_bus, shutdown_rx));
+        // Spawn the tailer task (rotation travels in-band with the entries).
+        let tailer_handle = tokio::spawn(run_tailer(tailer, item_tx, shutdown_rx.clone()));
 
         // Spawn the routing task.
-        let router_handle = tokio::spawn(run_router(entry_rx, router, bus));
+        let router_handle = tokio::spawn(run_router(item_rx, router, event_tx, shutdown_rx));
 
         // Spawn a supervisor task that joins both.
         let pipeline_handle = tokio::spawn(async move {
@@ -125,41 +157,44 @@ impl MtgaEventStream {
             _pipeline_handle: pipeline_handle,
         };
 
-        Ok((stream, subscriber))
+        Ok((stream, Subscriber::from_queue(event_rx)))
     }
 
     /// Starts a one-shot event stream that reads an entire log file and exits.
     ///
     /// Opens the file via [`FileTailer::open_from_start`], reads all
     /// entries, routes them through the parser dispatch chain, and sends
-    /// recognized events to the event bus. The pipeline stops
-    /// automatically at EOF rather than polling indefinitely.
+    /// recognized events to the subscriber's queue, waiting for space when
+    /// the subscriber falls behind. The pipeline stops automatically at EOF
+    /// rather than polling indefinitely.
     ///
     /// This is useful for batch processing complete log files (smoke tests,
     /// replay analysis, importing `Player-prev.log`).
     ///
     /// Returns a tuple of `(MtgaEventStream, Subscriber)`. The `Subscriber`
     /// will receive `None` once all events have been delivered and the
-    /// pipeline finishes. Calling [`shutdown`](Self::shutdown) on a
-    /// one-shot stream is a no-op -- the pipeline exits at EOF on its own.
+    /// pipeline finishes. The pipeline exits at EOF on its own, so the
+    /// `MtgaEventStream` may be dropped right away without losing events.
+    /// Calling [`shutdown`](Self::shutdown) stops a pipeline that is still
+    /// waiting on the subscriber; once everything has been delivered it is
+    /// a no-op.
     ///
     /// # Errors
     ///
     /// Returns [`StreamError::Tailer`] if the log file cannot be opened.
     pub async fn start_once(log_path: &Path) -> Result<(Self, Subscriber), StreamError> {
         let tailer = FileTailer::open_from_start(log_path).await?;
-        let bus = EventBus::with_default_capacity();
-        let subscriber = bus.subscribe();
         let router = Router::new();
-        let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
+        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
-        let (entry_tx, entry_rx) = tokio::sync::mpsc::channel(256);
+        let (item_tx, item_rx) = tokio::sync::mpsc::channel(PIPELINE_CAPACITY);
+        let (event_tx, event_rx) = tokio::sync::mpsc::channel(EVENT_QUEUE_CAPACITY);
 
         // Spawn the tailer task — uses run_once, exits at EOF.
-        let tailer_handle = tokio::spawn(run_tailer_once(tailer, entry_tx));
+        let tailer_handle = tokio::spawn(run_tailer_once(tailer, item_tx));
 
         // Spawn the routing task.
-        let router_handle = tokio::spawn(run_router(entry_rx, router, bus));
+        let router_handle = tokio::spawn(run_router(item_rx, router, event_tx, shutdown_rx));
 
         // Spawn a supervisor task that joins both.
         let pipeline_handle = tokio::spawn(async move {
@@ -176,14 +211,18 @@ impl MtgaEventStream {
             _pipeline_handle: pipeline_handle,
         };
 
-        Ok((stream, subscriber))
+        Ok((stream, Subscriber::from_queue(event_rx)))
     }
 
     /// Signals the background pipeline to stop.
     ///
-    /// The tailer flushes any remaining buffered entries before exiting.
-    /// The [`Subscriber`] will receive `None` once all buffered events
-    /// have been delivered and the event bus is dropped.
+    /// Shutdown stops rather than drains, and never waits on the
+    /// subscriber. The tailer stops at its next poll and flushes any
+    /// remaining buffered entry; the router keeps delivering while the
+    /// subscriber's queue has space and stops as soon as it finds the queue
+    /// full. The [`Subscriber`] therefore receives a gap-free, in-order
+    /// prefix of the remaining events, then `None`. A subscriber that is
+    /// never read does not keep the pipeline alive.
     pub fn shutdown(&self) {
         let _ = self.shutdown_tx.send(true);
     }
@@ -204,13 +243,13 @@ impl std::fmt::Debug for MtgaEventStream {
 /// Runs the file tailer with rotation detection.
 ///
 /// Polls the tailer at its configured interval, forwarding log entries to
-/// the routing channel. When file rotation is detected, emits a
-/// [`GameEvent::LogFileRotated`] event directly to the event bus so that
-/// downstream consumers can reset their state.
+/// the routing channel. When file rotation is detected, sends a
+/// [`GameEvent::LogFileRotated`] event through the same channel, after every
+/// entry from the old file and before the new file's entries, so that
+/// downstream consumers can reset their state at the right point.
 async fn run_tailer(
     mut tailer: FileTailer,
-    entry_tx: tokio::sync::mpsc::Sender<crate::log::entry::LogEntry>,
-    bus: EventBus,
+    item_tx: tokio::sync::mpsc::Sender<PipelineItem>,
     mut shutdown: tokio::sync::watch::Receiver<bool>,
 ) {
     let mut interval =
@@ -231,11 +270,14 @@ async fn run_tailer(
                                     rotation.previous_file_size(),
                                 ),
                             );
-                            bus.send(event);
+                            if item_tx.send(PipelineItem::Event(event)).await.is_err() {
+                                ::log::info!("entry channel closed, stopping tailer");
+                                return;
+                            }
                         }
 
                         for entry in entries {
-                            if entry_tx.send(entry).await.is_err() {
+                            if item_tx.send(PipelineItem::Entry(entry)).await.is_err() {
                                 ::log::info!("entry channel closed, stopping tailer");
                                 return;
                             }
@@ -251,7 +293,7 @@ async fn run_tailer(
                 ::log::info!("shutdown signal received, stopping tailer");
                 // Flush any remaining partial entries.
                 for entry in tailer.flush() {
-                    let _ = entry_tx.send(entry).await;
+                    let _ = item_tx.send(PipelineItem::Entry(entry)).await;
                 }
                 return;
             }
@@ -264,14 +306,11 @@ async fn run_tailer(
 /// Buffers all entries from [`FileTailer::run_once`] before streaming them
 /// through the channel. This trades memory for simplicity — suitable for
 /// batch processing, not for memory-constrained streaming of very large files.
-async fn run_tailer_once(
-    mut tailer: FileTailer,
-    entry_tx: tokio::sync::mpsc::Sender<crate::log::entry::LogEntry>,
-) {
+async fn run_tailer_once(mut tailer: FileTailer, item_tx: tokio::sync::mpsc::Sender<PipelineItem>) {
     match tailer.run_once().await {
         Ok(entries) => {
             for entry in entries {
-                if entry_tx.send(entry).await.is_err() {
+                if item_tx.send(PipelineItem::Entry(entry)).await.is_err() {
                     ::log::info!("entry channel closed during one-shot read");
                     return;
                 }
@@ -281,18 +320,31 @@ async fn run_tailer_once(
             ::log::error!("tailer error during one-shot read: {e}");
         }
     }
-    // Dropping entry_tx signals the router that no more entries are coming.
+    // Dropping item_tx signals the router that no more entries are coming.
 }
 
-/// Receives log entries, routes them through parsers, and sends events to the bus.
+/// Receives pipeline items, routes entries through parsers, and delivers
+/// every event to the subscriber's queue in order.
+///
+/// Waits for queue space when the subscriber falls behind (backpressure).
+/// Stops when the subscriber is dropped, when the tailer closes the channel,
+/// or when [`MtgaEventStream::shutdown`] is called while the queue is full.
 async fn run_router(
-    mut entry_rx: tokio::sync::mpsc::Receiver<crate::log::entry::LogEntry>,
+    mut item_rx: tokio::sync::mpsc::Receiver<PipelineItem>,
     router: Router,
-    bus: EventBus,
+    event_tx: tokio::sync::mpsc::Sender<GameEvent>,
+    mut shutdown: tokio::sync::watch::Receiver<bool>,
 ) {
-    while let Some(entry) = entry_rx.recv().await {
-        for event in router.route(&entry) {
-            bus.send(event);
+    let mut watching_shutdown = true;
+    'items: while let Some(item) = item_rx.recv().await {
+        let events = match item {
+            PipelineItem::Entry(entry) => router.route(&entry),
+            PipelineItem::Event(event) => vec![event],
+        };
+        for event in events {
+            if !deliver(&event_tx, event, &mut shutdown, &mut watching_shutdown).await {
+                break 'items;
+            }
         }
     }
 
@@ -305,6 +357,43 @@ async fn run_router(
     );
 }
 
+/// Sends one event to the subscriber's queue, waiting for space.
+///
+/// Returns `false` when the router should stop: the subscriber was dropped,
+/// or [`MtgaEventStream::shutdown`] was called while the queue was full. A
+/// closed shutdown channel (the handle was dropped without `shutdown()`) is
+/// not a stop request: the router stops watching it and keeps delivering.
+async fn deliver(
+    event_tx: &tokio::sync::mpsc::Sender<GameEvent>,
+    event: GameEvent,
+    shutdown: &mut tokio::sync::watch::Receiver<bool>,
+    watching_shutdown: &mut bool,
+) -> bool {
+    loop {
+        tokio::select! {
+            // Prefer delivery: shutdown only abandons a send that is blocked.
+            biased;
+            permit = event_tx.reserve() => {
+                return if let Ok(permit) = permit {
+                    permit.send(event);
+                    true
+                } else {
+                    ::log::info!("subscriber dropped, stopping router");
+                    false
+                };
+            }
+            changed = shutdown.changed(), if *watching_shutdown => {
+                if changed.is_ok() {
+                    ::log::info!("shutdown with a full subscriber queue, stopping router");
+                    return false;
+                }
+                // The handle was dropped without `shutdown()`: keep delivering.
+                *watching_shutdown = false;
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -313,6 +402,7 @@ async fn run_router(
 mod tests {
     use super::*;
     use crate::events::GameEvent;
+    use std::fmt::Write as _;
     use std::io::Write;
     use tempfile::NamedTempFile;
 
@@ -534,6 +624,97 @@ mod tests {
         stream.shutdown();
         stream.shutdown(); // Should not panic.
         Ok(())
+    }
+
+    // -- shutdown under backpressure -------------------------------------------
+
+    /// Builds a synthetic log of `entries` entries, each batching four
+    /// `GameStateMessage`s with consecutive `gameStateId`s from 1, plus a
+    /// terminator entry that yields no event.
+    fn gsm_log(entries: u64) -> String {
+        let mut out = String::new();
+        for entry in 0..entries {
+            let messages: Vec<serde_json::Value> = (1..=4)
+                .map(|i| {
+                    let id = entry * 4 + i;
+                    serde_json::json!({
+                        "type": "GREMessageType_GameStateMessage",
+                        "gameStateId": id,
+                        "gameStateMessage": {
+                            "gameStateId": id,
+                            "gameInfo": { "stage": "GameStage_Play" },
+                            "gameObjects": [],
+                            "zones": []
+                        }
+                    })
+                })
+                .collect();
+            let payload = serde_json::json!({
+                "greToClientEvent": { "greToClientMessages": messages }
+            });
+            let _ = writeln!(
+                out,
+                "[UnityCrossThreadLogger]2/25/2026 12:00:00 PM\n{payload}"
+            );
+        }
+        out.push_str("[UnityCrossThreadLogger]2/25/2026 12:00:01 PM\nfiller\n");
+        out
+    }
+
+    /// Calls `shutdown()` on a stream whose subscriber is held but never
+    /// read, then checks that the pipeline ends and that the subscriber
+    /// drains a gap-free prefix of the 1600 events, then `None`.
+    async fn assert_shutdown_stops_unread_pipeline(
+        stream: MtgaEventStream,
+        mut sub: Subscriber,
+    ) -> TestResult {
+        // Six 50 ms polls: the router is parked on the full subscriber queue.
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+        stream.shutdown();
+        let MtgaEventStream {
+            _pipeline_handle: pipeline_handle,
+            ..
+        } = stream;
+        tokio::time::timeout(std::time::Duration::from_secs(5), pipeline_handle).await??;
+
+        let drained = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let mut events = Vec::new();
+            while let Some(event) = sub.recv().await {
+                events.push(event);
+            }
+            events
+        })
+        .await?;
+        assert!(
+            !drained.is_empty() && drained.len() < 1600,
+            "expected a partial prefix, got {} event(s)",
+            drained.len()
+        );
+        let ids: Vec<Option<u64>> = drained
+            .iter()
+            .map(|e| match e {
+                GameEvent::GameState(gs) => gs.payload()["game_state_id"].as_u64(),
+                _ => None,
+            })
+            .collect();
+        let expected: Vec<Option<u64>> = (1..=drained.len() as u64).map(Some).collect();
+        assert_eq!(ids, expected, "drained events must be a gap-free prefix");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_shutdown_stops_start_pipeline_with_unread_subscriber() -> TestResult {
+        let f = temp_log(&gsm_log(400))?;
+        let (stream, sub) = MtgaEventStream::start(f.path()).await?;
+        assert_shutdown_stops_unread_pipeline(stream, sub).await
+    }
+
+    #[tokio::test]
+    async fn test_shutdown_stops_start_once_pipeline_with_unread_subscriber() -> TestResult {
+        let f = temp_log(&gsm_log(400))?;
+        let (stream, sub) = MtgaEventStream::start_once(f.path()).await?;
+        assert_shutdown_stops_unread_pipeline(stream, sub).await
     }
 
     // -- debug ----------------------------------------------------------------

@@ -24,20 +24,20 @@ Requires Rust 1.93.0 or later.
 ## Architecture
 
 ```text
-Player.log → File Tailer → Entry Buffer → Router → Parsers → Event Bus
+Player.log → File Tailer → Entry Buffer → Router → Parsers → Subscriber
 ```
 
 - **`log`** — file discovery, polling tailer, entry accumulation, timestamps
 - **`router`** — dispatches raw entries to the correct category parser
 - **`parsers`** — one sub-module per event category
 - **`events`** — public event type enums/structs (the parser's output contract)
-- **`event_bus`** — `tokio::broadcast` channel for fan-out to subscribers
+- **`event_bus`** — `tokio::broadcast` channel for fan-out to subscribers, and the `Subscriber` type; the stream's own `Subscriber` reads a bounded, lossless queue instead
 - **`stream`** — public entry point (`MtgaEventStream`)
 - **`sanitize`** — privacy scrubber for redacting PII from raw log text
 - **`util`** — pipeline utilities (gzip compression, content hashing)
 - **`wasm`** — `wasm-bindgen` export of the synchronous parser (enabled by the `wasm` feature)
 
-The async pipeline above powers the live desktop overlay. The synchronous [`parse_whole_log`](#whole-log-parsing-synchronous) entry point — and its `wasm` export — reuse the same **Router → Parsers** core directly, bypassing the tailer and event bus (no `tokio`, no filesystem).
+The async pipeline above powers the live desktop overlay. The synchronous [`parse_whole_log`](#whole-log-parsing-synchronous) entry point — and its `wasm` export — reuse the same **Router → Parsers** core directly, bypassing the tailer and subscriber queue (no `tokio`, no filesystem).
 
 ## Usage
 
@@ -45,7 +45,7 @@ manasight-parser has two entry points: a **streaming** tailer for live logs, and
 
 ### Streaming (live `Player.log`)
 
-`MtgaEventStream` (the default `tailer` feature) tails a live log and fans out events to subscribers as they arrive:
+`MtgaEventStream` (the default `tailer` feature) tails a live log and delivers every event, in log order, to its subscriber as it arrives. When the subscriber falls behind, the pipeline waits for it instead of dropping events:
 
 ```rust
 use std::path::Path;
