@@ -18,6 +18,7 @@ use super::turn_info::extract_turn_info;
 /// {
 ///   "type": "game_state_message",
 ///   "game_state_type": "GameStateType_Full",
+///   "update": "GameStateUpdate_Send",
 ///   "msg_id": 5,
 ///   "game_state_id": 42,
 ///   "prev_game_state_id": 41,
@@ -40,9 +41,16 @@ use super::turn_info::extract_turn_info;
 ///
 /// Under the `lean` feature, the payload omits `annotations`,
 /// `game_objects`, `timers`, `zones`, and `persistent_annotations` to reduce
-/// WASM memory pressure. Only `type`, `game_state_type`, `msg_id`,
+/// WASM memory pressure. Only `type`, `game_state_type`, `update`, `msg_id`,
 /// `game_state_id`, `prev_game_state_id`, `game_info`, `turn_info`, and
 /// `diff_deleted_instance_ids` are retained.
+///
+/// `update` is the inner `gameStateMessage.update` value
+/// (`GameStateUpdate_Send`, `GameStateUpdate_SendAndRecord`,
+/// `GameStateUpdate_SendHiFi`, `GameStateUpdate_Undo`, ...). A
+/// `GameStateUpdate_Undo` state is a rollback: a Full state that restores
+/// the state named by `prev_game_state_id`. The key is always present and
+/// serializes to JSON `null` when the source omits it.
 ///
 /// `prev_game_state_id` is the `prevGameStateId` field present on every Diff
 /// GSM wire payload. Full GSMs legitimately omit it; the extracted value is
@@ -88,6 +96,14 @@ pub(super) fn build_game_state_message_payload(gre_msg: &serde_json::Value) -> s
     // always present in the payload regardless of source presence.
     let game_state_type = gsm
         .and_then(|g| g.get("type"))
+        .and_then(serde_json::Value::as_str)
+        .map(String::from);
+
+    // Inner gameStateMessage.update is the GameStateUpdate_* kind (e.g.
+    // GameStateUpdate_Send, GameStateUpdate_Undo for a rollback to the
+    // `prevGameStateId` state). Always emit; None serializes to JSON null.
+    let update = gsm
+        .and_then(|g| g.get("update"))
         .and_then(serde_json::Value::as_str)
         .map(String::from);
 
@@ -138,6 +154,7 @@ pub(super) fn build_game_state_message_payload(gre_msg: &serde_json::Value) -> s
         serde_json::json!({
             "type": payload_type,
             "game_state_type": game_state_type,
+            "update": update,
             "msg_id": msg_id,
             "game_state_id": game_state_id,
             "prev_game_state_id": prev_game_state_id,
@@ -151,6 +168,7 @@ pub(super) fn build_game_state_message_payload(gre_msg: &serde_json::Value) -> s
         serde_json::json!({
             "type": payload_type,
             "game_state_type": game_state_type,
+            "update": update,
             "msg_id": msg_id,
             "game_state_id": game_state_id,
             "prev_game_state_id": prev_game_state_id,
@@ -1968,6 +1986,70 @@ mod tests {
             let payload = first_game_state_payload(&body);
             assert_eq!(payload["type"], "queued_game_state_message");
             assert_eq!(payload["game_state_type"], "GameStateType_Full");
+        }
+
+        // -- update (GameStateUpdate_*) extraction --------------------------
+
+        /// Helper: a GSM body of the given GRE message type whose inner
+        /// `gameStateMessage` is a Full state with `update` set and a
+        /// `prevGameStateId` pointing at an earlier state.
+        fn full_gsm_body_with_update(gre_type: &str, update: &str) -> String {
+            format!(
+                "[UnityCrossThreadLogger]greToClientEvent\n{}",
+                serde_json::json!({
+                    "greToClientEvent": {
+                        "greToClientMessages": [{
+                            "type": gre_type,
+                            "msgId": 52,
+                            "gameStateId": 210,
+                            "gameStateMessage": {
+                                "type": "GameStateType_Full",
+                                "update": update,
+                                "prevGameStateId": 207,
+                                "zones": [],
+                                "gameObjects": []
+                            }
+                        }]
+                    }
+                })
+            )
+        }
+
+        #[test]
+        fn test_update_undo_emits_string() {
+            let body = full_gsm_body_with_update(
+                "GREMessageType_GameStateMessage",
+                "GameStateUpdate_Undo",
+            );
+            let payload = first_game_state_payload(&body);
+            assert_eq!(payload["update"], "GameStateUpdate_Undo");
+            assert_eq!(payload["game_state_type"], "GameStateType_Full");
+            assert_eq!(payload["prev_game_state_id"], 207);
+        }
+
+        #[test]
+        fn test_update_missing_emits_null() {
+            // game_state_message_body has no inner gameStateMessage.update field.
+            let body = game_state_message_body();
+            let payload = first_game_state_payload(&body);
+            assert!(
+                payload
+                    .get("update")
+                    .is_some_and(serde_json::Value::is_null),
+                "expected key present and JSON null, got {:?}",
+                payload.get("update")
+            );
+        }
+
+        #[test]
+        fn test_update_queued_variant_emits_string() {
+            let body = full_gsm_body_with_update(
+                "GREMessageType_QueuedGameStateMessage",
+                "GameStateUpdate_SendAndRecord",
+            );
+            let payload = first_game_state_payload(&body);
+            assert_eq!(payload["type"], "queued_game_state_message");
+            assert_eq!(payload["update"], "GameStateUpdate_SendAndRecord");
         }
     }
 
