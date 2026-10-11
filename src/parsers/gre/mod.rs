@@ -56,9 +56,9 @@
 //! Turn info is extracted as a structured `turn_info` sub-object (B-7d partial).
 //! Annotations are extracted from both the `annotations` and
 //! `persistentAnnotations` arrays, with special handling for `ZoneTransfer`,
-//! `ObjectIdChanged`, `DamageDealt`, `CounterAdded`, `TargetSpec`,
-//! `ModifiedLife`, `PowerToughnessModCreated`, `TriggeringObject`, `ManaPaid`,
-//! `UserActionTaken`, and `Scry`. Inline timers are extracted from
+//! `ObjectIdChanged`, `DamageDealt`, `CounterAdded`, `CounterRemoved`,
+//! `AddAbility`, `TargetSpec`, `ModifiedLife`, `PowerToughnessModCreated`,
+//! `TriggeringObject`, `ManaPaid`, `UserActionTaken`, and `Scry`. Inline timers are extracted from
 //! `gameStateMessage.timers`.
 //!
 //! `GameObjectType_Ability` objects include `object_source_grp_id` and

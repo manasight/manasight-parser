@@ -21,6 +21,12 @@ const ANNOTATION_TYPE_DAMAGE_DEALT: &str = "AnnotationType_DamageDealt";
 /// Annotation type for counters added to a permanent (e.g. +1/+1).
 const ANNOTATION_TYPE_COUNTER_ADDED: &str = "AnnotationType_CounterAdded";
 
+/// Annotation type for counters removed from a permanent (e.g. loyalty costs).
+const ANNOTATION_TYPE_COUNTER_REMOVED: &str = "AnnotationType_CounterRemoved";
+
+/// Annotation type for abilities granted to an object by a layered effect.
+const ANNOTATION_TYPE_ADD_ABILITY: &str = "AnnotationType_AddAbility";
+
 /// Annotation type for targeting relationships.
 const ANNOTATION_TYPE_TARGET_SPEC: &str = "AnnotationType_TargetSpec";
 
@@ -89,7 +95,10 @@ pub(super) fn extract_persistent_annotations(
 /// - **`AnnotationType_ZoneTransfer`**: `zone_src`, `zone_dest`, `category`
 /// - **`AnnotationType_ObjectIdChanged`**: `old_id`, `new_id`
 /// - **`AnnotationType_DamageDealt`**: `damage`, `damage_type`
-/// - **`AnnotationType_CounterAdded`**: `counter_type`, `amount`
+/// - **`AnnotationType_CounterAdded`**, **`AnnotationType_CounterRemoved`**:
+///   `counter_type`, `amount`
+/// - **`AnnotationType_AddAbility`**: `granted_ability_grp_ids` (ordered;
+///   `[]` when absent), `source_ability_grp_id`, `effect_id`
 /// - **`AnnotationType_TargetSpec`**: `ability_grp_id`, `target_index`
 /// - **`AnnotationType_ModifiedLife`**: `life`
 /// - **`AnnotationType_PowerToughnessModCreated`**: `power`, `toughness`
@@ -251,7 +260,10 @@ fn add_type_specific_fields(
         ANNOTATION_TYPE_ZONE_TRANSFER => add_zone_transfer_fields(obj, details),
         ANNOTATION_TYPE_OBJECT_ID_CHANGED => add_object_id_changed_fields(obj, details),
         ANNOTATION_TYPE_DAMAGE_DEALT => add_damage_dealt_fields(obj, details),
-        ANNOTATION_TYPE_COUNTER_ADDED => add_counter_added_fields(obj, details),
+        ANNOTATION_TYPE_COUNTER_ADDED | ANNOTATION_TYPE_COUNTER_REMOVED => {
+            add_counter_fields(obj, details);
+        }
+        ANNOTATION_TYPE_ADD_ABILITY => add_add_ability_fields(obj, details),
         ANNOTATION_TYPE_TARGET_SPEC => add_target_spec_fields(obj, details),
         ANNOTATION_TYPE_MODIFIED_LIFE => add_modified_life_fields(obj, details),
         ANNOTATION_TYPE_POWER_TOUGHNESS_MOD_CREATED => add_pt_mod_fields(obj, details),
@@ -313,7 +325,7 @@ fn add_damage_dealt_fields(
     );
 }
 
-fn add_counter_added_fields(
+fn add_counter_fields(
     obj: &mut serde_json::Map<String, serde_json::Value>,
     details: &[serde_json::Value],
 ) {
@@ -324,6 +336,24 @@ fn add_counter_added_fields(
     obj.insert(
         "amount".into(),
         serde_json::json!(detail_int(details, "transaction_amount").unwrap_or(0)),
+    );
+}
+
+fn add_add_ability_fields(
+    obj: &mut serde_json::Map<String, serde_json::Value>,
+    details: &[serde_json::Value],
+) {
+    obj.insert(
+        "granted_ability_grp_ids".into(),
+        serde_json::json!(detail_int_array(details, "grpid")),
+    );
+    obj.insert(
+        "source_ability_grp_id".into(),
+        serde_json::json!(detail_int(details, "sourceAbilityGRPID").unwrap_or(0)),
+    );
+    obj.insert(
+        "effect_id".into(),
+        serde_json::json!(detail_int(details, "effect_id").unwrap_or(0)),
     );
 }
 
@@ -1127,6 +1157,187 @@ mod tests {
             let ann = &payload["annotations"][0];
             assert_eq!(ann["affector_id"], 298);
             assert_eq!(ann["affected_ids"], serde_json::json!([286]));
+        }
+    }
+
+    mod counter_removed_extraction {
+        use super::*;
+
+        fn counter_removed_body() -> String {
+            format!(
+                "[UnityCrossThreadLogger]greToClientEvent\n{}",
+                serde_json::json!({
+                    "greToClientEvent": {
+                        "greToClientMessages": [{
+                            "type": "GREMessageType_GameStateMessage",
+                            "msgId": 31,
+                            "gameStateId": 104,
+                            "gameStateMessage": {
+                                "annotations": [{
+                                    "id": 72,
+                                    "affectorId": 401,
+                                    "affectedIds": [388],
+                                    "type": ["AnnotationType_CounterRemoved"],
+                                    "details": [
+                                        { "key": "counter_type", "type": "KeyValuePairValueType_int32", "valueInt32": [7] },
+                                        { "key": "transaction_amount", "type": "KeyValuePairValueType_int32", "valueInt32": [2] }
+                                    ]
+                                }]
+                            }
+                        }]
+                    }
+                })
+            )
+        }
+
+        #[test]
+        fn test_counter_removed_counter_type_and_amount() {
+            let body = counter_removed_body();
+            let entry = unity_entry(&body);
+            let event = try_parse(&entry, Some(test_timestamp()))
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| unreachable!());
+            let payload = game_state_payload(&event);
+
+            let ann = &payload["annotations"][0];
+            assert_eq!(ann["type"], "AnnotationType_CounterRemoved");
+            assert_eq!(ann["counter_type"], 7, "CounterRemoved annotation: {ann}");
+            assert_eq!(ann["amount"], 2, "CounterRemoved annotation: {ann}");
+        }
+
+        #[test]
+        fn test_counter_removed_affector_and_affected() {
+            let body = counter_removed_body();
+            let entry = unity_entry(&body);
+            let event = try_parse(&entry, Some(test_timestamp()))
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| unreachable!());
+            let payload = game_state_payload(&event);
+
+            let ann = &payload["annotations"][0];
+            assert_eq!(ann["affector_id"], 401);
+            assert_eq!(ann["affected_ids"], serde_json::json!([388]));
+        }
+    }
+
+    mod add_ability_extraction {
+        use super::*;
+
+        /// Builds a GSM holding one persistent `[AddAbility, LayeredEffect]`
+        /// annotation with the given `details` entries.
+        fn add_ability_body(details: &serde_json::Value) -> String {
+            format!(
+                "[UnityCrossThreadLogger]greToClientEvent\n{}",
+                serde_json::json!({
+                    "greToClientEvent": {
+                        "greToClientMessages": [{
+                            "type": "GREMessageType_GameStateMessage",
+                            "msgId": 33,
+                            "gameStateId": 109,
+                            "gameStateMessage": {
+                                "persistentAnnotations": [{
+                                    "id": 118,
+                                    "affectorId": 412,
+                                    "affectedIds": [395],
+                                    "type": [
+                                        "AnnotationType_AddAbility",
+                                        "AnnotationType_LayeredEffect"
+                                    ],
+                                    "details": details
+                                }]
+                            }
+                        }]
+                    }
+                })
+            )
+        }
+
+        fn parse_add_ability(details: &serde_json::Value) -> serde_json::Value {
+            let body = add_ability_body(details);
+            let entry = unity_entry(&body);
+            let event = try_parse(&entry, Some(test_timestamp()))
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| unreachable!());
+            let payload = game_state_payload(&event);
+            payload["persistent_annotations"][0].clone()
+        }
+
+        #[test]
+        fn test_add_ability_granted_ids_and_effect_id() {
+            let ann = parse_add_ability(&serde_json::json!([
+                { "key": "originalAbilityObjectZcid", "type": "KeyValuePairValueType_int32", "valueInt32": [412] },
+                { "key": "UniqueAbilityId", "type": "KeyValuePairValueType_int32", "valueInt32": [55] },
+                { "key": "grpid", "type": "KeyValuePairValueType_int32", "valueInt32": [8] },
+                { "key": "effect_id", "type": "KeyValuePairValueType_int32", "valueInt32": [7009] }
+            ]));
+
+            assert_eq!(ann["type"], "AnnotationType_AddAbility");
+            assert_eq!(
+                ann["granted_ability_grp_ids"],
+                serde_json::json!([8]),
+                "AddAbility annotation: {ann}"
+            );
+            assert_eq!(ann["effect_id"], 7009, "AddAbility annotation: {ann}");
+            assert_eq!(ann["affector_id"], 412);
+            assert_eq!(ann["affected_ids"], serde_json::json!([395]));
+        }
+
+        #[test]
+        fn test_add_ability_absent_source_ability_defaults_to_zero() {
+            let ann = parse_add_ability(&serde_json::json!([
+                { "key": "grpid", "type": "KeyValuePairValueType_int32", "valueInt32": [8] },
+                { "key": "effect_id", "type": "KeyValuePairValueType_int32", "valueInt32": [7010] }
+            ]));
+
+            assert_eq!(
+                ann["source_ability_grp_id"], 0,
+                "AddAbility annotation: {ann}"
+            );
+            assert_eq!(ann["effect_id"], 7010, "AddAbility annotation: {ann}");
+        }
+
+        #[test]
+        fn test_add_ability_source_ability_grp_id() {
+            let ann = parse_add_ability(&serde_json::json!([
+                { "key": "grpid", "type": "KeyValuePairValueType_int32", "valueInt32": [9] },
+                { "key": "sourceAbilityGRPID", "type": "KeyValuePairValueType_int32", "valueInt32": [176_543] },
+                { "key": "effect_id", "type": "KeyValuePairValueType_int32", "valueInt32": [7011] }
+            ]));
+
+            assert_eq!(
+                ann["source_ability_grp_id"], 176_543,
+                "AddAbility annotation: {ann}"
+            );
+        }
+
+        #[test]
+        fn test_add_ability_multiple_granted_ids_preserved_in_order() {
+            let ann = parse_add_ability(&serde_json::json!([
+                { "key": "grpid", "type": "KeyValuePairValueType_int32", "valueInt32": [12, 141_939] },
+                { "key": "effect_id", "type": "KeyValuePairValueType_int32", "valueInt32": [7012] }
+            ]));
+
+            assert_eq!(
+                ann["granted_ability_grp_ids"],
+                serde_json::json!([12, 141_939]),
+                "AddAbility annotation: {ann}"
+            );
+        }
+
+        #[test]
+        fn test_add_ability_missing_grpid_emits_empty_array() {
+            let ann = parse_add_ability(&serde_json::json!([
+                { "key": "effect_id", "type": "KeyValuePairValueType_int32", "valueInt32": [7013] }
+            ]));
+
+            assert_eq!(
+                ann["granted_ability_grp_ids"],
+                serde_json::json!([]),
+                "AddAbility annotation: {ann}"
+            );
         }
     }
 
