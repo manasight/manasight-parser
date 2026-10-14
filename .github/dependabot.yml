@@ -1,6 +1,15 @@
 version: 2
 updates:
+  # Version updates are disabled (limit 0); dependency updates are batched
+  # outside Dependabot. Security updates, when enabled in the repository
+  # settings, are not governed by this limit.
   - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 0
+
+  - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
@@ -8,23 +17,6 @@ updates:
       # Patch and minor bumps land in one PR; a major bump falls outside
       # `update-types` here, so it never matches this group and always gets
       # its own PR.
-      patch-and-minor:
-        update-types:
-          - "minor"
-          - "patch"
-    cooldown:
-      # Applies to non-security updates only -- Dependabot never delays a
-      # security update regardless of this setting.
-      default-days: 7
-
-  - package-ecosystem: "github-actions"
-    directory: "/"
-    schedule:
-      interval: "weekly"
-    groups:
-      # Same split as the cargo group above: patch and minor bumps land in
-      # one PR; a major bump falls outside `update-types` here, so it never
-      # matches this group and always gets its own PR.
       actions:
         patterns:
           - "*"
