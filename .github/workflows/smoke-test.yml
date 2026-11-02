@@ -87,8 +87,9 @@ jobs:
         if: steps.secrets-check.outputs.skip == 'false'
         uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
 
-      # Compile before the token or the test data are used, so dependency build
-      # scripts and proc macros never run next to either.
+      # Compile before the token or the test data are used. This only keeps the
+      # first build away from them and is not isolation: dependency code can
+      # affect later steps, and can run again while the test data is present.
       - name: Build tests
         if: steps.secrets-check.outputs.skip == 'false'
         run: cargo test --no-run
