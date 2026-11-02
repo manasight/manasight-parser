@@ -1892,6 +1892,7 @@ mod tests {
     #[test]
     fn test_scrub_raw_log_wine_home_path_redacted() {
         assert_eq!(scrub_raw_log(r"Z:\home\jane\x"), r"<user-path>\x");
+        assert_eq!(scrub_raw_log(r"Z:\home\jane doe\x"), r"<user-path>\x");
     }
 
     #[test]
@@ -1904,6 +1905,9 @@ mod tests {
     fn test_scrub_raw_log_nested_escaped_forward_slash_paths_redacted() {
         for (input, expected) in [
             (r"\\\/Users\\\/jane\\\/x", r"<user-path>\\\/x"),
+            (r"\\\/Users\\\/jane doe\\\/x", r"<user-path>\\\/x"),
+            (r"\\\/home\\\/jane doe\\\/x", r"<user-path>\\\/x"),
+            (r"C:\\\/users\\\/jane doe\\\/x", r"C:<user-path>\\\/x"),
             (r"\\\/home\\\/jane\\\/x", r"<user-path>\\\/x"),
             (r"C:\\\/users\\\/jane\\\/x", r"C:<user-path>\\\/x"),
             (r"\\\/Users\\\/jane", "<user-path>"),
@@ -1922,6 +1926,7 @@ mod tests {
     #[test]
     fn test_scrub_raw_log_lowercase_users_forward_slash_path_redacted() {
         assert_eq!(scrub_raw_log("C:/users/jane/x"), "C:<user-path>/x");
+        assert_eq!(scrub_raw_log("C:/users/jane doe/x"), "C:<user-path>/x");
     }
 
     #[test]
@@ -1938,6 +1943,21 @@ mod tests {
             scrub_raw_log("C:\\Users\\jane\nnext line z\\y\n"),
             "<user-path>\nnext line z\\y\n"
         );
+        assert_eq!(
+            scrub_raw_log("/home/jane\nnext line /etc/x\n"),
+            "<user-path>\nnext line /etc/x\n"
+        );
+        assert_eq!(
+            scrub_raw_log("C:/users/jane\nnext line /etc/x\n"),
+            "C:<user-path>\nnext line /etc/x\n"
+        );
+        for (input, expected) in [
+            ("\"/Users/jane\nnext\"", "\"<user-path>\nnext\""),
+            ("\"C:/users/jane\nnext\"", "\"C:<user-path>\nnext\""),
+            ("\"C:\\Users\\jane\nnext\"", "\"<user-path>\nnext\""),
+        ] {
+            assert_eq!(scrub_raw_log(input), expected);
+        }
     }
 
     #[test]
@@ -1982,6 +2002,9 @@ mod tests {
             (r#"/home/jane "a""#, r#"<user-path> "a""#),
             (r#"C:\Users\jane "a""#, r#"<user-path> "a""#),
             (r#"C:/users/jane "a""#, r#"C:<user-path> "a""#),
+            (r#"x=/home/jane"y"#, r#"x=<user-path>"y"#),
+            (r#"x=C:/users/jane"y"#, r#"x=C:<user-path>"y"#),
+            (r#"x=C:\Users\jane"y"#, r#"x=<user-path>"y"#),
         ] {
             let result = scrub_raw_log(input);
             assert_eq!(result, expected);
@@ -2313,8 +2336,13 @@ mod tests {
 
     #[test]
     fn test_lowercase_users_in_a_url_is_not_a_user_path() {
-        let input = "https://api.example.com/users/me/profile";
-        assert_eq!(scrub_raw_log(input), input);
+        for input in [
+            "https://api.example.com/users/me/profile",
+            r#"{"next":"/users/me"}"#,
+            "see /users/me for more",
+        ] {
+            assert_eq!(scrub_raw_log(input), input);
+        }
     }
 
     #[test]
@@ -2341,6 +2369,10 @@ mod tests {
         assert_eq!(
             scrub_raw_log(r#""https://api.example.com/x","/home/me""#),
             r#""https://api.example.com/x","<user-path>""#
+        );
+        assert_eq!(
+            scrub_raw_log(r#""https://api.example.com/x"/home/me"#),
+            r#""https://api.example.com/x"<user-path>"#
         );
     }
 
@@ -2382,6 +2414,10 @@ mod tests {
         assert_eq!(scrub_raw_log(suffixed), "<redacted> to Match: X");
         let forward = "Match to AAAABBBB2222DDDDEEEEFFFFGG_Familiar: X";
         assert_eq!(scrub_raw_log(forward), "Match to <redacted>: X");
+        let mixed = "Mixedcase1234567890abcdef to Match: X";
+        assert_eq!(scrub_raw_log(mixed), "<redacted> to Match: X");
+        let mixed_forward = "Match to Mixedcase1234567890abcdef: X";
+        assert_eq!(scrub_raw_log(mixed_forward), "Match to <redacted>: X");
     }
 
     #[test]
@@ -2394,6 +2430,7 @@ mod tests {
             "A_LONG_CONSTANT_NAME_WITH_MANY_PARTS_AND_1_DIGIT",
             "AAAABBBB2222DDDDEEEEFFFF_Familiar_Name",
             "AAAABBBB2222DDDDEEEEFFFFGGH_Familiar",
+            "AAAABBBB2222DDDDEEEEFFFFgg_Familiar",
             "aaaabbbb2222ddddeeeeffffgg_Familiar",
         ] {
             assert_eq!(scrub_raw_log(input), input);
