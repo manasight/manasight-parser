@@ -1854,6 +1854,10 @@ mod tests {
             scrub_raw_log("/Users/jane\r\nnext line /etc/x\r\n"),
             "<user-path>\r\nnext line /etc/x\r\n"
         );
+        assert_eq!(
+            scrub_raw_log("C:\\Users\\jane\nnext line z\\y\n"),
+            "<user-path>\nnext line z\\y\n"
+        );
     }
 
     #[test]
@@ -1937,6 +1941,37 @@ mod tests {
         assert!(
             !result.contains(REAL_A) && !result.contains(REAL_B),
             "{result}"
+        );
+    }
+
+    #[test]
+    fn test_deck_id_found_when_only_escaped() {
+        let input =
+            format!(r#"{{\"DeckId\":\"{REAL_A}\"}} {{\\\"botDeckId\\\":\\\"{REAL_B}\\\"}}"#);
+        assert_eq!(
+            scrub_raw_log(&input),
+            format!(r#"{{\"DeckId\":\"{FIRST}\"}} {{\\\"botDeckId\\\":\\\"{SECOND}\\\"}}"#)
+        );
+    }
+
+    #[test]
+    fn test_deck_id_repeated_anchor_keeps_its_number() {
+        let input =
+            format!(r#"{{"DeckId":"{REAL_A}"}} {{"DeckId":"{REAL_A}"}} {{"DeckId":"{REAL_B}"}}"#);
+        assert_eq!(
+            scrub_raw_log(&input),
+            format!(r#"{{"DeckId":"{FIRST}"}} {{"DeckId":"{FIRST}"}} {{"DeckId":"{SECOND}"}}"#)
+        );
+    }
+
+    #[test]
+    fn test_deck_id_numbering_continues_after_the_highest_stand_in() {
+        let third = "00000003-0000-4000-8000-000000000000";
+        let input =
+            format!(r#"{{"DeckId":"{FIRST}"}} {{"DeckId":"{SECOND}"}} {{"DeckId":"{REAL_A}"}}"#);
+        assert_eq!(
+            scrub_raw_log(&input),
+            format!(r#"{{"DeckId":"{FIRST}"}} {{"DeckId":"{SECOND}"}} {{"DeckId":"{third}"}}"#)
         );
     }
 
@@ -2109,6 +2144,12 @@ mod tests {
     fn test_non_uuid_course_key_value_untouched() {
         let input = r#"{"courseId":"Avatar_Basic_Example"}"#;
         assert_eq!(scrub_raw_log(input), input);
+        let with_id = format!(r#"{input} {{"CourseId":"{REAL_A}"}}"#);
+        assert_eq!(
+            scrub_raw_log(&with_id),
+            format!(r#"{input} {{"CourseId":"{FIRST_COURSE}"}}"#),
+            "a constant does not take a number"
+        );
     }
 
     #[test]
