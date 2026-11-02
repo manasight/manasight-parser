@@ -83,7 +83,7 @@ impl ScrubOptions {
 /// JSON escape right before it is matched apart, since its letters would
 /// otherwise read as part of the word.
 static ACCOUNT_ID_SHAPE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?:(?P<esc>\\+(?:[bfnrt]|u[0-9A-Fa-f]{4}))|\b)[A-Za-z0-9_]{26,}\b")
+    Regex::new(r"(?P<esc>\\(?:[bfnrt]|u[0-9A-Fa-f]{4}))?[A-Za-z0-9_]{26,}")
         .unwrap_or_else(|_| unreachable!())
 });
 
@@ -290,7 +290,7 @@ static SCRUB_PATTERNS: LazyLock<Vec<ScrubPattern>> = LazyLock::new(|| {
             false,
         ),
         (
-            r"(\\+(?:[bfnrt]|u[0-9A-Fa-f]{4})|\b)(?:[A-Z0-9_]{8,}|[A-Za-z0-9_]{20,}) to Match:",
+            r"(\\(?:[bfnrt]|u[0-9A-Fa-f]{4})|\b)(?:[A-Z0-9_]{8,}|[A-Za-z0-9_]{20,}) to Match:",
             "${1}<redacted> to Match:",
             false,
             false,
@@ -2387,6 +2387,10 @@ mod tests {
             r#""https://api.example.com/x"<user-path>"#
         );
         assert_eq!(
+            scrub_raw_log("'https://api.example.com/x'/home/jane"),
+            "'https://api.example.com/x'<user-path>"
+        );
+        assert_eq!(
             scrub_raw_log("https://api.example.com/x,/home/jane"),
             "https://api.example.com/x,<user-path>"
         );
@@ -2482,6 +2486,8 @@ mod tests {
                 r"x\nAAAABBBB2222DDDDEEEEFFFFGG_Familiar y",
                 r"x\n<redacted> y",
             ),
+            ("éAAAABBBB2222DDDDEEEEFFFFGG y", "é<redacted> y"),
+            ("x AAAABBBB2222DDDDEEEEFFFFGGé", "x <redacted>é"),
         ] {
             let result = scrub_raw_log(input);
             assert_eq!(result, expected);
