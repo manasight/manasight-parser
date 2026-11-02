@@ -156,14 +156,14 @@ fn test_parse_whole_log_parity_with_router_for_deck_submission() {
 }
 
 // ---------------------------------------------------------------------------
-// Test 4: scrub_raw_log preserves Format and DeckId
+// Test 4: scrub_raw_log keeps Format and replaces DeckId
 // ---------------------------------------------------------------------------
 
 /// Confirms that `scrub_raw_log` (the default-options path that strips names,
-/// tokens, IPs, and hardware identifiers) preserves `Format` and `DeckId`
-/// fields — both are game data, not PII.
+/// tokens, IPs, and hardware identifiers) keeps `Format` and replaces the
+/// `DeckId`, while the upload profile keeps the `DeckId`.
 #[test]
-fn test_scrub_raw_log_preserves_format_and_deck_id() {
+fn test_scrub_raw_log_keeps_format_and_replaces_deck_id() {
     let scrubbed_str = scrub_raw_log(FIXTURE_V2_CONSTRUCTED);
 
     assert!(

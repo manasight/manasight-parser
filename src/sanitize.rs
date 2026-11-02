@@ -79,22 +79,60 @@ impl ScrubOptions {
     }
 }
 
-/// Matches a token of the account ID's length and alphabet, anywhere.
+/// Matches a word long enough to hold a token of the account ID's length.
 static ACCOUNT_ID_SHAPE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\b[A-Z0-9]{26}\b").unwrap_or_else(|_| unreachable!()));
+    LazyLock::new(|| Regex::new(r"\b[A-Za-z0-9_]{26,}\b").unwrap_or_else(|_| unreachable!()));
 
-/// Redact an account ID in a position no header pattern knows about. Requires
-/// both a letter and a digit, so a long constant name or a JSON number stays.
+/// Whether `part` has the account ID's length and alphabet. Requires both a
+/// letter and a digit, so a long constant name or a JSON number does not count.
+fn is_account_id_shape(part: &str) -> bool {
+    part.len() == 26
+        && part
+            .bytes()
+            .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
+        && part.bytes().any(|b| b.is_ascii_digit())
+        && part.bytes().any(|b| b.is_ascii_uppercase())
+}
+
+/// Redact an account ID in a position no header pattern knows about. An ID
+/// joined by `_` to a prefix or suffix takes the whole word with it, as the
+/// header patterns do.
 fn redact_account_id_shape(input: &str) -> String {
     ACCOUNT_ID_SHAPE
         .replace_all(input, |caps: &regex::Captures<'_>| {
             let text = &caps[0];
-            let has_digit = text.bytes().any(|b| b.is_ascii_digit());
-            let has_letter = text.bytes().any(|b| b.is_ascii_uppercase());
-            if has_digit && has_letter {
+            if text.split('_').any(is_account_id_shape) {
                 "<redacted>".to_owned()
             } else {
                 text.to_owned()
+            }
+        })
+        .into_owned()
+}
+
+/// Finds an unquoted home path with no trailing separator, or a URL, which is
+/// matched only so that a path inside it is skipped. The username ends at
+/// whitespace, since text may follow it. A URL needs a host, so a `file:` URL
+/// does not count as one.
+static BARE_HOME_PATH: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(concat!(
+        r#"(?P<url>[A-Za-z][A-Za-z0-9+.\-]+:\\*/\\*/[^\s"/\\][^\s"]*)"#,
+        r#"|(?P<drive>[A-Za-z]:)\\*/users\\*/[^\s/\\"]+"#,
+        r#"|\\*/(?:Users|home)\\*/[^\s/\\"]+"#,
+        r#"|(?i:[a-z]:\\+(?:users|home)\\+)[^\s\\"]+"#,
+    ))
+    .unwrap_or_else(|_| unreachable!())
+});
+
+/// Redact the home paths [`BARE_HOME_PATH`] finds, leaving URLs as they are.
+fn redact_bare_home_paths(input: &str) -> String {
+    BARE_HOME_PATH
+        .replace_all(input, |caps: &regex::Captures<'_>| {
+            if caps.name("url").is_some() {
+                caps[0].to_owned()
+            } else {
+                let drive = caps.name("drive").map_or("", |m| m.as_str());
+                format!("{drive}<user-path>")
             }
         })
         .into_owned()
@@ -118,7 +156,7 @@ static ANY_UUID: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 /// Finds event course IDs: a UUID under a course-ID key at any escaping level.
-/// Other values under such a key are game constants, not identifiers.
+/// Other values under such a key stay.
 static COURSE_ID_ANCHOR: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
         r#"(?i)\\*"(?P<key>[a-z_]*course[a-z_]*id[a-z_]*)\\*"\s*:\s*\\*"(?P<val>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"#,
@@ -198,8 +236,10 @@ fn replace_ids(input: &str, anchor: &Regex, tail: &str) -> String {
 /// - `WotC` account IDs in log prefixes (`Match to <id>:`, `<id> to Match:`)
 /// - JSON `"clientId"` and `"userId"` values
 /// - Windows user paths (`C:\Users\<username>\`), macOS user paths
-///   (`/Users/<username>/`) and Linux user paths (`/home/<username>/`), with or
-///   without the trailing separator and in JSON-escaped form
+///   (`/Users/<username>/`) and Linux user paths (`/home/<username>/`), at any
+///   JSON-escaping level. Without a trailing separator, a quoted path loses
+///   everything up to the closing quote; an unquoted one loses the text up to
+///   whitespace and is skipped inside a URL (see [`redact_bare_home_paths`])
 /// - Session identifiers (JSON `"token"` and `"sessionId"` values)
 /// - Display names (JSON `"screenName"` and `"playerName"` values)
 /// - Deck names (free-text JSON `"Name"` values adjacent to a `"DeckId"`,
@@ -262,33 +302,54 @@ static SCRUB_PATTERNS: LazyLock<Vec<ScrubPattern>> = LazyLock::new(|| {
             false,
             false,
         ),
-        // Home paths. The username ends at a separator, a quote or the line
-        // end, so a bare home directory with no trailing separator is covered.
+        // Home paths with a trailing separator. The username ends at the
+        // separator and cannot cross a quote or a line end.
         // Windows paths, any drive letter and any case, Wine's Z:\home included:
         // C:\Users\<username>\
         (
-            r#"(?i)[a-z]:\\+(?:users|home)\\+[^\\"\r\n]+(\\+)?"#,
+            r#"(?i)[a-z]:\\+(?:users|home)\\+[^\\"\r\n]+(\\+)"#,
             "<user-path>${1}",
             false,
             false,
         ),
         // macOS paths: /Users/<username>/
         (
-            r#"\\?/Users\\?/[^/\\"\r\n]+(\\?/)?"#,
+            r#"\\*/Users\\*/[^/\\"\r\n]+(\\*/)"#,
             "<user-path>${1}",
             false,
             false,
         ),
         (
-            r#"([A-Za-z]:)\\?/users\\?/[^/\\"\r\n]+(\\?/)?"#,
+            r#"([A-Za-z]:)\\*/users\\*/[^/\\"\r\n]+(\\*/)"#,
             "${1}<user-path>${2}",
             false,
             false,
         ),
         // Linux paths: /home/<username>/
         (
-            r#"\\?/home\\?/[^/\\"\r\n]+(\\?/)?"#,
+            r#"\\*/home\\*/[^/\\"\r\n]+(\\*/)"#,
             "<user-path>${1}",
+            false,
+            false,
+        ),
+        // Quoted home paths with no trailing separator. The value starts at the
+        // path and ends at the closing quote, so a name with a space goes whole.
+        // Unquoted ones are handled by `redact_bare_home_paths`.
+        (
+            r#"(")(?i:[a-z]:\\+(?:users|home)\\+)[^\\"\r\n]+(\\*")"#,
+            "${1}<user-path>${2}",
+            false,
+            false,
+        ),
+        (
+            r#"("(?:[A-Za-z]:)?)\\*/(?:Users|home)\\*/[^/\\"\r\n]+(\\*")"#,
+            "${1}<user-path>${2}",
+            false,
+            false,
+        ),
+        (
+            r#"("[A-Za-z]:)\\*/users\\*/[^/\\"\r\n]+(\\*")"#,
+            "${1}<user-path>${2}",
             false,
             false,
         ),
@@ -626,7 +687,7 @@ pub fn scrub_raw_log_with(input: &str, opts: &ScrubOptions) -> String {
             .replace_all(&result, pattern.replacement)
             .into_owned();
     }
-    redact_account_id_shape(&result)
+    redact_account_id_shape(&redact_bare_home_paths(&result))
 }
 
 // ---------------------------------------------------------------------------
@@ -1840,6 +1901,25 @@ mod tests {
     }
 
     #[test]
+    fn test_scrub_raw_log_nested_escaped_forward_slash_paths_redacted() {
+        for (input, expected) in [
+            (r"\\\/Users\\\/jane\\\/x", r"<user-path>\\\/x"),
+            (r"\\\/home\\\/jane\\\/x", r"<user-path>\\\/x"),
+            (r"C:\\\/users\\\/jane\\\/x", r"C:<user-path>\\\/x"),
+            (r"\\\/Users\\\/jane", "<user-path>"),
+            (r"\\\/home\\\/jane", "<user-path>"),
+            (r"C:\\\/users\\\/jane", "C:<user-path>"),
+            (r#"\"\\\/Users\\\/jane doe\\\""#, r#"\"<user-path>\\\""#),
+            (r#"\"\\\/home\\\/jane doe\\\""#, r#"\"<user-path>\\\""#),
+            (r#"\"C:\\\/users\\\/jane doe\\\""#, r#"\"C:<user-path>\\\""#),
+        ] {
+            let result = scrub_raw_log(input);
+            assert_eq!(result, expected);
+            assert_eq!(scrub_raw_log(&result), result, "idempotent");
+        }
+    }
+
+    #[test]
     fn test_scrub_raw_log_lowercase_users_forward_slash_path_redacted() {
         assert_eq!(scrub_raw_log("C:/users/jane/x"), "C:<user-path>/x");
     }
@@ -1875,8 +1955,53 @@ mod tests {
             (r#"{\"p\":\"/Users/jane\"}"#, r#"{\"p\":\"<user-path>\"}"#),
             (r#"{\"p\":\"/home/jane\"}"#, r#"{\"p\":\"<user-path>\"}"#),
             ("/Users/jane", "<user-path>"),
-            ("/home/jane doe", "<user-path>"),
-            (r"C:\Users\jane doe", "<user-path>"),
+            ("/home/jane", "<user-path>"),
+            (r"C:\Users\jane", "<user-path>"),
+            ("C:/users/jane", "C:<user-path>"),
+            ("/var/home/jane", "/var<user-path>"),
+            ("file:///home/jane", "file://<user-path>"),
+            (r"file:\/\/\/home\/jane", r"file:\/\/<user-path>"),
+            ("C://Users/jane", "C:/<user-path>"),
+        ] {
+            let result = scrub_raw_log(input);
+            assert_eq!(result, expected);
+            assert_eq!(scrub_raw_log(&result), result, "idempotent");
+        }
+    }
+
+    #[test]
+    fn test_bare_home_path_keeps_unquoted_text_after_the_username() {
+        for (input, expected) in [
+            (r#"/home/jane {"a":1}"#, r#"<user-path> {"a":1}"#),
+            ("see /Users/jane for more", "see <user-path> for more"),
+            ("see /home/jane\tfor more", "see <user-path>\tfor more"),
+            (r"see C:\Users\jane for more", "see <user-path> for more"),
+            (r"see Z:\home\jane for more", "see <user-path> for more"),
+            ("see C:/users/jane for more", "see C:<user-path> for more"),
+            (r"see \/home\/jane for more", "see <user-path> for more"),
+            (r#"/home/jane "a""#, r#"<user-path> "a""#),
+            (r#"C:\Users\jane "a""#, r#"<user-path> "a""#),
+            (r#"C:/users/jane "a""#, r#"C:<user-path> "a""#),
+        ] {
+            let result = scrub_raw_log(input);
+            assert_eq!(result, expected);
+            assert_eq!(scrub_raw_log(&result), result, "idempotent");
+        }
+    }
+
+    #[test]
+    fn test_quoted_bare_home_path_loses_a_name_with_a_space() {
+        for (input, expected) in [
+            (r#""/Users/jane doe""#, r#""<user-path>""#),
+            (r#""/home/jane doe""#, r#""<user-path>""#),
+            (r#""\/Users\/jane doe""#, r#""<user-path>""#),
+            (r#""C:\\Users\\jane doe""#, r#""<user-path>""#),
+            (r#""C:\Users\jane doe""#, r#""<user-path>""#),
+            (r#""z:\home\jane doe""#, r#""<user-path>""#),
+            (r#""C:/Users/jane doe""#, r#""C:<user-path>""#),
+            (r#""C:/users/jane doe""#, r#""C:<user-path>""#),
+            (r#"\"/Users/jane doe\""#, r#"\"<user-path>\""#),
+            (r#"\"C:\\Users\\jane doe\""#, r#"\"<user-path>\""#),
         ] {
             let result = scrub_raw_log(input);
             assert_eq!(result, expected);
@@ -2193,6 +2318,49 @@ mod tests {
     }
 
     #[test]
+    fn test_bare_home_path_in_a_url_is_left_alone() {
+        for input in [
+            r#""https://api.example.com/home/me""#,
+            "https://api.example.com/Users/me",
+            r"https:\/\/api.example.com\/home\/me",
+            r#"\"https://api.example.com/Users/me\""#,
+            "wss://api.example.com/home/me",
+            "http://localhost:8080/home/me?a=1",
+            r#"{"u":"https://api.example.com/home/jane doe"}"#,
+        ] {
+            assert_eq!(scrub_raw_log(input), input);
+        }
+    }
+
+    #[test]
+    fn test_bare_home_path_after_a_url_is_redacted() {
+        assert_eq!(
+            scrub_raw_log("https://api.example.com/x /home/me"),
+            "https://api.example.com/x <user-path>"
+        );
+        assert_eq!(
+            scrub_raw_log(r#""https://api.example.com/x","/home/me""#),
+            r#""https://api.example.com/x","<user-path>""#
+        );
+    }
+
+    #[test]
+    fn test_home_path_with_a_separator_in_a_url_is_redacted() {
+        for (input, expected) in [
+            (
+                "https://api.example.com/home/me/profile",
+                "https://api.example.com<user-path>/profile",
+            ),
+            (
+                "https://api.example.com/Users/me/profile",
+                "https://api.example.com<user-path>/profile",
+            ),
+        ] {
+            assert_eq!(scrub_raw_log(input), expected);
+        }
+    }
+
+    #[test]
     fn test_ordinary_words_before_to_match_survive() {
         for input in [
             "Failed to Match: x",
@@ -2221,8 +2389,44 @@ mod tests {
         for input in [
             "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
             r#"{"n":12345678901234567890123456}"#,
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZ_Familiar",
+            "Prefix_12345678901234567890123456",
+            "A_LONG_CONSTANT_NAME_WITH_MANY_PARTS_AND_1_DIGIT",
+            "AAAABBBB2222DDDDEEEEFFFF_Familiar_Name",
+            "AAAABBBB2222DDDDEEEEFFFFGGH_Familiar",
+            "aaaabbbb2222ddddeeeeffffgg_Familiar",
         ] {
             assert_eq!(scrub_raw_log(input), input);
+        }
+    }
+
+    #[test]
+    fn test_id_shape_joined_by_underscore_redacted_whole() {
+        for (input, expected) in [
+            (
+                "opaque=AAAABBBB2222DDDDEEEEFFFFGG_Familiar end",
+                "opaque=<redacted> end",
+            ),
+            (
+                "opaque=Prefix_AAAABBBB2222DDDDEEEEFFFFGG end",
+                "opaque=<redacted> end",
+            ),
+            (
+                "opaque=Prefix_AAAABBBB2222DDDDEEEEFFFFGG_Familiar end",
+                "opaque=<redacted> end",
+            ),
+            (
+                "AAAABBBB2222DDDDEEEEFFFFGG_Familiar to Match: X",
+                "<redacted> to Match: X",
+            ),
+            (
+                "Match to AAAABBBB2222DDDDEEEEFFFFGG_Familiar: X",
+                "Match to <redacted>: X",
+            ),
+        ] {
+            let result = scrub_raw_log(input);
+            assert_eq!(result, expected);
+            assert_eq!(scrub_raw_log(&result), result, "idempotent");
         }
     }
 

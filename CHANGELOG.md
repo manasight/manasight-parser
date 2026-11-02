@@ -29,13 +29,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - **Scrubber: account ID headers.** The ID is now redacted in both header
   orderings, including mixed-case and suffixed IDs, and a 26-character token
-  with a letter and a digit is redacted wherever it appears.
-- **Scrubber: deck names under `DeckIdInternal`** are now pseudonymized.
+  with a letter and a digit is redacted wherever it appears, including when
+  joined by `_` to a prefix or suffix.
+- **Scrubber: deck names** are now pseudonymized under more key forms.
 - **Scrubber: home paths.** Path patterns no longer cross a quote or a line
-  end. They now cover lowercase drive letters, Wine-style `Z:\home\`, escaped
-  separators and a bare home directory with no trailing separator. Lowercase
-  `/users/` needs a drive letter, so URLs are left alone.
-- **Test fixtures and doc examples** use made-up values.
+  end. They now cover lowercase drive letters, Wine-style `Z:\home\`, separators
+  at any escaping level and a bare home directory with no trailing separator.
+  Lowercase `/users/` needs a drive letter. The bare form does not fire inside a
+  URL and, unless quoted, stops at whitespace. `/home/<name>/` and
+  `/Users/<name>/` with a trailing separator still match inside a URL path.
 
 ## [0.7.3] - 2026-09-26
 
