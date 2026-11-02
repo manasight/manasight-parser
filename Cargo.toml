@@ -9,6 +9,13 @@ readme = "README.md"
 rust-version = "1.93.0"
 keywords = ["mtg-arena", "parser", "log", "magic-the-gathering"]
 categories = ["parser-implementations", "games"]
+include = [
+    "/src/**/*",
+    "/README.md",
+    "/CHANGELOG.md",
+    "/LICENSE-APACHE",
+    "/LICENSE-MIT",
+]
 
 [[bin]]
 name = "scrub"
