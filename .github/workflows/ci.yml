@@ -27,6 +27,19 @@ jobs:
       - name: Pre-commit checks
         run: make -j precommit
 
+      # Published crates are immutable, so keep them to the allowlist in Cargo.toml.
+      - name: Check crate contents
+        run: |
+          # A separate assignment so a cargo failure fails the step instead of
+          # producing an empty list that would pass.
+          files=$(cargo package --list --locked)
+          unexpected=$(echo "$files" | grep -vE '^(src/.*\.rs|Cargo\.(toml|toml\.orig|lock)|\.cargo_vcs_info\.json|README\.md|CHANGELOG\.md|LICENSE-(APACHE|MIT))$' || true)
+          if [ -n "$unexpected" ]; then
+            echo "::error::Unexpected files in the published crate:"
+            echo "$unexpected"
+            exit 1
+          fi
+
   test-no-default-features:
     name: Test (--no-default-features)
     runs-on: ubuntu-latest
