@@ -4,6 +4,39 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.8.0] - 2026-11-01
+
+### Added
+
+- **`ScrubOptions` profiles.** `ScrubOptions::corpus()` is the same as the
+  default, the strictest profile. `ScrubOptions::upload()` keeps player names,
+  deck names, deck IDs and course IDs.
+- **`ScrubOptions::keep_deck_and_course_ids`.** Defaults to `false`: deck IDs
+  and event course IDs are replaced by stand-ins numbered per log, so the output
+  depends only on the input, a second scrub changes nothing, and no value links
+  two logs. Deck-name labels follow the stand-in.
+
+### Changed
+
+- **BREAKING:** `ScrubOptions` is now `#[non_exhaustive]`, so it can no longer
+  be built with a struct literal outside this crate. Start from a profile or
+  `ScrubOptions::default()` and set fields on it.
+- **BREAKING:** `scrub_raw_log` and the default profile now replace deck IDs
+  and course IDs. Callers that need the real values opt in with
+  `ScrubOptions::upload()` or the keep flag.
+
+### Fixed
+
+- **Scrubber: account ID headers.** The ID is now redacted in both header
+  orderings, including mixed-case and suffixed IDs, and a 26-character token
+  with a letter and a digit is redacted wherever it appears.
+- **Scrubber: deck names under `DeckIdInternal`** are now pseudonymized.
+- **Scrubber: home paths.** Path patterns no longer cross a quote or a line
+  end. They now cover lowercase drive letters, Wine-style `Z:\home\`, escaped
+  separators and a bare home directory with no trailing separator. Lowercase
+  `/users/` needs a drive letter, so URLs are left alone.
+- **Test fixtures and doc examples** use made-up values.
+
 ## [0.7.3] - 2026-09-26
 
 Maintenance release: no parser or public-API changes. Published to pin a

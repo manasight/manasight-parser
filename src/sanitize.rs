@@ -8,6 +8,7 @@
 //! Regex patterns are compiled once via [`std::sync::LazyLock`] and reused
 //! across all calls.
 
+use std::collections::HashMap;
 use std::sync::LazyLock;
 
 use regex::Regex;
@@ -28,43 +29,164 @@ struct ScrubPattern {
     is_deck_name: bool,
 }
 
-/// Options controlling which classes of data are redacted by [`scrub_raw_log_with`].
+/// Which identifying classes survive [`scrub_raw_log_with`].
 ///
-/// All fields default to `false`, which reproduces the same behavior as
-/// [`scrub_raw_log`] (maximum redaction).
+/// [`ScrubOptions::default`] is the strictest profile and every class is
+/// removed. Outside this crate the struct cannot be built field by field, so a
+/// class added later is redacted for every caller until it opts in.
+///
+/// Account IDs, tokens, session IDs, paths, emails, IPs and hardware names have
+/// no keep flag.
 ///
 /// # Examples
 ///
 /// ```
 /// use manasight_parser::{ScrubOptions, scrub_raw_log_with};
 ///
-/// // Preserve player names while still redacting everything else.
-/// let opts = ScrubOptions { keep_player_names: true, keep_deck_names: false };
 /// let raw = r#"Token: secret123 and "screenName": "Player#999""#;
-/// let clean = scrub_raw_log_with(raw, &opts);
+/// let clean = scrub_raw_log_with(raw, &ScrubOptions::upload());
 /// assert!(clean.contains("Token: <redacted>"));
 /// assert!(clean.contains(r#""Player#999""#));
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub struct ScrubOptions {
-    /// When `true`, the `screenName` and `playerName` JSON fields are **not**
-    /// redacted. All other patterns (tokens, bearer tokens, paths, `clientId`,
-    /// `userId`, `sessionId`, email addresses, IP addresses, hardware
-    /// fingerprints) still apply.
-    ///
-    /// Use this when the upload destination should retain both players' handles
-    /// for replay or analytics attribution (AC-OPP-1).
+    /// Keep the `screenName` and `playerName` values.
     pub keep_player_names: bool,
-    /// When `true`, free-text deck `Name` fields are **not** pseudonymized —
-    /// they pass through untouched. All other patterns (tokens, paths, player
-    /// names, session identifiers, hardware fingerprints) still apply.
-    ///
-    /// By default (`false`), deck names are pseudonymized to a deterministic
-    /// `Deck-<first 8 hex of DeckId>` label: `DeckId`/`Format`/`Attributes`/
-    /// card-list structure is preserved, and the same `DeckId` always maps to
-    /// the same label, so rename chains and cross-carrier occurrences of one
-    /// deck stay correlatable after scrubbing.
+    /// Keep free-text deck `Name` values rather than a `Deck-<8hex>` label.
     pub keep_deck_names: bool,
+    /// Keep real deck IDs and event course IDs rather than per-log ordinal
+    /// stand-ins.
+    pub keep_deck_and_course_ids: bool,
+}
+
+impl ScrubOptions {
+    /// The strictest profile, for anything that may become public.
+    #[must_use]
+    pub fn corpus() -> Self {
+        Self::default()
+    }
+
+    /// The profile for logs sent to a user's own Manasight account: keeps
+    /// player handles, deck names, deck IDs and course IDs.
+    #[must_use]
+    pub fn upload() -> Self {
+        Self {
+            keep_player_names: true,
+            keep_deck_names: true,
+            keep_deck_and_course_ids: true,
+        }
+    }
+}
+
+/// Matches a token of the account ID's length and alphabet, anywhere.
+static ACCOUNT_ID_SHAPE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\b[A-Z0-9]{26}\b").unwrap_or_else(|_| unreachable!()));
+
+/// Redact an account ID in a position no header pattern knows about. Requires
+/// both a letter and a digit, so a long constant name or a JSON number stays.
+fn redact_account_id_shape(input: &str) -> String {
+    ACCOUNT_ID_SHAPE
+        .replace_all(input, |caps: &regex::Captures<'_>| {
+            let text = &caps[0];
+            let has_digit = text.bytes().any(|b| b.is_ascii_digit());
+            let has_letter = text.bytes().any(|b| b.is_ascii_uppercase());
+            if has_digit && has_letter {
+                "<redacted>".to_owned()
+            } else {
+                text.to_owned()
+            }
+        })
+        .into_owned()
+}
+
+/// Finds deck IDs: a value under a deck-ID key at any escaping level, a UUID
+/// used as a JSON object key, or the UUID in the pet diagnostic line.
+static DECK_ID_ANCHOR: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(concat!(
+        r#"(?i)\\*"(?P<key>[a-z_]*deck[a-z_]*id[a-z_]*)\\*"\s*:\s*\\*"(?P<val>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"#,
+        r#"|\\*"(?P<map>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\\*"\s*:"#,
+        r"|find pet for deck [^\r\n]* \((?P<pet>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\)",
+    ))
+    .unwrap_or_else(|_| unreachable!())
+});
+
+/// Matches any UUID, in any case.
+static ANY_UUID: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+        .unwrap_or_else(|_| unreachable!())
+});
+
+/// Finds event course IDs: a UUID under a course-ID key at any escaping level.
+/// Other values under such a key are game constants, not identifiers.
+static COURSE_ID_ANCHOR: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r#"(?i)\\*"(?P<key>[a-z_]*course[a-z_]*id[a-z_]*)\\*"\s*:\s*\\*"(?P<val>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"#,
+    )
+    .unwrap_or_else(|_| unreachable!())
+});
+
+/// Tail shared by every deck stand-in; a real v4 UUID cannot plausibly carry it.
+const DECK_STAND_IN_TAIL: &str = "-0000-4000-8000-000000000000";
+
+/// Tail shared by every course stand-in, distinct from the deck tail.
+const COURSE_STAND_IN_TAIL: &str = "-0000-4000-9000-000000000000";
+
+/// The all-zero UUID the client writes for "no deck"; it identifies nothing.
+const NO_DECK_ID: &str = "00000000-0000-0000-0000-000000000000";
+
+/// Replace every ID found by `anchor` in `input` with a stand-in numbered by
+/// first anchor and ending in `tail`.
+///
+/// The output depends only on the input text, and numbering restarts in each
+/// log, so the same input always gives the same output and no value links two
+/// logs. Stand-ins of either kind are left alone and their numbers are not
+/// reused, so re-running on scrubbed text changes nothing.
+fn replace_ids(input: &str, anchor: &Regex, tail: &str) -> String {
+    let mut next = ANY_UUID
+        .find_iter(input)
+        .filter_map(|m| {
+            let text = m.as_str();
+            text.ends_with(tail)
+                .then(|| u32::from_str_radix(&text[..8], 16).ok())
+                .flatten()
+        })
+        .max()
+        .unwrap_or(0);
+    let mut ids: HashMap<String, String> = HashMap::new();
+    for caps in anchor.captures_iter(input) {
+        if caps
+            .name("key")
+            .is_some_and(|k| k.as_str().to_ascii_lowercase().contains("folder"))
+        {
+            continue;
+        }
+        let Some(found) = caps
+            .name("val")
+            .or_else(|| caps.name("map"))
+            .or_else(|| caps.name("pet"))
+        else {
+            continue;
+        };
+        let id = found.as_str().to_ascii_lowercase();
+        if id == NO_DECK_ID
+            || id.ends_with(DECK_STAND_IN_TAIL)
+            || id.ends_with(COURSE_STAND_IN_TAIL)
+            || ids.contains_key(&id)
+        {
+            continue;
+        }
+        next = next.saturating_add(1);
+        ids.insert(id, format!("{next:08x}{tail}"));
+    }
+    ANY_UUID
+        .replace_all(input, |caps: &regex::Captures<'_>| {
+            let text = &caps[0];
+            ids.get(&text.to_ascii_lowercase())
+                .cloned()
+                .unwrap_or_else(|| text.to_owned())
+        })
+        .into_owned()
 }
 
 /// Compiled privacy-scrubbing patterns, initialized once on first use.
@@ -73,11 +195,11 @@ pub struct ScrubOptions {
 /// - Auth tokens (`Token: <value>`)
 /// - Bearer tokens (`Bearer <value>`, word-boundary guarded to avoid game
 ///   cosmetic false positives like `Title_StandardBearer`)
-/// - `WotC` account IDs in log prefixes (`Match to <id>:`)
+/// - `WotC` account IDs in log prefixes (`Match to <id>:`, `<id> to Match:`)
 /// - JSON `"clientId"` and `"userId"` values
-/// - Windows user paths (`C:\Users\<username>\`)
-/// - macOS user paths (`/Users/<username>/`)
-/// - Linux user paths (`/home/<username>/`)
+/// - Windows user paths (`C:\Users\<username>\`), macOS user paths
+///   (`/Users/<username>/`) and Linux user paths (`/home/<username>/`), with or
+///   without the trailing separator and in JSON-escaped form
 /// - Session identifiers (JSON `"token"` and `"sessionId"` values)
 /// - Display names (JSON `"screenName"` and `"playerName"` values)
 /// - Deck names (free-text JSON `"Name"` values adjacent to a `"DeckId"`,
@@ -113,10 +235,16 @@ static SCRUB_PATTERNS: LazyLock<Vec<ScrubPattern>> = LazyLock::new(|| {
         (r"\bBearer\s+\S+", "Bearer <redacted>", false, false),
         // WotC account IDs in log line prefixes.
         // Arena logs game messages prefixed with the player's account ID:
-        //   "Match to CR4QJUQPDBCVVMGCGNZLWGDFJE: AuthenticateResponse"
+        //   "Match to AAAABBBBCCCCDDDDEEEEFFFFGG: AuthenticateResponse"
         (
-            r"Match to [A-Z0-9_]+:",
+            r"Match to (?:[A-Z0-9_]+|[A-Za-z0-9_]{20,}):",
             "Match to <redacted>:",
+            false,
+            false,
+        ),
+        (
+            r"\b(?:[A-Z0-9_]{8,}|[A-Za-z0-9_]{20,}) to Match:",
+            "<redacted> to Match:",
             false,
             false,
         ),
@@ -134,12 +262,36 @@ static SCRUB_PATTERNS: LazyLock<Vec<ScrubPattern>> = LazyLock::new(|| {
             false,
             false,
         ),
-        // Windows paths: C:\Users\<username>\ (any drive letter)
-        (r"[A-Z]:\\Users\\[^\\]+\\", r"<user-path>\", false, false),
+        // Home paths. The username ends at a separator, a quote or the line
+        // end, so a bare home directory with no trailing separator is covered.
+        // Windows paths, any drive letter and any case, Wine's Z:\home included:
+        // C:\Users\<username>\
+        (
+            r#"(?i)[a-z]:\\+(?:users|home)\\+[^\\"\r\n]+(\\+)?"#,
+            "<user-path>${1}",
+            false,
+            false,
+        ),
         // macOS paths: /Users/<username>/
-        (r"/Users/[^/]+/", "<user-path>/", false, false),
+        (
+            r#"\\?/Users\\?/[^/\\"\r\n]+(\\?/)?"#,
+            "<user-path>${1}",
+            false,
+            false,
+        ),
+        (
+            r#"([A-Za-z]:)\\?/users\\?/[^/\\"\r\n]+(\\?/)?"#,
+            "${1}<user-path>${2}",
+            false,
+            false,
+        ),
         // Linux paths: /home/<username>/
-        (r"/home/[^/]+/", "<user-path>/", false, false),
+        (
+            r#"\\?/home\\?/[^/\\"\r\n]+(\\?/)?"#,
+            "<user-path>${1}",
+            false,
+            false,
+        ),
         // Session identifiers: JSON "token" values from authenticateResponse
         // and similar auth payloads.
         (
@@ -185,7 +337,7 @@ static SCRUB_PATTERNS: LazyLock<Vec<ScrubPattern>> = LazyLock::new(|| {
         // non-scalar drift. is_deck_name = true — skipped when
         // keep_deck_names is set.
         (
-            r#"(\\"DeckId\\":\s*\\")([0-9a-fA-F]{8})([0-9a-fA-F-]*)(\\",\s*(?:\\"[A-Za-z0-9_]+\\":(?:\\"[^"\\]*\\"|-?[0-9]+|true|false|null),\s*)*\\"Name\\":\s*\\")((?:[^"\\]|\\\\.|\\"[^,}\]"])*)"#,
+            r#"(\\"DeckId(?:Internal)?\\":\s*\\")([0-9a-fA-F]{8})([0-9a-fA-F-]*)(\\",\s*(?:\\"[A-Za-z0-9_]+\\":(?:\\"[^"\\]*\\"|-?[0-9]+|true|false|null),\s*)*\\"Name\\":\s*\\")((?:[^"\\]|\\\\.|\\"[^,}\]"])*)"#,
             r"${1}${2}${3}${4}Deck-${2}",
             false,
             true,
@@ -196,7 +348,7 @@ static SCRUB_PATTERNS: LazyLock<Vec<ScrubPattern>> = LazyLock::new(|| {
         // the escaped-context pattern above, without the backslash prefix.
         // is_deck_name = true — skipped when keep_deck_names is set.
         (
-            r#"("DeckId":\s*")([0-9a-fA-F]{8})([0-9a-fA-F-]*)(",\s*(?:"[A-Za-z0-9_]+":(?:"[^"\\]*"|-?[0-9]+|true|false|null),\s*)*"Name":\s*")((?:[^"\\]|\\.)*)"#,
+            r#"("DeckId(?:Internal)?":\s*")([0-9a-fA-F]{8})([0-9a-fA-F-]*)(",\s*(?:"[A-Za-z0-9_]+":(?:"[^"\\]*"|-?[0-9]+|true|false|null),\s*)*"Name":\s*")((?:[^"\\]|\\.)*)"#,
             r"${1}${2}${3}${4}Deck-${2}",
             false,
             true,
@@ -446,10 +598,10 @@ pub fn scrub_raw_log(input: &str) -> String {
 /// use manasight_parser::{ScrubOptions, scrub_raw_log_with};
 ///
 /// // Keep player handles for server-side replay attribution.
-/// let opts = ScrubOptions { keep_player_names: true, keep_deck_names: false };
-/// let raw = r#""screenName": "TimCahill#1234", "token": "secret""#;
+/// let opts = ScrubOptions::upload();
+/// let raw = r#""screenName": "ExamplePlayer#1234", "token": "secret""#;
 /// let clean = scrub_raw_log_with(raw, &opts);
-/// assert!(clean.contains("TimCahill#1234"));
+/// assert!(clean.contains("ExamplePlayer#1234"));
 /// assert!(clean.contains(r#""token": "<redacted>""#));
 /// ```
 pub fn scrub_raw_log_with(input: &str, opts: &ScrubOptions) -> String {
@@ -458,6 +610,10 @@ pub fn scrub_raw_log_with(input: &str, opts: &ScrubOptions) -> String {
     }
 
     let mut result = input.to_owned();
+    if !opts.keep_deck_and_course_ids {
+        result = replace_ids(&result, &DECK_ID_ANCHOR, DECK_STAND_IN_TAIL);
+        result = replace_ids(&result, &COURSE_ID_ANCHOR, COURSE_STAND_IN_TAIL);
+    }
     for pattern in SCRUB_PATTERNS.iter() {
         if opts.keep_player_names && pattern.is_player_name {
             continue;
@@ -470,7 +626,7 @@ pub fn scrub_raw_log_with(input: &str, opts: &ScrubOptions) -> String {
             .replace_all(&result, pattern.replacement)
             .into_owned();
     }
-    result
+    redact_account_id_shape(&result)
 }
 
 // ---------------------------------------------------------------------------
@@ -667,10 +823,10 @@ mod tests {
 
     #[test]
     fn test_scrub_raw_log_match_to_account_id_redacted() {
-        let input = "Match to CR4QJUQPDBCVVMGCGNZLWGDFJE: AuthenticateResponse";
+        let input = "Match to AAAABBBBCCCCDDDDEEEEFFFFGG: AuthenticateResponse";
         let result = scrub_raw_log(input);
         assert_eq!(result, "Match to <redacted>: AuthenticateResponse");
-        assert!(!result.contains("CR4QJUQPDBCVVMGCGNZLWGDFJE"));
+        assert!(!result.contains("AAAABBBBCCCCDDDDEEEEFFFFGG"));
     }
 
     #[test]
@@ -683,20 +839,20 @@ mod tests {
 
     #[test]
     fn test_scrub_raw_log_match_to_with_log_timestamp_prefix() {
-        let input = "[UnityCrossThreadLogger]3/22/2026 12:00:31 PM: Match to CR4QJUQPDBCVVMGCGNZLWGDFJE: AuthenticateResponse";
+        let input = "[UnityCrossThreadLogger]3/22/2026 12:00:31 PM: Match to AAAABBBBCCCCDDDDEEEEFFFFGG: AuthenticateResponse";
         let result = scrub_raw_log(input);
         assert!(result.contains("Match to <redacted>:"));
-        assert!(!result.contains("CR4QJUQPDBCVVMGCGNZLWGDFJE"));
+        assert!(!result.contains("AAAABBBBCCCCDDDDEEEEFFFFGG"));
     }
 
     // --- JSON clientId pattern ---
 
     #[test]
     fn test_scrub_raw_log_json_client_id_redacted() {
-        let input = r#""clientId": "CR4QJUQPDBCVVMGCGNZLWGDFJE""#;
+        let input = r#""clientId": "AAAABBBBCCCCDDDDEEEEFFFFGG""#;
         let result = scrub_raw_log(input);
         assert_eq!(result, r#""clientId": "<redacted>""#);
-        assert!(!result.contains("CR4QJUQPDBCVVMGCGNZLWGDFJE"));
+        assert!(!result.contains("AAAABBBBCCCCDDDDEEEEFFFFGG"));
     }
 
     #[test]
@@ -711,10 +867,10 @@ mod tests {
 
     #[test]
     fn test_scrub_raw_log_json_user_id_redacted() {
-        let input = r#""userId": "CR4QJUQPDBCVVMGCGNZLWGDFJE""#;
+        let input = r#""userId": "AAAABBBBCCCCDDDDEEEEFFFFGG""#;
         let result = scrub_raw_log(input);
         assert_eq!(result, r#""userId": "<redacted>""#);
-        assert!(!result.contains("CR4QJUQPDBCVVMGCGNZLWGDFJE"));
+        assert!(!result.contains("AAAABBBBCCCCDDDDEEEEFFFFGG"));
     }
 
     #[test]
@@ -754,10 +910,10 @@ mod tests {
 
     #[test]
     fn test_scrub_raw_log_screen_name_no_space_after_colon() {
-        let input = r#""screenName":"Truffie#12345""#;
+        let input = r#""screenName":"Exampler#12345""#;
         let result = scrub_raw_log(input);
         assert!(result.contains(r#""screenName": "<redacted>""#));
-        assert!(!result.contains("Truffie"));
+        assert!(!result.contains("Exampler"));
     }
 
     // --- playerName pattern ---
@@ -947,7 +1103,7 @@ mod tests {
         // independently -- scrubbing must not normalize CRLF to LF or vice
         // versa on either matched line.
         let input = "0: Apple M1 Pro (high power)\nCan't find pet for deck My Cool Deck (1a2b3c4d-5e6f-7890-abcd-ef1234567890)\r\n";
-        let result = scrub_raw_log(input);
+        let result = scrub_keep_ids(input);
         assert_eq!(
             result,
             "<N>: <redacted>\nCan't find pet for deck Deck-1a2b3c4d (1a2b3c4d-5e6f-7890-abcd-ef1234567890)\r\n"
@@ -1161,6 +1317,7 @@ mod tests {
         let opts = ScrubOptions {
             keep_player_names: false,
             keep_deck_names: false,
+            keep_deck_and_course_ids: false,
         };
         let input = r#""screenName": "Alice#123", "playerName": "Bob#456""#;
         let result = scrub_raw_log_with(input, &opts);
@@ -1175,6 +1332,7 @@ mod tests {
         let opts = ScrubOptions {
             keep_player_names: true,
             keep_deck_names: false,
+            keep_deck_and_course_ids: false,
         };
         let input = r#""screenName": "Alice#123", "playerName": "Bob#456""#;
         let result = scrub_raw_log_with(input, &opts);
@@ -1187,6 +1345,7 @@ mod tests {
         let opts = ScrubOptions {
             keep_player_names: true,
             keep_deck_names: false,
+            keep_deck_and_course_ids: false,
         };
         let input = r#"Token: secret123 and "screenName": "Alice#123""#;
         let result = scrub_raw_log_with(input, &opts);
@@ -1200,6 +1359,7 @@ mod tests {
         let opts = ScrubOptions {
             keep_player_names: true,
             keep_deck_names: false,
+            keep_deck_and_course_ids: false,
         };
         let input = r#"{"sessionId": "sess_xyz789", "screenName": "Alice#123"}"#;
         let result = scrub_raw_log_with(input, &opts);
@@ -1213,6 +1373,7 @@ mod tests {
         let opts = ScrubOptions {
             keep_player_names: true,
             keep_deck_names: false,
+            keep_deck_and_course_ids: false,
         };
         let input = r#""playerName": "Alice#123" at /home/alice/.config/app"#;
         let result = scrub_raw_log_with(input, &opts);
@@ -1226,11 +1387,12 @@ mod tests {
         let opts = ScrubOptions {
             keep_player_names: true,
             keep_deck_names: false,
+            keep_deck_and_course_ids: false,
         };
-        let input = r#"{"clientId": "CR4QJUQP", "screenName": "Alice#123"}"#;
+        let input = r#"{"clientId": "AAAABBBB", "screenName": "Alice#123"}"#;
         let result = scrub_raw_log_with(input, &opts);
         assert!(result.contains(r#""clientId": "<redacted>""#));
-        assert!(!result.contains("CR4QJUQP"));
+        assert!(!result.contains("AAAABBBB"));
         assert!(result.contains("Alice#123"));
     }
 
@@ -1239,6 +1401,7 @@ mod tests {
         let opts = ScrubOptions {
             keep_player_names: true,
             keep_deck_names: false,
+            keep_deck_and_course_ids: false,
         };
         let input = "\"playerName\": \"Alice#123\"\n  Renderer: NVIDIA GeForce RTX 3080";
         let result = scrub_raw_log_with(input, &opts);
@@ -1363,7 +1526,7 @@ mod tests {
     #[test]
     fn test_scrub_raw_log_ipv6_compressed_redacted() {
         let input = "Remote: 2001:db8::1";
-        let result = scrub_raw_log(input);
+        let result = scrub_keep_ids(input);
         assert!(!result.contains("2001:db8::1"));
         assert!(result.contains("<ip-redacted>"));
     }
@@ -1380,7 +1543,7 @@ mod tests {
         // escapes the JSON-in-string, and inserts a "Mana" scalar field
         // between DeckId and Name.
         let input = r#"==> DeckUpsertDeckV3 {"id":5,"request":"{\"DeckId\":\"1a2b3c4d-5e6f-7890-abcd-ef1234567890\",\"Mana\":\"\",\"Name\":\"My Cool Deck\"}"}"#;
-        let result = scrub_raw_log(input);
+        let result = scrub_keep_ids(input);
         assert!(!result.contains("My Cool Deck"));
         assert!(result.contains(r#"\"DeckId\":\"1a2b3c4d-5e6f-7890-abcd-ef1234567890\""#));
         assert!(result.contains(r#"\"Name\":\"Deck-1a2b3c4d"#));
@@ -1391,7 +1554,7 @@ mod tests {
         // Simulates a <== DeckUpsertDeckV3 response echo (plain JSON,
         // DeckId/Name directly adjacent).
         let input = r#"<== DeckUpsertDeckV3 {"DeckId":"1a2b3c4d-5e6f-7890-abcd-ef1234567890","Name":"My Cool Deck","Format":"Standard"}"#;
-        let result = scrub_raw_log(input);
+        let result = scrub_keep_ids(input);
         assert!(!result.contains("My Cool Deck"));
         assert!(result.contains(r#""DeckId":"1a2b3c4d-5e6f-7890-abcd-ef1234567890""#));
         assert!(result.contains(r#""Name":"Deck-1a2b3c4d""#));
@@ -1403,7 +1566,7 @@ mod tests {
         // Simulates a <== StartHook account-bootstrap deck roster entry,
         // with an intervening numeric scalar field between DeckId and Name.
         let input = r#"{"Decks":[{"DeckId":"1a2b3c4d-5e6f-7890-abcd-ef1234567890","Version":1,"Name":"Test Deck","Format":"Standard"}]}"#;
-        let result = scrub_raw_log(input);
+        let result = scrub_keep_ids(input);
         assert!(!result.contains("Test Deck"));
         assert!(result.contains(r#""Name":"Deck-1a2b3c4d""#));
         assert!(result.contains(r#""Version":1"#));
@@ -1413,7 +1576,7 @@ mod tests {
     fn test_scrub_raw_log_deck_name_course_summary_shape_redacted() {
         // Simulates a <== EventGetCoursesV2 Courses[].CourseDeckSummary entry.
         let input = r#"{"Courses":[{"CourseId":"c1","CourseDeckSummary":{"DeckId":"1a2b3c4d-5e6f-7890-abcd-ef1234567890","Name":"My Cool Deck","Format":"Standard"}}]}"#;
-        let result = scrub_raw_log(input);
+        let result = scrub_keep_ids(input);
         assert!(!result.contains("My Cool Deck"));
         assert!(result.contains(r#""Name":"Deck-1a2b3c4d""#));
         assert!(result.contains(r#""CourseId":"c1""#));
@@ -1425,7 +1588,7 @@ mod tests {
         // names are WotC localization keys, but are scrubbed anyway by the
         // uniform structural rule.
         let input = r#"{"PreconDecks":[{"DeckId":"1a2b3c4d-5e6f-7890-abcd-ef1234567890","Name":"?=?Loc/Decks/Precon/GreenWhite","Format":"Standard"}]}"#;
-        let result = scrub_raw_log(input);
+        let result = scrub_keep_ids(input);
         assert!(!result.contains("Loc/Decks/Precon"));
         assert!(result.contains(r#""Name":"Deck-1a2b3c4d""#));
     }
@@ -1433,7 +1596,7 @@ mod tests {
     #[test]
     fn test_scrub_raw_log_deck_name_pet_diagnostic_line_redacted() {
         let input = "Can't find pet for deck My Cool Deck (1a2b3c4d-5e6f-7890-abcd-ef1234567890)";
-        let result = scrub_raw_log(input);
+        let result = scrub_keep_ids(input);
         assert_eq!(
             result,
             "Can't find pet for deck Deck-1a2b3c4d (1a2b3c4d-5e6f-7890-abcd-ef1234567890)"
@@ -1445,7 +1608,7 @@ mod tests {
         // Unstripped archive logs prefix each line with a "[N] " frame index.
         let input =
             "[42] Can't find pet for deck My Cool Deck (1a2b3c4d-5e6f-7890-abcd-ef1234567890)";
-        let result = scrub_raw_log(input);
+        let result = scrub_keep_ids(input);
         assert_eq!(
             result,
             "[42] Can't find pet for deck Deck-1a2b3c4d (1a2b3c4d-5e6f-7890-abcd-ef1234567890)"
@@ -1459,7 +1622,7 @@ mod tests {
         // `\r` must survive in the output byte-for-byte (not be normalized
         // to LF-only).
         let input = "Line 1\r\nCan't find pet for deck My Cool Deck (1a2b3c4d-5e6f-7890-abcd-ef1234567890)\r\nLine 3\r\n";
-        let result = scrub_raw_log(input);
+        let result = scrub_keep_ids(input);
         assert_eq!(
             result,
             "Line 1\r\nCan't find pet for deck Deck-1a2b3c4d (1a2b3c4d-5e6f-7890-abcd-ef1234567890)\r\nLine 3\r\n"
@@ -1471,6 +1634,7 @@ mod tests {
         let opts = ScrubOptions {
             keep_player_names: false,
             keep_deck_names: true,
+            keep_deck_and_course_ids: true,
         };
         let input =
             "Can't find pet for deck My Cool Deck (1a2b3c4d-5e6f-7890-abcd-ef1234567890)\r\n";
@@ -1483,6 +1647,7 @@ mod tests {
         let opts = ScrubOptions {
             keep_player_names: false,
             keep_deck_names: true,
+            keep_deck_and_course_ids: true,
         };
         let input = r#"{"DeckId":"1a2b3c4d-5e6f-7890-abcd-ef1234567890","Name":"My Cool Deck","Format":"Standard"}"#;
         let result = scrub_raw_log_with(input, &opts);
@@ -1494,6 +1659,7 @@ mod tests {
         let opts = ScrubOptions {
             keep_player_names: false,
             keep_deck_names: true,
+            keep_deck_and_course_ids: true,
         };
         let input = r#"Token: secret123 and {"DeckId":"1a2b3c4d-5e6f-7890-abcd-ef1234567890","Name":"My Cool Deck"}"#;
         let result = scrub_raw_log_with(input, &opts);
@@ -1508,7 +1674,7 @@ mod tests {
         // scrubbing unchanged; only the Name value is replaced, with the
         // label derived from the first 8 hex of the adjacent DeckId.
         let input = r#"{"DeckId":"1a2b3c4d-5e6f-7890-abcd-ef1234567890","Name":"My Cool Deck","Format":"Standard","Attributes":[{"name":"Version","value":"1"}],"MainDeck":[{"cardId":1,"quantity":4}]}"#;
-        let result = scrub_raw_log(input);
+        let result = scrub_keep_ids(input);
         assert!(result.contains(r#""DeckId":"1a2b3c4d-5e6f-7890-abcd-ef1234567890""#));
         assert!(result.contains(r#""Format":"Standard""#));
         assert!(result.contains(r#""Attributes":[{"name":"Version","value":"1"}]"#));
@@ -1523,8 +1689,8 @@ mod tests {
         // pseudonymize to the same label.
         let plain = r#"{"DeckId":"1a2b3c4d-5e6f-7890-abcd-ef1234567890","Name":"My Cool Deck"}"#;
         let escaped = r#"{"request":"{\"DeckId\":\"1a2b3c4d-5e6f-7890-abcd-ef1234567890\",\"Name\":\"My Cool Deck\"}"}"#;
-        let plain_result = scrub_raw_log(plain);
-        let escaped_result = scrub_raw_log(escaped);
+        let plain_result = scrub_keep_ids(plain);
+        let escaped_result = scrub_keep_ids(escaped);
         assert!(plain_result.contains(r#""Name":"Deck-1a2b3c4d""#));
         assert!(escaped_result.contains(r#"\"Name\":\"Deck-1a2b3c4d"#));
     }
@@ -1538,7 +1704,7 @@ mod tests {
             "\n",
             r#"{"DeckId":"1a2b3c4d-5e6f-7890-abcd-ef1234567890","Name":"New Name"}"#,
         );
-        let result = scrub_raw_log(input);
+        let result = scrub_keep_ids(input);
         assert_eq!(result.matches(r#""Name":"Deck-1a2b3c4d""#).count(), 2);
         assert!(!result.contains("Old Name"));
         assert!(!result.contains("New Name"));
@@ -1548,7 +1714,7 @@ mod tests {
     fn test_scrub_raw_log_deck_name_embedded_escaped_quote_no_fragment_survives() {
         // Plain-context name value with embedded escaped quotes.
         let input = r#""DeckId":"1a2b3c4d-5e6f-7890-abcd-ef1234567890","Name":"My \"Cool\" Deck""#;
-        let result = scrub_raw_log(input);
+        let result = scrub_keep_ids(input);
         assert!(!result.contains("My"));
         assert!(!result.contains("Cool"));
         assert!(result.contains(r#""Name":"Deck-1a2b3c4d""#));
@@ -1561,7 +1727,7 @@ mod tests {
         // No fragment of the name must survive.
         let input =
             r#"{\"DeckId\":\"1a2b3c4d-5e6f-7890-abcd-ef1234567890\",\"Name\":\"Old\" New Deck\"}"#;
-        let result = scrub_raw_log(input);
+        let result = scrub_keep_ids(input);
         assert!(!result.contains("Old"));
         assert!(!result.contains("New Deck"));
         assert!(result.contains(r#"\"Name\":\"Deck-1a2b3c4d"#));
@@ -1579,12 +1745,444 @@ mod tests {
     #[test]
     fn test_scrub_raw_log_deck_name_idempotent() {
         let input = r#"{"DeckId":"1a2b3c4d-5e6f-7890-abcd-ef1234567890","Name":"My Cool Deck"}"#;
-        let first_pass = scrub_raw_log(input);
-        let second_pass = scrub_raw_log(&first_pass);
+        let first_pass = scrub_keep_ids(input);
+        let second_pass = scrub_keep_ids(&first_pass);
         assert_eq!(
             first_pass, second_pass,
             "Deck-name scrubbing should be idempotent"
         );
+    }
+
+    // --- Reverse header, account-ID shape, deck-name and path siblings ---
+
+    #[test]
+    fn test_scrub_raw_log_reverse_header_account_id_redacted() {
+        let input = "[UnityCrossThreadLogger]3/22/2026 12:00:31 PM: AAAABBBBCCCCDDDDEEEEFFFFGG to Match: ClientToGreuimessage\r\n";
+        let result = scrub_raw_log(input);
+        assert_eq!(
+            result,
+            "[UnityCrossThreadLogger]3/22/2026 12:00:31 PM: <redacted> to Match: ClientToGreuimessage\r\n"
+        );
+        assert_eq!(scrub_raw_log(&result), result, "idempotent");
+    }
+
+    #[test]
+    fn test_scrub_raw_log_reverse_header_short_id_redacted() {
+        let result = scrub_raw_log("SHORT_ID1 to Match: ClientToGremessage");
+        assert_eq!(result, "<redacted> to Match: ClientToGremessage");
+    }
+
+    #[test]
+    fn test_scrub_raw_log_account_id_shape_in_unknown_position_redacted() {
+        let result = scrub_raw_log("opaque=AAAABBBB2222DDDDEEEEFFFFGG end");
+        assert_eq!(result, "opaque=<redacted> end");
+    }
+
+    #[test]
+    fn test_scrub_raw_log_with_keep_flags_still_redacts_reverse_header() {
+        let opts = ScrubOptions {
+            keep_player_names: true,
+            keep_deck_names: true,
+            keep_deck_and_course_ids: false,
+        };
+        let result = scrub_raw_log_with("AAAABBBBCCCCDDDDEEEEFFFFGG to Match: X", &opts);
+        assert_eq!(result, "<redacted> to Match: X");
+    }
+
+    #[test]
+    fn test_scrub_raw_log_deck_id_internal_name_pseudonymized() {
+        let input = r#"{"DecksInternal":[{"DeckIdInternal":"1a2b3c4d-5e6f-7890-abcd-ef1234567890","Name":"My Cool Deck","Attributes":[]}]}"#;
+        let result = scrub_keep_ids(input);
+        assert!(!result.contains("My Cool Deck"));
+        assert!(result.contains(r#""Name":"Deck-1a2b3c4d""#));
+    }
+
+    #[test]
+    fn test_scrub_raw_log_escaped_deck_id_internal_name_pseudonymized() {
+        let input = r#"{"request":"{\"DeckIdInternal\":\"1a2b3c4d-5e6f-7890-abcd-ef1234567890\",\"Mana\":\"\",\"Name\":\"My Cool Deck\"}"}"#;
+        let result = scrub_keep_ids(input);
+        assert!(!result.contains("My Cool Deck"));
+        assert!(result.contains(r#"\"Name\":\"Deck-1a2b3c4d"#));
+    }
+
+    #[test]
+    fn test_scrub_raw_log_with_keep_deck_names_preserves_deck_id_internal_name() {
+        let opts = ScrubOptions {
+            keep_player_names: false,
+            keep_deck_names: true,
+            keep_deck_and_course_ids: true,
+        };
+        let input =
+            r#"{"DeckIdInternal":"1a2b3c4d-5e6f-7890-abcd-ef1234567890","Name":"My Cool Deck"}"#;
+        assert_eq!(scrub_raw_log_with(input, &opts), input);
+    }
+
+    #[test]
+    fn test_scrub_raw_log_escaped_windows_path_redacted_separator_preserved() {
+        let input = r#"{"p":"C:\\Users\\jane doe\\AppData\\x"}"#;
+        assert_eq!(scrub_raw_log(input), r#"{"p":"<user-path>\\AppData\\x"}"#);
+    }
+
+    #[test]
+    fn test_scrub_raw_log_lowercase_drive_windows_path_redacted() {
+        assert_eq!(scrub_raw_log(r"c:\users\jane\x"), r"<user-path>\x");
+    }
+
+    #[test]
+    fn test_scrub_raw_log_wine_home_path_redacted() {
+        assert_eq!(scrub_raw_log(r"Z:\home\jane\x"), r"<user-path>\x");
+    }
+
+    #[test]
+    fn test_scrub_raw_log_json_escaped_forward_slash_paths_redacted() {
+        assert_eq!(scrub_raw_log(r"\/Users\/jane\/x"), r"<user-path>\/x");
+        assert_eq!(scrub_raw_log(r"\/home\/jane\/x"), r"<user-path>\/x");
+    }
+
+    #[test]
+    fn test_scrub_raw_log_lowercase_users_forward_slash_path_redacted() {
+        assert_eq!(scrub_raw_log("C:/users/jane/x"), "C:<user-path>/x");
+    }
+
+    #[test]
+    fn test_scrub_raw_log_path_redaction_does_not_cross_lines() {
+        assert_eq!(
+            scrub_raw_log("/Users/jane\nnext line /etc/x\n"),
+            "<user-path>\nnext line /etc/x\n"
+        );
+        assert_eq!(
+            scrub_raw_log("/Users/jane\r\nnext line /etc/x\r\n"),
+            "<user-path>\r\nnext line /etc/x\r\n"
+        );
+    }
+
+    #[test]
+    fn test_scrub_raw_log_bare_home_path_username_redacted() {
+        for (input, expected) in [
+            (r#"{"p":"/Users/jane"}"#, r#"{"p":"<user-path>"}"#),
+            (r#"{"p":"/home/jane"}"#, r#"{"p":"<user-path>"}"#),
+            (r#"{"p":"C:\Users\jane"}"#, r#"{"p":"<user-path>"}"#),
+            (r#"{"p":"C:\\Users\\jane"}"#, r#"{"p":"<user-path>"}"#),
+            (r#"{"p":"Z:\home\jane"}"#, r#"{"p":"<user-path>"}"#),
+            (r#"{"p":"c:\users\jane"}"#, r#"{"p":"<user-path>"}"#),
+            (r#"{"p":"C:/users/jane"}"#, r#"{"p":"C:<user-path>"}"#),
+            (r#"{"p":"\/Users\/jane"}"#, r#"{"p":"<user-path>"}"#),
+            (r#"{"p":"\/home\/jane"}"#, r#"{"p":"<user-path>"}"#),
+            (r#"{\"p\":\"/Users/jane\"}"#, r#"{\"p\":\"<user-path>\"}"#),
+            (r#"{\"p\":\"/home/jane\"}"#, r#"{\"p\":\"<user-path>\"}"#),
+            ("/Users/jane", "<user-path>"),
+            ("/home/jane doe", "<user-path>"),
+            (r"C:\Users\jane doe", "<user-path>"),
+        ] {
+            let result = scrub_raw_log(input);
+            assert_eq!(result, expected);
+            assert_eq!(scrub_raw_log(&result), result, "idempotent");
+        }
+    }
+
+    #[test]
+    fn test_scrub_raw_log_path_without_username_untouched() {
+        for input in [
+            "/Users/",
+            "/home/",
+            r"C:\Users\",
+            "/Users",
+            "/home",
+            "x/homer/y",
+        ] {
+            assert_eq!(scrub_raw_log(input), input);
+        }
+    }
+
+    // --- Deck IDs and profiles ---
+
+    /// Default deck-name behaviour with real deck and course IDs retained: the
+    /// label path.
+    fn scrub_keep_ids(input: &str) -> String {
+        scrub_raw_log_with(
+            input,
+            &ScrubOptions {
+                keep_player_names: false,
+                keep_deck_names: false,
+                keep_deck_and_course_ids: true,
+            },
+        )
+    }
+
+    const REAL_A: &str = "1a2b3c4d-5e6f-4890-abcd-ef1234567890";
+    const REAL_B: &str = "9f8e7d6c-5b4a-4321-8abc-0123456789ab";
+    const FIRST: &str = "00000001-0000-4000-8000-000000000000";
+    const SECOND: &str = "00000002-0000-4000-8000-000000000000";
+
+    #[test]
+    fn test_deck_ids_numbered_by_first_appearance_and_consistent() {
+        let input = format!(
+            r#"{{"DeckId":"{REAL_A}"}} {{"DeckIdInternal":"{REAL_B}"}} {{"MadeChoice":"{REAL_A}"}}"#
+        );
+        let result = scrub_raw_log(&input);
+        assert_eq!(
+            result,
+            format!(
+                r#"{{"DeckId":"{FIRST}"}} {{"DeckIdInternal":"{SECOND}"}} {{"MadeChoice":"{FIRST}"}}"#
+            )
+        );
+    }
+
+    #[test]
+    fn test_deck_id_generic_positions_and_escaping_replaced() {
+        let input = format!(
+            r#"{{"deckId":"{REAL_A}"}} {{"botDeckId":"{REAL_B}"}} {{\"DeckId\":\"{REAL_A}\"}} {{\\\"DeckId\\\":\\\"{REAL_B}\\\"}}"#
+        );
+        let result = scrub_raw_log(&input);
+        assert!(
+            !result.contains(REAL_A) && !result.contains(REAL_B),
+            "{result}"
+        );
+    }
+
+    #[test]
+    fn test_deck_id_as_object_key_replaced() {
+        let result = scrub_raw_log(&format!(r#"{{"Decks":{{"{REAL_A}":{{"MainDeck":[]}}}}}}"#));
+        assert_eq!(
+            result,
+            format!(r#"{{"Decks":{{"{FIRST}":{{"MainDeck":[]}}}}}}"#)
+        );
+    }
+
+    #[test]
+    fn test_deck_id_in_pet_diagnostic_line_replaced_without_any_other_anchor() {
+        let result = scrub_raw_log(&format!("Can't find pet for deck My Deck ({REAL_A})\n"));
+        assert_eq!(
+            result,
+            format!("Can't find pet for deck Deck-00000001 ({FIRST})\n")
+        );
+    }
+
+    #[test]
+    fn test_deck_id_uppercase_occurrence_replaced() {
+        let input = format!(r#"{{"DeckId":"{REAL_A}"}} x={}"#, REAL_A.to_uppercase());
+        assert_eq!(
+            scrub_raw_log(&input),
+            format!(r#"{{"DeckId":"{FIRST}"}} x={FIRST}"#)
+        );
+    }
+
+    #[test]
+    fn test_deck_name_label_is_the_stand_in_not_the_real_prefix() {
+        let result = scrub_raw_log(&format!(
+            r#"{{"DeckIdInternal":"{REAL_A}","Name":"My Deck"}}"#
+        ));
+        assert_eq!(
+            result,
+            format!(r#"{{"DeckIdInternal":"{FIRST}","Name":"Deck-00000001"}}"#)
+        );
+    }
+
+    #[test]
+    fn test_old_real_prefix_label_is_replaced_on_rescrub() {
+        let input = format!(r#"{{"DeckId":"{REAL_A}","Name":"Deck-1a2b3c4d"}}"#);
+        let result = scrub_raw_log(&input);
+        assert!(!result.contains("1a2b3c4d"), "{result}");
+    }
+
+    #[test]
+    fn test_non_deck_uuids_and_folder_ids_untouched() {
+        let input = format!(
+            r#"{{"matchId":"{REAL_A}","transactionId":"{REAL_B}","NetDeckFolderId":"{REAL_A}"}}"#
+        );
+        assert_eq!(scrub_raw_log(&input), input);
+    }
+
+    #[test]
+    fn test_deck_id_pass_is_a_fixed_point_and_does_not_reuse_numbers() {
+        let once = scrub_raw_log(&format!(r#"{{"DeckId":"{REAL_A}"}}"#));
+        assert_eq!(scrub_raw_log(&once), once);
+        let more = format!(r#"{once} {{"DeckId":"{REAL_B}"}}"#);
+        assert_eq!(
+            scrub_raw_log(&more),
+            format!(r#"{{"DeckId":"{FIRST}"}} {{"DeckId":"{SECOND}"}}"#)
+        );
+    }
+
+    #[test]
+    fn test_nil_deck_id_is_not_a_deck() {
+        let input = format!(r#"{{"DeckId":"{NO_DECK_ID}","NetDeckFolderId":"{NO_DECK_ID}"}}"#);
+        assert_eq!(scrub_raw_log(&input), input);
+    }
+
+    #[test]
+    fn test_upload_profile_keeps_names_and_deck_ids_and_redacts_account_id() {
+        let input = format!(
+            r#""screenName":"Sam" {{"DeckId":"{REAL_A}","Name":"My Deck"}} AAAABBBBCCCCDDDDEEEEFFFFGG to Match: X"#
+        );
+        assert_eq!(
+            scrub_raw_log_with(&input, &ScrubOptions::upload()),
+            format!(
+                r#""screenName":"Sam" {{"DeckId":"{REAL_A}","Name":"My Deck"}} <redacted> to Match: X"#
+            )
+        );
+    }
+
+    #[test]
+    fn test_corpus_profile_is_default_and_strictest() {
+        assert_eq!(ScrubOptions::corpus(), ScrubOptions::default());
+        let d = ScrubOptions::default();
+        assert!(!d.keep_player_names && !d.keep_deck_names && !d.keep_deck_and_course_ids);
+    }
+
+    // --- Course IDs ---
+
+    const FIRST_COURSE: &str = "00000001-0000-4000-9000-000000000000";
+    const SECOND_COURSE: &str = "00000002-0000-4000-9000-000000000000";
+
+    #[test]
+    fn test_course_ids_numbered_by_first_appearance_and_consistent() {
+        let input = format!(
+            r#"{{"CourseId":"{REAL_A}"}} {{"CourseId":"{REAL_B}"}} {{"SourceId":"{REAL_A}"}}"#
+        );
+        assert_eq!(
+            scrub_raw_log(&input),
+            format!(
+                r#"{{"CourseId":"{FIRST_COURSE}"}} {{"CourseId":"{SECOND_COURSE}"}} {{"SourceId":"{FIRST_COURSE}"}}"#
+            )
+        );
+    }
+
+    #[test]
+    fn test_course_id_spellings_and_escaping_replaced() {
+        let upper = REAL_B.to_uppercase();
+        let input = format!(
+            r#"{{"courseId":"{REAL_A}"}} {{\"CourseId\":\"{REAL_B}\"}} {{\\\"CourseId\\\":\\\"{REAL_A}\\\"}} {upper}"#
+        );
+        let result = scrub_raw_log(&input);
+        assert!(
+            !result.contains(REAL_A) && !result.contains(REAL_B),
+            "{result}"
+        );
+        assert!(!result.contains(&upper), "{result}");
+    }
+
+    #[test]
+    fn test_course_and_deck_stand_ins_do_not_collide() {
+        let input = format!(r#"{{"DeckId":"{REAL_A}","CourseId":"{REAL_B}"}}"#);
+        let result = scrub_raw_log(&input);
+        assert_eq!(
+            result,
+            format!(r#"{{"DeckId":"{FIRST}","CourseId":"{FIRST_COURSE}"}}"#)
+        );
+        assert_eq!(scrub_raw_log(&result), result, "idempotent");
+    }
+
+    #[test]
+    fn test_id_used_as_both_deck_and_course_gets_the_deck_stand_in() {
+        let input = format!(r#"{{"DeckId":"{REAL_A}","CourseId":"{REAL_A}"}}"#);
+        let result = scrub_raw_log(&input);
+        assert_eq!(
+            result,
+            format!(r#"{{"DeckId":"{FIRST}","CourseId":"{FIRST}"}}"#)
+        );
+        assert_eq!(scrub_raw_log(&result), result, "idempotent");
+    }
+
+    #[test]
+    fn test_course_id_pass_is_a_fixed_point_and_does_not_reuse_numbers() {
+        let once = scrub_raw_log(&format!(r#"{{"CourseId":"{REAL_A}"}}"#));
+        assert_eq!(scrub_raw_log(&once), once);
+        let more = format!(r#"{once} {{"CourseId":"{REAL_B}"}}"#);
+        assert_eq!(
+            scrub_raw_log(&more),
+            format!(r#"{{"CourseId":"{FIRST_COURSE}"}} {{"CourseId":"{SECOND_COURSE}"}}"#)
+        );
+    }
+
+    #[test]
+    fn test_course_id_kept_by_upload_and_replaced_by_corpus() {
+        let input = format!(r#"{{"CourseId":"{REAL_A}"}}"#);
+        assert_eq!(scrub_raw_log_with(&input, &ScrubOptions::upload()), input);
+        assert_eq!(
+            scrub_raw_log_with(&input, &ScrubOptions::corpus()),
+            format!(r#"{{"CourseId":"{FIRST_COURSE}"}}"#)
+        );
+    }
+
+    #[test]
+    fn test_non_uuid_course_key_value_untouched() {
+        let input = r#"{"courseId":"Avatar_Basic_Example"}"#;
+        assert_eq!(scrub_raw_log(input), input);
+    }
+
+    #[test]
+    fn test_nil_course_id_is_not_a_course() {
+        let input = format!(r#"{{"CourseId":"{NO_DECK_ID}"}}"#);
+        assert_eq!(scrub_raw_log(&input), input);
+    }
+
+    // --- Patterns must not eat ordinary text ---
+
+    #[test]
+    fn test_path_patterns_do_not_cross_a_json_quote() {
+        let url = r#"{"url":"https://api.example.com/users/me","next":"/v1/z","n":1}"#;
+        assert_eq!(scrub_raw_log(url), url);
+        for (input, expected) in [
+            (
+                r#"{"p":"/Users/me","next":"/v1/z","n":1}"#,
+                r#"{"p":"<user-path>","next":"/v1/z","n":1}"#,
+            ),
+            (
+                r#"{"p":"/home/me","next":"/v1/z","n":1}"#,
+                r#"{"p":"<user-path>","next":"/v1/z","n":1}"#,
+            ),
+            (
+                r#"{"p":"C:/users/me","next":"/v1/z","n":1}"#,
+                r#"{"p":"C:<user-path>","next":"/v1/z","n":1}"#,
+            ),
+            (
+                r#"{"p":"C:\\users\\me","next":"z\\y","n":1}"#,
+                r#"{"p":"<user-path>","next":"z\\y","n":1}"#,
+            ),
+        ] {
+            assert_eq!(scrub_raw_log(input), expected);
+        }
+    }
+
+    #[test]
+    fn test_lowercase_users_in_a_url_is_not_a_user_path() {
+        let input = "https://api.example.com/users/me/profile";
+        assert_eq!(scrub_raw_log(input), input);
+    }
+
+    #[test]
+    fn test_ordinary_words_before_to_match_survive() {
+        for input in [
+            "Failed to Match: x",
+            "Could not connect to Match: y",
+            "[UnityCrossThreadLogger]3/22/2026 1:00:00 PM: Failed to Match: x",
+            "Match to opponent: x",
+            "ERROR to Match: x",
+            "lowerUPPERCASEWORD to Match: x",
+        ] {
+            assert_eq!(scrub_raw_log(input), input);
+        }
+    }
+
+    #[test]
+    fn test_reverse_header_digit_free_and_mixed_case_ids_redacted() {
+        let digit_free = "ABCDEFGHIJKLMNOPQRSTUVWXYZ to Match: X";
+        assert_eq!(scrub_raw_log(digit_free), "<redacted> to Match: X");
+        let suffixed = "AAAABBBB2222DDDDEEEEFFFFGG_Familiar to Match: X";
+        assert_eq!(scrub_raw_log(suffixed), "<redacted> to Match: X");
+        let forward = "Match to AAAABBBB2222DDDDEEEEFFFFGG_Familiar: X";
+        assert_eq!(scrub_raw_log(forward), "Match to <redacted>: X");
+    }
+
+    #[test]
+    fn test_id_shape_backstop_leaves_names_and_numbers() {
+        for input in [
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+            r#"{"n":12345678901234567890123456}"#,
+        ] {
+            assert_eq!(scrub_raw_log(input), input);
+        }
     }
 
     // --- Corpus validation (env-gated, not run in CI) ---

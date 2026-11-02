@@ -12,7 +12,7 @@
 use manasight_parser::events::GameEvent;
 use manasight_parser::log::entry::LineBuffer;
 use manasight_parser::router::Router;
-use manasight_parser::{parse_whole_log, scrub_raw_log};
+use manasight_parser::{parse_whole_log, scrub_raw_log, scrub_raw_log_with, ScrubOptions};
 
 // ---------------------------------------------------------------------------
 // Sanitized fixture (public repo — no PII)
@@ -171,8 +171,13 @@ fn test_scrub_raw_log_preserves_format_and_deck_id() {
         "scrub_raw_log must NOT strip the Format value",
     );
     assert!(
-        scrubbed_str.contains("aaaabbbb-0000-0000-0000-000000000001"),
-        "scrub_raw_log must NOT strip the DeckId UUID",
+        !scrubbed_str.contains("aaaabbbb-0000-0000-0000-000000000001"),
+        "scrub_raw_log must replace the DeckId UUID",
+    );
+    assert!(
+        scrub_raw_log_with(FIXTURE_V2_CONSTRUCTED, &ScrubOptions::upload())
+            .contains("aaaabbbb-0000-0000-0000-000000000001"),
+        "the upload profile must keep the DeckId UUID",
     );
 }
 
