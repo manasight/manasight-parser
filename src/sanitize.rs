@@ -79,12 +79,17 @@ impl ScrubOptions {
     }
 }
 
-/// Matches a word long enough to hold a token of the account ID's length.
-static ACCOUNT_ID_SHAPE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\b[A-Za-z0-9_]{26,}\b").unwrap_or_else(|_| unreachable!()));
+/// Matches a word long enough to hold a token of the account ID's length. A
+/// JSON escape right before it is matched apart, since its letters would
+/// otherwise read as part of the word.
+static ACCOUNT_ID_SHAPE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?:(?P<esc>\\+(?:[bfnrt]|u[0-9A-Fa-f]{4}))|\b)[A-Za-z0-9_]{26,}\b")
+        .unwrap_or_else(|_| unreachable!())
+});
 
-/// Whether `part` has the account ID's length and alphabet. Requires both a
-/// letter and a digit, so a long constant name or a JSON number does not count.
+/// Whether `part` has the account ID's length and alphabet. Requires both an
+/// uppercase letter and a digit, so a long constant name or a JSON number does
+/// not count.
 fn is_account_id_shape(part: &str) -> bool {
     part.len() == 26
         && part
@@ -100,23 +105,24 @@ fn is_account_id_shape(part: &str) -> bool {
 fn redact_account_id_shape(input: &str) -> String {
     ACCOUNT_ID_SHAPE
         .replace_all(input, |caps: &regex::Captures<'_>| {
-            let text = &caps[0];
-            if text.split('_').any(is_account_id_shape) {
-                "<redacted>".to_owned()
+            let esc = caps.name("esc").map_or("", |m| m.as_str());
+            let word = caps[0].strip_prefix(esc).unwrap_or(&caps[0]);
+            if word.split('_').any(is_account_id_shape) {
+                format!("{esc}<redacted>")
             } else {
-                text.to_owned()
+                caps[0].to_owned()
             }
         })
         .into_owned()
 }
 
-/// Finds an unquoted home path with no trailing separator, or a URL, which is
-/// matched only so that a path inside it is skipped. The username ends at
-/// whitespace, since text may follow it. A URL needs a host, so a `file:` URL
-/// does not count as one.
+/// Finds an unquoted home path with no trailing separator, or a web URL, which
+/// is matched only so that a path inside it is skipped. The username ends at
+/// whitespace, since text may follow it. A web URL ends at whitespace, a quote
+/// or a comma; other schemes, `file:` among them, do not count as one.
 static BARE_HOME_PATH: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(concat!(
-        r#"(?P<url>[A-Za-z][A-Za-z0-9+.\-]+:\\*/\\*/[^\s"/\\][^\s"]*)"#,
+        r#"(?P<url>(?i:https?|wss?|ftps?):\\*/\\*/[^\s"',]*)"#,
         r#"|(?P<drive>[A-Za-z]:)\\*/users\\*/[^\s/\\"]+"#,
         r#"|\\*/(?:Users|home)\\*/[^\s/\\"]+"#,
         r#"|(?i:[a-z]:\\+(?:users|home)\\+)[^\s\\"]+"#,
@@ -124,7 +130,7 @@ static BARE_HOME_PATH: LazyLock<Regex> = LazyLock::new(|| {
     .unwrap_or_else(|_| unreachable!())
 });
 
-/// Redact the home paths [`BARE_HOME_PATH`] finds, leaving URLs as they are.
+/// Redact the home paths [`BARE_HOME_PATH`] finds, leaving web URLs as they are.
 fn redact_bare_home_paths(input: &str) -> String {
     BARE_HOME_PATH
         .replace_all(input, |caps: &regex::Captures<'_>| {
@@ -177,8 +183,8 @@ const NO_DECK_ID: &str = "00000000-0000-0000-0000-000000000000";
 /// first anchor and ending in `tail`.
 ///
 /// The output depends only on the input text, and numbering restarts in each
-/// log, so the same input always gives the same output and no value links two
-/// logs. Stand-ins of either kind are left alone and their numbers are not
+/// log, so the same input always gives the same output and no stand-in links
+/// two logs. Stand-ins of either kind are left alone and their numbers are not
 /// reused, so re-running on scrubbed text changes nothing.
 fn replace_ids(input: &str, anchor: &Regex, tail: &str) -> String {
     let mut next = ANY_UUID
@@ -239,7 +245,8 @@ fn replace_ids(input: &str, anchor: &Regex, tail: &str) -> String {
 ///   (`/Users/<username>/`) and Linux user paths (`/home/<username>/`), at any
 ///   JSON-escaping level. Without a trailing separator, a quoted path loses
 ///   everything up to the closing quote; an unquoted one loses the text up to
-///   whitespace and is skipped inside a URL (see [`redact_bare_home_paths`])
+///   whitespace and is skipped inside a web URL (see
+///   [`redact_bare_home_paths`])
 /// - Session identifiers (JSON `"token"` and `"sessionId"` values)
 /// - Display names (JSON `"screenName"` and `"playerName"` values)
 /// - Deck names (free-text JSON `"Name"` values adjacent to a `"DeckId"`,
@@ -283,8 +290,8 @@ static SCRUB_PATTERNS: LazyLock<Vec<ScrubPattern>> = LazyLock::new(|| {
             false,
         ),
         (
-            r"\b(?:[A-Z0-9_]{8,}|[A-Za-z0-9_]{20,}) to Match:",
-            "<redacted> to Match:",
+            r"(\\+(?:[bfnrt]|u[0-9A-Fa-f]{4})|\b)(?:[A-Z0-9_]{8,}|[A-Za-z0-9_]{20,}) to Match:",
+            "${1}<redacted> to Match:",
             false,
             false,
         ),
@@ -2352,7 +2359,12 @@ mod tests {
             "https://api.example.com/Users/me",
             r"https:\/\/api.example.com\/home\/me",
             r#"\"https://api.example.com/Users/me\""#,
+            "http://api.example.com/home/me",
+            "HTTPS://api.example.com/home/me",
+            "ws://api.example.com/home/me",
             "wss://api.example.com/home/me",
+            "ftp://api.example.com/home/me",
+            "ftps://api.example.com/home/me",
             "http://localhost:8080/home/me?a=1",
             r#"{"u":"https://api.example.com/home/jane doe"}"#,
         ] {
@@ -2373,6 +2385,18 @@ mod tests {
         assert_eq!(
             scrub_raw_log(r#""https://api.example.com/x"/home/me"#),
             r#""https://api.example.com/x"<user-path>"#
+        );
+        assert_eq!(
+            scrub_raw_log("https://api.example.com/x,/home/jane"),
+            "https://api.example.com/x,<user-path>"
+        );
+        assert_eq!(
+            scrub_raw_log("'https://api.example.com/x','/home/jane'"),
+            "'https://api.example.com/x','<user-path>"
+        );
+        assert_eq!(
+            scrub_raw_log("file://localhost/home/jane"),
+            "file://localhost<user-path>"
         );
     }
 
@@ -2432,7 +2456,58 @@ mod tests {
             "AAAABBBB2222DDDDEEEEFFFFGGH_Familiar",
             "AAAABBBB2222DDDDEEEEFFFFgg_Familiar",
             "aaaabbbb2222ddddeeeeffffgg_Familiar",
+            r"x\n12345678901234567890123456",
+            r"x\nABCDEFGHIJKLMNOPQRSTUVWXYZ",
+            r"x\nAAAABBBB2222DDDDEEEEFFFFGGH",
+            r"x\nA_LONG_CONSTANT_NAME_WITH_MANY_PARTS_AND_1_DIGIT",
         ] {
+            assert_eq!(scrub_raw_log(input), input);
+        }
+    }
+
+    #[test]
+    fn test_id_shape_after_a_json_escape_redacted() {
+        for (input, expected) in [
+            (r"x\nAAAABBBB2222DDDDEEEEFFFFGG y", r"x\n<redacted> y"),
+            (r"x\tAAAABBBB2222DDDDEEEEFFFFGG y", r"x\t<redacted> y"),
+            (r"x\rAAAABBBB2222DDDDEEEEFFFFGG y", r"x\r<redacted> y"),
+            (r"x\bAAAABBBB2222DDDDEEEEFFFFGG y", r"x\b<redacted> y"),
+            (r"x\fAAAABBBB2222DDDDEEEEFFFFGG y", r"x\f<redacted> y"),
+            (
+                r"x\u000aAAAABBBB2222DDDDEEEEFFFFGG y",
+                r"x\u000a<redacted> y",
+            ),
+            (r"x\\nAAAABBBB2222DDDDEEEEFFFFGG y", r"x\\n<redacted> y"),
+            (
+                r"x\nAAAABBBB2222DDDDEEEEFFFFGG_Familiar y",
+                r"x\n<redacted> y",
+            ),
+        ] {
+            let result = scrub_raw_log(input);
+            assert_eq!(result, expected);
+            assert_eq!(scrub_raw_log(&result), result, "idempotent");
+        }
+    }
+
+    #[test]
+    fn test_reverse_header_after_a_json_escape_redacted() {
+        for (input, expected) in [
+            (r"x\nSHORT_ID1 to Match: Y", r"x\n<redacted> to Match: Y"),
+            (r"x\tSHORT_ID1 to Match: Y", r"x\t<redacted> to Match: Y"),
+            (r"x\rSHORT_ID1 to Match: Y", r"x\r<redacted> to Match: Y"),
+            (r"x\bSHORT_ID1 to Match: Y", r"x\b<redacted> to Match: Y"),
+            (r"x\fSHORT_ID1 to Match: Y", r"x\f<redacted> to Match: Y"),
+            (
+                r"x\u000aSHORT_ID1 to Match: Y",
+                r"x\u000a<redacted> to Match: Y",
+            ),
+            (r"x\\nSHORT_ID1 to Match: Y", r"x\\n<redacted> to Match: Y"),
+        ] {
+            let result = scrub_raw_log(input);
+            assert_eq!(result, expected);
+            assert_eq!(scrub_raw_log(&result), result, "idempotent");
+        }
+        for input in [r"x\nERROR to Match: Y", r"x\nFailed to Match: Y"] {
             assert_eq!(scrub_raw_log(input), input);
         }
     }

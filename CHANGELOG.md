@@ -13,8 +13,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   deck names, deck IDs and course IDs.
 - **`ScrubOptions::keep_deck_and_course_ids`.** Defaults to `false`: deck IDs
   and event course IDs are replaced by stand-ins numbered per log, so the output
-  depends only on the input, a second scrub changes nothing, and no value links
-  two logs. Deck-name labels follow the stand-in.
+  depends only on the input, a second scrub changes nothing, and no stand-in
+  links two logs. Deck-name labels follow the stand-in.
 
 ### Changed
 
@@ -28,15 +28,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 - **Scrubber: account ID headers.** The ID is now redacted in both header
-  orderings, including mixed-case and suffixed IDs, and a 26-character token
-  with a letter and a digit is redacted wherever it appears, including when
-  joined by `_` to a prefix or suffix.
+  orderings, including mixed-case and suffixed IDs, and a 26-character token of
+  uppercase letters and digits, with at least one of each, is redacted wherever
+  it appears, including when joined by `_` to a prefix or suffix or right after
+  a JSON escape.
 - **Scrubber: deck names** are now pseudonymized under more key forms.
 - **Scrubber: home paths.** Path patterns no longer cross a quote or a line
   end. They now cover lowercase drive letters, Wine-style `Z:\home\`, separators
   at any escaping level and a bare home directory with no trailing separator.
-  Lowercase `/users/` needs a drive letter. The bare form does not fire inside a
-  URL and, unless quoted, stops at whitespace. `/home/<name>/` and
+  Lowercase `/users/` needs a drive letter. The bare form does not fire inside
+  an `http`, `https`, `ws`, `wss`, `ftp` or `ftps` URL and, unless the quoted
+  value starts at the path, stops at whitespace. `/home/<name>/` and
   `/Users/<name>/` with a trailing separator still match inside a URL path.
 
 ## [0.7.3] - 2026-09-26

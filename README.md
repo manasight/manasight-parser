@@ -127,7 +127,7 @@ try {
 
 ## Log Sanitization
 
-The `sanitize` module strips PII and credentials from raw `Player.log` text before it leaves the user's machine. It redacts auth tokens, bearer tokens, account IDs, display names, session identifiers, OS user paths, and hardware fingerprints. By default it also replaces free-text deck names with a `Deck-<8hex>` label, and deck IDs and event course IDs with stand-ins numbered per log, so the output depends only on the input and links no two logs.
+The `sanitize` module strips PII and credentials from raw `Player.log` text before it leaves the user's machine. It redacts auth tokens, bearer tokens, account IDs, display names, session identifiers, OS user paths, and hardware fingerprints. By default it also replaces free-text deck names with a `Deck-<8hex>` label, and deck IDs and event course IDs with stand-ins numbered per log, so the output depends only on the input and no stand-in links two logs.
 
 ```rust
 use manasight_parser::sanitize::scrub_raw_log;
@@ -137,7 +137,7 @@ let clean = scrub_raw_log(&raw);
 // clean contains no tokens, account IDs, or user paths
 ```
 
-`scrub_raw_log_with` takes a `ScrubOptions` profile. `ScrubOptions::default()` and `ScrubOptions::corpus()` are the strictest. `ScrubOptions::upload()` keeps player names, deck names, deck IDs and course IDs, for logs sent to a user's own account. Everything else is redacted under every profile.
+`scrub_raw_log_with` takes a `ScrubOptions` profile. `ScrubOptions::default()` and `ScrubOptions::corpus()` are the strictest. `ScrubOptions::upload()` keeps player names, deck names, deck IDs and course IDs, for logs sent to a user's own account. Every other class the scrubber handles is redacted under every profile.
 
 Pipeline utilities for compression and content-addressable storage:
 

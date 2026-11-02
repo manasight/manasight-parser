@@ -7,7 +7,7 @@
 //!   `event_id` heuristic.
 //! - Router dispatch: `EventSetDeckV2` and `EventSetDeckV3` are claimed.
 //! - `parse_whole_log` parity with the entry-by-entry `Router` path.
-//! - `scrub_raw_log` preserves `DeckId` and `Format` fields.
+//! - `scrub_raw_log` keeps `Format` and replaces `DeckId`.
 
 use manasight_parser::events::GameEvent;
 use manasight_parser::log::entry::LineBuffer;
