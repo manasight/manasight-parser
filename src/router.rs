@@ -357,7 +357,7 @@ mod tests {
 
         #[test]
         fn test_extract_timestamp_with_trailing_colon() {
-            let body = "[UnityCrossThreadLogger]3/13/2026 11:34:51 PM: Match to AAF4FC69CE47D53A";
+            let body = "[UnityCrossThreadLogger]3/13/2026 11:34:51 PM: Match to AAAABBBBCCCCDDDD";
             let ts = extract_timestamp(body);
             assert!(ts.is_some());
             if let Some(ts) = ts {
