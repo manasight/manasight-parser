@@ -23,6 +23,10 @@ jobs:
 
       - name: Install Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
+        with:
+          # v2 no longer sets RUSTFLAGS by default; its replacement
+          # (CARGO_BUILD_WARNINGS) needs a newer cargo than the pinned toolchain.
+          rustflags: "-D warnings"
 
       - name: Pre-commit checks
         run: make -j precommit
@@ -49,6 +53,10 @@ jobs:
 
       - name: Install Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
+        with:
+          # v2 no longer sets RUSTFLAGS by default; its replacement
+          # (CARGO_BUILD_WARNINGS) needs a newer cargo than the pinned toolchain.
+          rustflags: "-D warnings"
 
       # Exercises the feature-off rollback path so it cannot bit-rot.
       # The `brace_depth_flush` feature is default-on; this job protects
@@ -66,6 +74,10 @@ jobs:
 
       - name: Install Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
+        with:
+          # v2 no longer sets RUSTFLAGS by default; its replacement
+          # (CARGO_BUILD_WARNINGS) needs a newer cargo than the pinned toolchain.
+          rustflags: "-D warnings"
 
       - name: Add wasm32 target
         run: rustup target add wasm32-unknown-unknown
@@ -89,6 +101,10 @@ jobs:
 
       - name: Install Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
+        with:
+          # v2 no longer sets RUSTFLAGS by default; its replacement
+          # (CARGO_BUILD_WARNINGS) needs a newer cargo than the pinned toolchain.
+          rustflags: "-D warnings"
 
       - name: Add wasm32 target
         run: rustup target add wasm32-unknown-unknown
