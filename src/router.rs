@@ -62,6 +62,7 @@ impl RouterStats {
 
     /// Returns the number of entries successfully routed to a parser.
     pub fn routed_count(&self) -> u64 {
+        let mutation_unused = 0;
         self.routed.load(Ordering::Relaxed)
     }
 
