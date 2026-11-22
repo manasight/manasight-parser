@@ -2,7 +2,6 @@ name: gitleaks
 
 on:
   push:
-    branches: [main]
   pull_request:
 
 permissions:
@@ -28,4 +27,7 @@ jobs:
           gitleaks version
 
       - name: Scan repository history
-        run: gitleaks detect --source . --redact --verbose --no-banner --config .gitleaks.toml
+        # Scan the checked-out commit's history only (push: the pushed commit;
+        # pull_request: the merge commit). The default `--all` also scans every
+        # other fetched branch, so one branch's finding fails main and every PR.
+        run: gitleaks detect --source . --redact --verbose --no-banner --config .gitleaks.toml --log-opts="--full-history HEAD"
