@@ -1,5 +1,8 @@
 [advisories]
 version = 2
+ignore = [
+    { id = "RUSTSEC-2026-0543", reason = "chrono is unmaintained; a migration to jiff or time is planned" },
+]
 
 [licenses]
 version = 2
