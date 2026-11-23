@@ -442,7 +442,7 @@ checksum = "5d15f86d12da44cd8d4ec3c73984537eb7f4cadcb9776a575a0a8a05ca11005c"
 
 [[package]]
 name = "manasight-parser"
-version = "0.7.3"
+version = "0.8.0"
 dependencies = [
  "base64",
  "chrono",
