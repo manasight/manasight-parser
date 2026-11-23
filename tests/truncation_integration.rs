@@ -125,6 +125,41 @@ fn test_truncation_marker_carries_log_timestamp() {
     assert_eq!(event.annotation_count(), Some(0));
 }
 
+/// Returns the `(object_count, annotation_count)` of every `Truncation`
+/// event in `events`.
+#[cfg(feature = "tailer")]
+fn truncation_counts(events: &[GameEvent]) -> Vec<(Option<u32>, Option<u32>)> {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            GameEvent::Truncation(t) => Some((t.object_count(), t.annotation_count())),
+            _ => None,
+        })
+        .collect()
+}
+
+#[cfg(feature = "tailer")]
+#[test]
+fn test_parse_whole_log_scrubbed_log_keeps_truncation_event() {
+    use manasight_parser::{parse_whole_log, scrub_raw_log_with, ScrubOptions};
+
+    // The scrubber must leave the marker block's `::` lines alone, so a
+    // scrubbed log yields the same Truncation event as its raw log.
+    let log = synthetic_log_with_truncation_between_valid_gsms();
+    let raw = truncation_counts(&parse_whole_log(&log));
+    assert_eq!(raw, vec![(Some(63), Some(4))], "raw log");
+
+    for (name, opts) in [
+        ("default", ScrubOptions::default()),
+        ("corpus", ScrubOptions::corpus()),
+        ("upload", ScrubOptions::upload()),
+    ] {
+        let scrubbed = scrub_raw_log_with(&log, &opts);
+        let n = truncation_counts(&parse_whole_log(&scrubbed));
+        assert_eq!(n, raw, "{name} profile; scrubbed log:\n{scrubbed}");
+    }
+}
+
 #[test]
 fn test_no_truncation_event_from_valid_gsm_envelopes() {
     // Two adjacent valid GSMs, no marker — must emit zero Truncation events.
