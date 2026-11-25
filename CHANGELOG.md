@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.8.1] - 2026-11-25
+
+### Fixed
+
+- **Scrubber: IPv6 pattern no longer eats Arena's truncation block.** A bare
+  `::` was treated as the start of an IPv6 address, so the `::`-prefixed lines
+  of Arena's `[Message summarized ...]` block were rewritten and a scrubbed log
+  lost its `Truncation` events. A leading `::` now needs a non-word character
+  before it and a group after it, so those lines and `Name::Member` text stay
+  unchanged. IPv4-mapped forms (`::ffff:a.b.c.d`, `64:ff9b::a.b.c.d`) are now
+  replaced in full. The bare unspecified address `::` is no longer matched
+  (#315).
+
 ## [0.8.0] - 2026-11-01
 
 ### Added
