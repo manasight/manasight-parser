@@ -569,24 +569,33 @@ static SCRUB_PATTERNS: LazyLock<Vec<ScrubPattern>> = LazyLock::new(|| {
         // IPv6 addresses — matched BEFORE IPv4 to avoid the embedded IPv4 portion
         // of IPv4-mapped IPv6 addresses being double-substituted.
         //
-        // Covers: full 8-group addresses, compressed addresses (::), loopback (::1),
-        // link-local (fe80::...), and IPv4-mapped (::ffff:a.b.c.d).
+        // Covers: full 8-group addresses, compressed addresses, loopback (::1),
+        // link-local (fe80::...), and IPv4-mapped forms (::ffff:a.b.c.d,
+        // 64:ff9b::a.b.c.d), which are redacted whole.
         //
         // Three alternations (leftmost wins):
-        //   1. `::` optionally followed by hex groups — covers `::1`, `::`, `::ffff:...`
-        //   2. One or more hex groups followed by `::` and optional hex tail — covers
-        //      `fe80::1`, `2001:db8::1`
-        //   3. Three or more colon-separated hex groups without `::` — covers full
-        //      8-group addresses like `2001:0db8:85a3:0000:0000:8a2e:0370:7334`
+        //   1. A leading `::` followed by at least one group — covers `::1`,
+        //      `::ffff:...`. `\B` before `::` requires a non-word character or
+        //      the start of the text before it (the `regex` crate has no
+        //      lookbehind), so `Name::Member` is not an address. Requiring a
+        //      group keeps Arena's `:: GameObject Count = N` and
+        //      `::: GameStateMessage` lines intact; the bare unspecified
+        //      address `::` is therefore not redacted (it identifies nobody).
+        //   2. One or more hex groups, `::`, then either an address tail or a
+        //      non-word character (`\B`) — covers `fe80::1`, `2001:db8::1`,
+        //      `2001:db8::`, but not `Name::Other`.
+        //   3. Three or more colon-separated hex groups without `::` — covers
+        //      full 8-group addresses like `2001:0db8:85a3:0000:0000:8a2e:0370:7334`.
         //
-        // Alternation 1 uses no leading \b because `::` starts with a non-word
-        // character. Alternations 2 and 3 use \b to avoid partial matches inside
-        // larger tokens.
+        // Each alternation may end in a dotted quad. It comes before the final
+        // hex group because the crate is leftmost-first and `192` is a valid
+        // hex group; otherwise the match would stop there and leak the rest
+        // of the embedded IPv4 address.
         (
             concat!(
-                r"::(?:[0-9a-fA-F]{1,4}(?::[0-9a-fA-F]{1,4})*)?",
-                r"|\b[0-9a-fA-F]{1,4}(?::[0-9a-fA-F]{1,4})*::[0-9a-fA-F]{0,4}(?::[0-9a-fA-F]{1,4})*",
-                r"|\b(?:[0-9a-fA-F]{1,4}:){3,7}[0-9a-fA-F]{1,4}\b",
+                r"\B::(?:[0-9a-fA-F]{1,4}:)*(?:(?:\d{1,3}\.){3}\d{1,3}|[0-9a-fA-F]{1,4})\b",
+                r"|\b[0-9a-fA-F]{1,4}(?::[0-9a-fA-F]{1,4})*::(?:(?:[0-9a-fA-F]{1,4}:)*(?:(?:\d{1,3}\.){3}\d{1,3}|[0-9a-fA-F]{1,4})\b|\B)",
+                r"|\b(?:[0-9a-fA-F]{1,4}:){3,7}(?:(?:\d{1,3}\.){3}\d{1,3}|[0-9a-fA-F]{1,4})\b",
             ),
             "<ip-redacted>",
             false,
@@ -1597,6 +1606,61 @@ mod tests {
         let result = scrub_keep_ids(input);
         assert!(!result.contains("2001:db8::1"));
         assert!(result.contains("<ip-redacted>"));
+    }
+
+    #[test]
+    fn test_scrub_raw_log_ipv6_forms_fully_redacted_in_every_context() {
+        // Every form must be replaced whole: no hex group and no IPv4 octet of
+        // an IPv4-mapped form may survive.
+        let forms = [
+            "::1",
+            "fe80::1",
+            "fe80::1ff:fe23:4567:890a",
+            "2001:0db8:85a3:0000:0000:8a2e:0370:7334",
+            "2001:db8::8a2e:370:7334",
+            "2001:db8::",
+            "::ffff:192.0.2.128",
+            "::ffff:c000:280",
+            "64:ff9b::192.0.2.33",
+            "0:0:0:0:0:ffff:192.0.2.1",
+        ];
+        for addr in forms {
+            for (template, expected) in [
+                ("Remote: {} ok", "Remote: <ip-redacted> ok"),
+                ("Remote: [{}]:443 ok", "Remote: [<ip-redacted>]:443 ok"),
+                ("host={}", "host=<ip-redacted>"),
+            ] {
+                let input = template.replace("{}", addr);
+                assert_eq!(scrub_raw_log(&input), expected, "input: {input}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_scrub_raw_log_truncation_block_unchanged_in_every_profile() {
+        let block = "[Message summarized because one or more GameStateMessages exceeded the 50 GameObject or 50 Annotation limit.]\n\
+            ::: GameStateMessage\n\
+            :: GameObject Count = 63\n\
+            :: Annotation Count = 4\n\
+            ::: ActionsAvailableReq\n";
+        for opts in [
+            ScrubOptions::default(),
+            ScrubOptions::corpus(),
+            ScrubOptions::upload(),
+        ] {
+            assert_eq!(scrub_raw_log_with(block, &opts), block, "{opts:?}");
+        }
+    }
+
+    #[test]
+    fn test_scrub_raw_log_double_colon_names_unchanged() {
+        for input in [
+            "AK::SoundEngine::Init failed",
+            "[Backtrace]::Reponse code 500",
+            "List::Add(x)",
+        ] {
+            assert_eq!(scrub_raw_log(input), input);
+        }
     }
 
     // --- ScrubOptions / keep_deck_names ---
