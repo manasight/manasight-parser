@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- **Scrubber: plain-text login handle and Steam ID.** Two plain-text log lines
+  were not covered and passed through unchanged. The handle after
+  `Display Name:` on the `[Accounts - Login] Logged in successfully.` line is
+  now replaced with `<redacted>`, like the JSON `screenName` value: removed by
+  the default and `corpus` profiles, kept by `upload`. A SteamID64 (17 digits
+  starting `7656119`), as on the Steamworks
+  `SteamInternal_SetMinidumpSteamID: Caching Steam ID:` line, is now replaced
+  with `<steamid-redacted>` under every profile. Both lines are kept and a
+  CRLF line ending is preserved.
+
 ## [0.8.2] - 2026-11-26
 
 ### Fixed
