@@ -403,11 +403,13 @@ static SCRUB_PATTERNS: LazyLock<Vec<ScrubPattern>> = LazyLock::new(|| {
         //   "[Accounts - Login] Logged in successfully. Display Name: Name#12345"
         // Not JSON, so the screenName pattern above never sees it. A handle
         // may hold spaces, so the value runs to the end of the line; `\r` is
-        // outside the class, so a CRLF line ending is kept.
+        // outside the class, so a CRLF line ending is kept. Anchored to the
+        // login-line prefix so the bare phrase inside a one-line JSON or
+        // escaped payload (e.g. a free-text name) is not run to end of line.
         // is_player_name = true — skipped when keep_player_names is set.
         (
-            r"\bDisplay Name:[ \t]*[^\r\n]+",
-            "Display Name: <redacted>",
+            r"\bLogged in successfully\. Display Name:[ \t]*[^\r\n]+",
+            "Logged in successfully. Display Name: <redacted>",
             true,
             false,
         ),
@@ -1041,11 +1043,23 @@ mod tests {
 
     #[test]
     fn test_scrub_raw_log_display_name_crlf_preserves_line_ending() {
-        let input = "x Display Name: TestUser#00000\r\nnext\r\n";
+        let input = "x Logged in successfully. Display Name: TestUser#00000\r\nnext\r\n";
         assert_eq!(
             scrub_raw_log(input),
-            "x Display Name: <redacted>\r\nnext\r\n"
+            "x Logged in successfully. Display Name: <redacted>\r\nnext\r\n"
         );
+    }
+
+    #[test]
+    fn test_scrub_raw_log_display_name_phrase_inside_json_value_unchanged() {
+        let input = r#"{"eventName":"Display Name: Synthetic Cup","format":"Standard","wins":0}"#;
+        assert_eq!(scrub_raw_log(input), input);
+    }
+
+    #[test]
+    fn test_scrub_raw_log_display_name_phrase_inside_escaped_payload_unchanged() {
+        let input = r#"{"request":"{\"eventName\":\"Display Name: Synthetic Cup\",\"wins\":0}"}"#;
+        assert_eq!(scrub_raw_log(input), input);
     }
 
     #[test]
@@ -2739,8 +2753,6 @@ mod tests {
         patterns
     }
 
-    /// PII-detection patterns for display names and hardware fingerprints —
-    /// all redact to the flat `"<redacted>"` placeholder.
     /// PII-detection patterns for plain-text (non-JSON) lines: the handle on
     /// the `Display Name:` login line, which redacts to `"<redacted>"`, and
     /// any `SteamID64`, which must not survive at all.
@@ -2748,7 +2760,8 @@ mod tests {
         vec![
             (
                 "Display Name",
-                Regex::new(r"\bDisplay Name:[ \t]*([^\r\n]+)").unwrap_or_else(|_| unreachable!()),
+                Regex::new(r"\bLogged in successfully\. Display Name:[ \t]*([^\r\n]+)")
+                    .unwrap_or_else(|_| unreachable!()),
                 is_redacted,
             ),
             (
@@ -2759,6 +2772,8 @@ mod tests {
         ]
     }
 
+    /// PII-detection patterns for display names and hardware fingerprints —
+    /// all redact to the flat `"<redacted>"` placeholder.
     fn hardware_and_name_pii_patterns() -> Vec<PiiPattern> {
         vec![
             (
