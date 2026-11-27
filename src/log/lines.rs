@@ -90,12 +90,14 @@ impl LineSplitter {
     }
 
     /// Discards any pending partial line, including one being dropped.
+    #[cfg(any(test, feature = "tailer"))]
     pub fn clear(&mut self) {
         self.discarding = None;
         self.release();
     }
 
     /// Returns `true` when no partial line is pending or being dropped.
+    #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.pending.is_empty() && self.discarding.is_none()
     }

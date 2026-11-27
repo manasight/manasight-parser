@@ -383,7 +383,7 @@ impl FileTailer {
     ///
     /// A partial line at the end of the read (not terminated by a
     /// newline) is buffered internally and prepended to the next read. A
-    /// line longer than [`super::lines::MAX_LINE_BYTES`] is dropped whole
+    /// line longer than 16 MiB is dropped whole
     /// (with a warning giving only its length) to keep memory bounded.
     ///
     /// Returns an empty `Vec` if no new data is available.
