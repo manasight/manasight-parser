@@ -24,6 +24,7 @@ use chrono::{DateTime, Local, Utc};
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
 use super::entry::{LineBuffer, LogEntry};
+use super::lines::LineSplitter;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -140,8 +141,9 @@ pub struct FileTailer {
     last_event_at: Option<DateTime<Utc>>,
     /// Line buffer for accumulating raw lines into complete log entries.
     line_buffer: LineBuffer,
-    /// Partial line leftover from the previous read (no trailing newline).
-    partial_line: String,
+    /// Splits reads into lines, holding a partial line left over from the
+    /// previous read (no trailing newline yet).
+    lines: LineSplitter,
     /// Reusable read buffer to avoid per-poll allocation.
     read_buf: Vec<u8>,
     /// Poll interval in milliseconds.
@@ -185,7 +187,7 @@ impl FileTailer {
             offset: 0,
             last_event_at: None,
             line_buffer: LineBuffer::new(),
-            partial_line: String::new(),
+            lines: LineSplitter::new(),
             read_buf: vec![0u8; READ_BUFFER_CAPACITY],
             poll_interval_ms: DEFAULT_POLL_INTERVAL_MS,
             last_mtime: initial_mtime,
@@ -242,7 +244,7 @@ impl FileTailer {
             offset: 0,
             last_event_at: None,
             line_buffer: LineBuffer::new(),
-            partial_line: String::new(),
+            lines: LineSplitter::new(),
             read_buf: vec![0u8; READ_BUFFER_CAPACITY],
             poll_interval_ms: DEFAULT_POLL_INTERVAL_MS,
             last_mtime: initial_mtime,
@@ -352,7 +354,7 @@ impl FileTailer {
 
             // Reset state for the new file.
             self.offset = 0;
-            self.partial_line.clear();
+            self.lines.clear();
             self.line_buffer.reset();
             self.last_mtime = path_mtime;
 
@@ -380,7 +382,9 @@ impl FileTailer {
     /// collected and returned.
     ///
     /// A partial line at the end of the read (not terminated by a
-    /// newline) is buffered internally and prepended to the next read.
+    /// newline) is buffered internally and prepended to the next read. A
+    /// line longer than [`super::lines::MAX_LINE_BYTES`] is dropped whole
+    /// (with a warning giving only its length) to keep memory bounded.
     ///
     /// Returns an empty `Vec` if no new data is available.
     ///
@@ -415,30 +419,12 @@ impl FileTailer {
             // any parser patterns and be logged as unrecognized entries.
             let chunk = String::from_utf8_lossy(&self.read_buf[..bytes_read]);
 
-            // Prepend any leftover partial line from the previous read.
-            let text = if self.partial_line.is_empty() {
-                chunk.into_owned()
-            } else {
-                let mut combined = std::mem::take(&mut self.partial_line);
-                combined.push_str(&chunk);
-                combined
-            };
-
-            // Split into lines. The last segment may be a partial line
-            // (no trailing newline).
-            let mut lines_iter = text.split('\n').peekable();
-            while let Some(line) = lines_iter.next() {
-                if lines_iter.peek().is_none() {
-                    // Last segment — may be partial (no trailing newline).
-                    if !line.is_empty() {
-                        line.clone_into(&mut self.partial_line);
-                    }
-                } else {
-                    // Complete line — strip trailing \r if present (Windows CRLF).
-                    let clean = line.strip_suffix('\r').unwrap_or(line);
-                    entries.extend(self.line_buffer.push_line(clean));
-                }
-            }
+            // Split into lines (CRLF stripped). A trailing partial line is
+            // carried over to the next read; an over-long line is dropped.
+            let line_buffer = &mut self.line_buffer;
+            self.lines.push(&chunk, |line| {
+                entries.extend(line_buffer.push_line(line));
+            });
         }
 
         if total_bytes_read > 0 {
@@ -469,8 +455,7 @@ impl FileTailer {
         let mut entries = Vec::new();
 
         // Feed any partial line as a final complete line.
-        if !self.partial_line.is_empty() {
-            let line = std::mem::take(&mut self.partial_line);
+        if let Some(line) = self.lines.finish() {
             entries.extend(self.line_buffer.push_line(&line));
         }
 
@@ -1274,10 +1259,10 @@ mod tests {
             // Write a partial line (no newline at end) and poll.
             std::fs::write(&path, "[UnityCrossThreadLogger]1/1/2025 Partial")?;
             tailer.poll().await?;
-            // partial_line should be non-empty.
+            // The splitter should hold the partial line.
             assert!(
-                !tailer.partial_line.is_empty(),
-                "partial_line should hold the incomplete line"
+                !tailer.lines.is_empty(),
+                "the line splitter should hold the incomplete line"
             );
 
             // Simulate rotation by making offset > new file size.
