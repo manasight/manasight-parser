@@ -3,6 +3,7 @@
 #[cfg(feature = "tailer")]
 pub mod discovery;
 pub mod entry;
+pub(crate) mod lines;
 // `steam` is consumed only by `discovery` (Linux Steam-library path lookup),
 // which is itself `tailer`-gated. Without the `tailer` feature, `discovery` is
 // excluded and these helpers would be dead code (denied under `-D warnings` on

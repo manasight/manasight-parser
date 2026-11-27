@@ -6,7 +6,7 @@
 //!   for callers that already have the entire log in memory.
 //! - [`StreamingParser`] — an incremental parser that accepts the log in
 //!   arbitrary chunks (`pushChunk`) and finalises with `finish`, keeping only
-//!   a small `tail` buffer in memory. Useful for very large logs or streaming
+//!   the pending partial line (capped in length) in memory. Useful for very large logs or streaming
 //!   transports where holding the whole log is not desirable.
 //!
 //! Both APIs use the same serialiser configuration
@@ -63,11 +63,16 @@ use wasm_bindgen::prelude::*;
 /// `push_chunk` replicates [`str::lines`] byte-for-byte:
 /// - Lines are separated by `'\n'`.
 /// - A trailing `'\r'` before each `'\n'` is stripped (CRLF → LF).
-/// - A final line not terminated by `'\n'` is held in `tail` and processed
-///   only by [`Self::finish`], matching the behaviour of
+/// - A final line not terminated by `'\n'` is held as a pending partial line
+///   and processed only by [`Self::finish`], matching the behaviour of
 ///   `for line in input.lines()` followed by a `flush()` call.
 ///
-/// Empty chunks are no-ops (tail is unchanged).
+/// Empty chunks are no-ops (the pending line is unchanged).
+///
+/// One exception keeps memory bounded: a line longer than
+/// [`crate::log::lines::MAX_LINE_BYTES`] is dropped whole (see
+/// [`crate::log::lines::LineSplitter`]). Output for every shorter line is
+/// unchanged.
 ///
 /// # Stability
 ///
@@ -78,75 +83,46 @@ use wasm_bindgen::prelude::*;
 pub struct StreamingParserCore {
     buffer: crate::log::entry::LineBuffer,
     router: crate::router::Router,
-    /// Incomplete final line from the last chunk (no trailing `'\n'` yet).
-    tail: String,
+    /// Splits chunks into lines, holding the incomplete final line.
+    lines: crate::log::lines::LineSplitter,
 }
 
 impl StreamingParserCore {
     /// Creates a new, empty streaming core.
     pub fn new() -> Self {
+        Self::with_max_line_bytes(crate::log::lines::MAX_LINE_BYTES)
+    }
+
+    /// Creates a new, empty streaming core that drops lines longer than
+    /// `max_line_bytes` instead of the default
+    /// [`crate::log::lines::MAX_LINE_BYTES`].
+    pub fn with_max_line_bytes(max_line_bytes: usize) -> Self {
         Self {
             buffer: crate::log::entry::LineBuffer::new(),
             router: crate::router::Router::new(),
-            tail: String::new(),
+            lines: crate::log::lines::LineSplitter::with_max_line_bytes(max_line_bytes),
         }
     }
 
     /// Processes a text chunk, returning any events completed by this chunk.
     ///
-    /// The algorithm replicates `str::lines()` semantics:
-    ///
-    /// 1. Prepend any leftover `tail` from the previous call.
-    /// 2. Split on `'\n'`.
-    /// 3. For every piece **except the last**: strip a trailing `'\r'` (CRLF
-    ///    handling), feed to `LineBuffer::push_line`, collect events.
-    /// 4. Retain the last piece as the new `tail` (may be empty if the chunk
-    ///    ended with `'\n'`).
+    /// Every line the chunk completes (with `'\n'` and a preceding `'\r'`
+    /// removed, as `str::lines()` does) is fed to `LineBuffer::push_line`.
+    /// Text after the chunk's last `'\n'` is held for the next call.
     pub fn push_chunk(&mut self, text: &str) -> Vec<crate::events::GameEvent> {
-        if text.is_empty() {
-            return Vec::new();
-        }
-
-        // Build the full text to process by prepending any leftover tail.
-        let combined: std::borrow::Cow<str> = if self.tail.is_empty() {
-            std::borrow::Cow::Borrowed(text)
-        } else {
-            let mut s = std::mem::take(&mut self.tail);
-            s.push_str(text);
-            std::borrow::Cow::Owned(s)
-        };
-
         let mut events = Vec::new();
-        let mut pieces = combined.split('\n');
-
-        // The split always produces at least one piece. We need to treat all
-        // pieces except the last as complete lines.
-        //
-        // `split` on `'\n'` yields:
-        //   "a\nb\n"  -> ["a", "b", ""]   (last is empty — chunk ended with \n)
-        //   "a\nb"    -> ["a", "b"]        (last is partial — no trailing \n)
-        //   ""        -> [""]              (empty — handled above, tail unchanged)
-        //
-        // We use `peekable` to detect the last piece without consuming ahead.
-        let mut peekable = pieces.by_ref().peekable();
-        while let Some(piece) = peekable.next() {
-            if peekable.peek().is_none() {
-                // Last piece — retain as tail (may be empty string).
-                piece.clone_into(&mut self.tail);
-            } else {
-                // Complete line — strip trailing `\r` to match `str::lines()` CRLF handling.
-                let line = piece.strip_suffix('\r').unwrap_or(piece);
-                for entry in self.buffer.push_line(line) {
-                    events.extend(self.router.route(&entry));
-                }
+        let buffer = &mut self.buffer;
+        let router = &self.router;
+        self.lines.push(text, |line| {
+            for entry in buffer.push_line(line) {
+                events.extend(router.route(&entry));
             }
-        }
-
+        });
         events
     }
 
-    /// Finalises the stream, processing any remaining `tail` and flushing the
-    /// internal `LineBuffer`.
+    /// Finalises the stream, processing any pending partial line and flushing
+    /// the internal `LineBuffer`.
     ///
     /// Corresponds to the final `buffer.flush()` call in `parse_whole_log`:
     /// drains any entry that was not followed by a new header.
@@ -156,14 +132,14 @@ impl StreamingParserCore {
     pub fn finish(&mut self) -> Vec<crate::events::GameEvent> {
         let mut events = Vec::new();
 
-        // Process the leftover tail (the final line if not terminated by '\n').
+        // Process the final line if it was not terminated by '\n'.
         //
-        // Do NOT strip a lone trailing '\r' here. `str::lines()` only removes
-        // '\r' as part of '\r\n'; the last element returned for a final line
-        // without a trailing '\n' retains any lone '\r'. Stripping it here would
-        // diverge from `parse_whole_log`'s `input.lines()` last element.
-        if !self.tail.is_empty() {
-            let tail = std::mem::take(&mut self.tail);
+        // `LineSplitter::finish` does NOT strip a lone trailing '\r'.
+        // `str::lines()` only removes '\r' as part of '\r\n'; the last element
+        // returned for a final line without a trailing '\n' retains any lone
+        // '\r'. Stripping it would diverge from `parse_whole_log`'s
+        // `input.lines()` last element.
+        if let Some(tail) = self.lines.finish() {
             for entry in self.buffer.push_line(&tail) {
                 events.extend(self.router.route(&entry));
             }
@@ -293,7 +269,7 @@ impl StreamingParser {
     /// Finalises the stream and returns a JS array of any remaining `GameEvent`
     /// objects.
     ///
-    /// Processes any partial final line held in the tail buffer and flushes the
+    /// Processes any pending partial final line and flushes the
     /// internal `LineBuffer`, mirroring the trailing-entry flush in
     /// `parse_whole_log`. Call `parser.free()` after this.
     ///
