@@ -1,8 +1,8 @@
 //! Privacy scrubber for raw MTGA log text.
 //!
 //! Strips sensitive data (auth tokens, bearer tokens, OS-specific user paths,
-//! session identifiers, display names, deck names, email addresses, IP
-//! addresses, and hardware fingerprint lines) from unstructured `Player.log`
+//! session identifiers, display names, Steam IDs, deck names, email addresses,
+//! IP addresses, and hardware fingerprint lines) from unstructured `Player.log`
 //! text. This is a best-effort filter; novel token formats may slip through.
 //!
 //! Regex patterns are compiled once via [`std::sync::LazyLock`] and reused
@@ -17,8 +17,9 @@ use regex::Regex;
 struct ScrubPattern {
     regex: Regex,
     replacement: &'static str,
-    /// When `true`, this pattern redacts a player display name field
-    /// (`screenName` or `playerName`). Used by [`scrub_raw_log_with`] to
+    /// When `true`, this pattern redacts a player display name (the
+    /// `screenName` or `playerName` JSON field, or the plain-text
+    /// `Display Name:` login line). Used by [`scrub_raw_log_with`] to
     /// conditionally skip name redaction when [`ScrubOptions::keep_player_names`]
     /// is set.
     is_player_name: bool,
@@ -35,8 +36,8 @@ struct ScrubPattern {
 /// removed. Outside this crate the struct cannot be built field by field, so a
 /// class added later is redacted for every caller until it opts in.
 ///
-/// Account IDs, tokens, session IDs, paths, emails, IPs and hardware names have
-/// no keep flag.
+/// Account IDs, Steam IDs, tokens, session IDs, paths, emails, IPs and
+/// hardware names have no keep flag.
 ///
 /// # Examples
 ///
@@ -51,7 +52,8 @@ struct ScrubPattern {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 #[non_exhaustive]
 pub struct ScrubOptions {
-    /// Keep the `screenName` and `playerName` values.
+    /// Keep the `screenName` and `playerName` values and the handle on the
+    /// plain-text `Display Name:` login line.
     pub keep_player_names: bool,
     /// Keep free-text deck `Name` values rather than a `Deck-<8hex>` label.
     pub keep_deck_names: bool,
@@ -248,7 +250,10 @@ fn replace_ids(input: &str, anchor: &Regex, tail: &str) -> String {
 ///   whitespace and is skipped inside a web URL (see
 ///   [`redact_bare_home_paths`])
 /// - Session identifiers (JSON `"token"` and `"sessionId"` values)
-/// - Display names (JSON `"screenName"` and `"playerName"` values)
+/// - Display names (JSON `"screenName"` and `"playerName"` values, and the
+///   handle on the plain-text `Display Name:` login line)
+/// - Steam IDs (17-digit `SteamID64` values starting `7656119`, such as the one
+///   on the Steamworks `Caching Steam ID:` line)
 /// - Deck names (free-text JSON `"Name"` values adjacent to a `"DeckId"`,
 ///   pseudonymized to `Deck-<first 8 hex of DeckId>`; also the Unity
 ///   "Can't find pet for deck ..." console diagnostic)
@@ -391,6 +396,18 @@ static SCRUB_PATTERNS: LazyLock<Vec<ScrubPattern>> = LazyLock::new(|| {
         (
             r#""[Pp]layer[Nn]ame"\s*:\s*"[^"]+""#,
             r#""playerName": "<redacted>""#,
+            true,
+            false,
+        ),
+        // Display names: plain-text login line written by newer Arena builds,
+        //   "[Accounts - Login] Logged in successfully. Display Name: Name#12345"
+        // Not JSON, so the screenName pattern above never sees it. A handle
+        // may hold spaces, so the value runs to the end of the line; `\r` is
+        // outside the class, so a CRLF line ending is kept.
+        // is_player_name = true — skipped when keep_player_names is set.
+        (
+            r"\bDisplay Name:[ \t]*[^\r\n]+",
+            "Display Name: <redacted>",
             true,
             false,
         ),
@@ -558,6 +575,13 @@ static SCRUB_PATTERNS: LazyLock<Vec<ScrubPattern>> = LazyLock::new(|| {
             false,
             false,
         ),
+        // Steam IDs: SteamID64 values, e.g. the Steamworks minidump line on
+        // Steam installs,
+        //   "SteamInternal_SetMinidumpSteamID: Caching Steam ID: 7656119... [API loaded no]"
+        // Individual-account SteamID64s are 17 digits starting 7656119, so the
+        // shape is matched anywhere, not only on that line. The word
+        // boundaries leave longer digit runs alone.
+        (r"\b7656119\d{10}\b", "<steamid-redacted>", false, false),
         // Email addresses (defense-in-depth; MTGA logs carry no known third-party
         // emails empirically, but this closes a latent gap for future client changes).
         (
@@ -991,6 +1015,70 @@ mod tests {
         let result = scrub_raw_log(input);
         assert!(result.contains(r#""screenName": "<redacted>""#));
         assert!(!result.contains("Exampler"));
+    }
+
+    // --- plain-text Display Name login line ---
+
+    #[test]
+    fn test_scrub_raw_log_display_name_login_line_redacted() {
+        let input = "[Accounts - Login] Logged in successfully. Display Name: TestUser#00000";
+        assert_eq!(
+            scrub_raw_log(input),
+            "[Accounts - Login] Logged in successfully. Display Name: <redacted>"
+        );
+    }
+
+    #[test]
+    fn test_scrub_raw_log_display_name_with_spaces_and_unicode_redacted() {
+        let input =
+            "[Accounts - Login] Logged in successfully. Display Name: Tëst Üsér 名前#00000\nnext";
+        let result = scrub_raw_log(input);
+        assert_eq!(
+            result,
+            "[Accounts - Login] Logged in successfully. Display Name: <redacted>\nnext"
+        );
+    }
+
+    #[test]
+    fn test_scrub_raw_log_display_name_crlf_preserves_line_ending() {
+        let input = "x Display Name: TestUser#00000\r\nnext\r\n";
+        assert_eq!(
+            scrub_raw_log(input),
+            "x Display Name: <redacted>\r\nnext\r\n"
+        );
+    }
+
+    #[test]
+    fn test_scrub_raw_log_with_upload_keeps_display_name_line() {
+        let input = "[Accounts - Login] Logged in successfully. Display Name: TestUser#00000";
+        assert_eq!(scrub_raw_log_with(input, &ScrubOptions::upload()), input);
+    }
+
+    // --- SteamID64 ---
+
+    #[test]
+    fn test_scrub_raw_log_steam_minidump_id_redacted() {
+        let input =
+            "SteamInternal_SetMinidumpSteamID: Caching Steam ID: 76561190000000000 [API loaded no]";
+        assert_eq!(
+            scrub_raw_log(input),
+            "SteamInternal_SetMinidumpSteamID: Caching Steam ID: <steamid-redacted> [API loaded no]"
+        );
+    }
+
+    #[test]
+    fn test_scrub_raw_log_with_upload_still_redacts_steam_id() {
+        let input = "Caching Steam ID: 76561190000000000\n";
+        assert_eq!(
+            scrub_raw_log_with(input, &ScrubOptions::upload()),
+            "Caching Steam ID: <steamid-redacted>\n"
+        );
+    }
+
+    #[test]
+    fn test_scrub_raw_log_steam_id_shape_longer_number_unchanged() {
+        let input = "count 765611900000000001 and 1765611900000000000";
+        assert_eq!(scrub_raw_log(input), input);
     }
 
     // --- playerName pattern ---
@@ -2620,6 +2708,11 @@ mod tests {
         val == "<redacted>"
     }
 
+    /// Always `false`: any match of a pattern using it is a surviving value.
+    fn is_never_valid(_val: &str) -> bool {
+        false
+    }
+
     /// Returns `true` if `val` matches `^Deck-[0-9a-fA-F]{8}$` — the
     /// deterministic pseudonymization label used by the deck-name patterns.
     fn is_deck_label(val: &str) -> bool {
@@ -2636,16 +2729,36 @@ mod tests {
     /// Build the PII-detection patterns used by [`test_corpus_scrub_no_pii_survives`].
     ///
     /// Combines [`hardware_and_name_pii_patterns`] (flat `"<redacted>"`
-    /// placeholders, via [`is_redacted`]) with [`deck_name_pii_patterns`]
+    /// placeholders, via [`is_redacted`]), [`plain_text_pii_patterns`] and
+    /// [`deck_name_pii_patterns`]
     /// (`Deck-<8hex>` labels, via [`is_deck_label`]).
     fn corpus_pii_patterns() -> Vec<PiiPattern> {
         let mut patterns = hardware_and_name_pii_patterns();
+        patterns.extend(plain_text_pii_patterns());
         patterns.extend(deck_name_pii_patterns());
         patterns
     }
 
     /// PII-detection patterns for display names and hardware fingerprints —
     /// all redact to the flat `"<redacted>"` placeholder.
+    /// PII-detection patterns for plain-text (non-JSON) lines: the handle on
+    /// the `Display Name:` login line, which redacts to `"<redacted>"`, and
+    /// any `SteamID64`, which must not survive at all.
+    fn plain_text_pii_patterns() -> Vec<PiiPattern> {
+        vec![
+            (
+                "Display Name",
+                Regex::new(r"\bDisplay Name:[ \t]*([^\r\n]+)").unwrap_or_else(|_| unreachable!()),
+                is_redacted,
+            ),
+            (
+                "SteamID64",
+                Regex::new(r"\b(7656119\d{10})\b").unwrap_or_else(|_| unreachable!()),
+                is_never_valid,
+            ),
+        ]
+    }
+
     fn hardware_and_name_pii_patterns() -> Vec<PiiPattern> {
         vec![
             (
