@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.8.2] - 2026-11-26
+
+### Fixed
+
+- **Streaming parser and file tailer: bounded memory on a line with no
+  newline.** Both used to copy the whole pending partial line on every chunk,
+  so a long newline-less run (for example a zero-filled gap in a damaged log)
+  held about three times its length in memory, with quadratic copying, and
+  could abort a memory-capped WASM host. A shared line splitter now appends in
+  place and drops any line longer than 16 MiB up to its newline, logging only
+  its length. Lines under the limit parse exactly as before. A 64 MiB
+  newline-less run now peaks at 24 MiB of heap instead of 190 MiB (#319).
+
 ## [0.8.1] - 2026-11-25
 
 ### Fixed
