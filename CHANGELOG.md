@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.8.3] - 2026-11-27
 
 ### Fixed
 
@@ -16,7 +16,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   starting `7656119`), as on the Steamworks
   `SteamInternal_SetMinidumpSteamID: Caching Steam ID:` line, is now replaced
   with `<steamid-redacted>` under every profile. Both lines are kept and a
-  CRLF line ending is preserved.
+  CRLF line ending is preserved (#321).
+
+### Changed
+
+- Dependency patch updates (#317).
 
 ## [0.8.2] - 2026-11-26
 
